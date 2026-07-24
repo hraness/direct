@@ -1,6 +1,9 @@
-# Carapace
+# hraness.direct
 
-Carapace runs a product's real interface and state machinery against deterministic implementations of product-owned ports—without pretending to prove the systems it replaces.
+Hraness Direct makes frontend loops faster. Its Carapace runtime runs a
+product's real interface and state machinery against deterministic
+implementations of product-owned ports without pretending to prove the systems
+it replaces.
 
 ```text
 real interface and feature state
@@ -146,17 +149,17 @@ Malformed encoding, duplicate activation, unknown reserved keys, unknown scenari
 This repository contains the deterministic kernel, browser bridge, production-exclusion pattern, agent skills, a small React example, and an Expo/React Native reference app. It does not contain a browser driver, browser-worker pool, screenshot deduplication, video recording, PySceneDetect integration, or storyboard generation. Use the browser tooling that fits your product and treat recorded media as evidence, not as the definition of correctness.
 
 <!-- article:carapace-a-harness-for-your-frontend:start -->
-## [Carapace makes state deterministic without copying the frontend](<https://hraness.pub/articles/carapace-a-harness-for-your-frontend>)
+## [Hraness Direct makes frontend loops faster](<https://hraness.pub/articles/carapace-a-harness-for-your-frontend>)
 
-> Replace slow systems at a product-owned port, run the same interface against named worlds, and keep claims about the replaced system direct.
+> Run the real interface against named deterministic worlds, reset it quickly, and keep direct tests for every system the development harness replaces.
 
 Frontend checks slow down when the state worth reviewing sits behind a login, a cloud service, a native module, a model process, or a device permission. The interface may need only seconds of attention after minutes of setup.
 
-Carapace changes the development composition below the behavior under review. The product keeps its real interface and feature state while deterministic adapters replace slow external systems. A Carapace definition names the available worlds and evidence claims, a session owns one activated world's lifecycle, and one browser installation exposes its probe while denying unmapped application requests. The product's verifier still chooses the actions, assertions, browser driver, and evidence.
+[Hraness Direct](<https://hraness.direct>) makes frontend loops faster with Carapace, its deterministic product harness. The product keeps its real interface and feature state while deterministic adapters replace slow external systems. A Carapace definition names the available worlds and evidence claims, a session owns one activated world's lifecycle, and one browser installation exposes its probe while denying unmapped application requests. The product's verifier still chooses the actions, assertions, browser driver, and evidence.
 
 ![The same interface cycles through named scenes, instant resets, and repeatable checks.](<https://hraness.pub/article-diagrams/carapace-a-harness-for-your-frontend.light.webp>)
 
-*Carapace keeps the interface while making scenes quick to reset and check.*
+*Hraness Direct keeps the interface while making scenes quick to reset and check.*
 
 ### Change the composition below the behavior
 
@@ -291,7 +294,7 @@ An Agent Skill is a directory of task instructions and display metadata that a c
 
 Installation leaves both skills inert because agent runners do not share one discovery path. The setup skill encodes the product-port and production-exclusion sequence; the verification skill encodes quiescence, semantic assertions, coverage classification, and direct-evidence limits. They organize the work, but they do not supply evidence or promote a fixture claim.
 
-Use Carapace when external setup hides frontend state and a small product-owned port can replace that setup without copying the behavior under review. Keep direct integration and end-to-end tests when the backend, native host, browser assembly, or operating system is the subject. Carapace makes the composition deterministic; the product verifier still decides whether the resulting interface supports the claim.
+Use Hraness Direct when external setup hides frontend state and a small product-owned port can replace that setup without copying the behavior under review. Keep direct integration and end-to-end tests when the backend, native host, browser assembly, or operating system is the subject. Carapace makes the composition deterministic; the product verifier still decides whether the resulting interface supports the claim.
 <!-- article:carapace-a-harness-for-your-frontend:end -->
 
 ## Develop
