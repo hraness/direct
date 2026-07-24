@@ -37,6 +37,7 @@
   ],
   "exclude": [
     "app/**/*.test.ts",
+    "app/**/*.test.tsx",
     "app/**/*.property.test.ts",
     "node_modules"
   ]

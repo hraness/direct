@@ -3,19 +3,22 @@
   "compilerOptions": {
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "lib": ["ES2023"],
+    "jsx": "react-jsx",
+    "lib": ["DOM", "ES2023"],
     "module": "Preserve",
     "moduleResolution": "Bundler",
     "noEmit": true,
     "skipLibCheck": true,
     "strict": true,
     "target": "ES2023",
-    "types": ["bun"]
+    "types": ["bun", "node", "react", "react-dom"]
   },
   "include": [
     "app/article.ts",
     "app/article.test.ts",
-    "app/article.property.test.ts"
+    "app/article.property.test.ts",
+    "app/page.tsx",
+    "app/page.test.tsx"
   ],
   "exclude": ["node_modules"]
 }

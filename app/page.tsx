@@ -31,7 +31,7 @@ export default async function HomePage() {
             <span>Direct</span>
           </a>
           <nav aria-label="Primary navigation">
-            <a href="#article">Article</a>
+            <a href={article.canonicalUrl}>Article</a>
             <a href="https://github.com/hraness/direct">GitHub</a>
           </nav>
         </div>
@@ -45,8 +45,6 @@ export default async function HomePage() {
             <p className="direct-dek">{article.dek}</p>
             <div className="direct-article-meta">
               <span>Direct 0.4.0</span>
-              <span aria-hidden="true">·</span>
-              <a href={article.canonicalUrl}>Originally published by PRMTE</a>
             </div>
           </header>
 
