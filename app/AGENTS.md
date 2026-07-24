@@ -5,7 +5,8 @@
 - `page.tsx` and `page.test.tsx` – the concise Direct evaluation page at `hraness.direct` and its server-markup regressions.
 - `docs/overview/` – the synchronized long-form Overview and its server-markup regressions.
 - `markdown.ts` – trusted repository-Markdown rendering with the vendored server syntax highlighter.
-- `site-shell.tsx` – shared product navigation, canonical publication link, and footer.
+- `site-shell.tsx` – minimal Overview navigation and project footer.
+- `plain-site.css` – the vendored, framework-neutral shared document theme.
 - `syntax-highlighting.ts` and `syntax-highlighting.css` – the vendored typed server highlighter and semantic syntax-color recipe used by fenced code.
 - `layout.tsx` and `globals.css` – site metadata plus the neutral product and reading surfaces.
 - `robots.ts`, `sitemap.ts`, `manifest.ts`, `icon.png`, and `apple-icon.png` – crawl, install, and icon metadata; `../public/og.png` supplies the social preview.
@@ -14,7 +15,7 @@
 # Guidelines
 
 - Keep the site statically generated, dependency-light, and readable without client JavaScript.
-- Keep the landing page concise: install first, state the setup problem, distinguish browser control from app-state control, and link to the Overview for depth.
+- Keep the landing page concise: name, one-line description, install, two factual paragraphs, and links. Put depth in the Overview.
 - Treat the synchronized README article as the local public source of truth for `/docs/overview`. Parse its exact markers and structure instead of maintaining a second long-form prose copy.
 - Parse foreign text through the fallible article boundary, keep one visible `h1`, and shift README body headings only outside fenced code.
 - Render only repository-controlled Markdown. Do not generalize the trusted HTML path to user or network input.

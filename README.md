@@ -1,19 +1,26 @@
-# Direct
+# direct
 
-Direct gives browser agents named, repeatable app states while keeping a product's real interface and feature logic in place. It speeds up states that would otherwise depend on accounts, cloud data, devices, permissions, or models without pretending to prove the systems it replaces.
+deterministic app states for browser agents.
 
-Read the [Direct overview](https://hraness.direct/docs/overview), or inspect the package and examples below.
+direct gives a real frontend named, repeatable states without rebuilding
+accounts, cloud data, devices, permissions, or failures by hand. your browser
+tool still drives the page. live tests still prove the systems direct replaces.
+
+```sh
+bun add --dev github:hraness/direct#v0.4.0
+```
+
+[overview](https://hraness.direct/docs/overview) ·
+[article](https://hraness.pub/articles/direct-a-harness-for-your-frontend)
 
 ```text
 real interface and feature state
               │
       product-owned port
           ┌───┴────┐
-   production   Direct
+   production   direct
      adapter     harness
 ```
-
-The normal lifecycle has three owners: a definition validates named worlds and claims, a session owns one deterministic composition, and a browser installation publishes its probe behind a fail-closed network boundary.
 
 ## Install
 

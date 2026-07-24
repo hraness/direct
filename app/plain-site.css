@@ -1,0 +1,221 @@
+/**
+ * Plain site theme
+ *
+ * An opt-in document grammar for personal sites, open-source project pages,
+ * and quiet documentation. Color appearance remains owned by `data-theme`;
+ * this layer owns measure, typography, spacing, links, and minimal chrome.
+ */
+
+:root:has(> body.plain-site) {
+  background: #ffffff;
+  overflow-x: clip;
+  scrollbar-gutter: stable;
+}
+
+.plain-site {
+  --plain-background: #ffffff;
+  --plain-foreground: #171717;
+  --plain-link: #2457a6;
+  --plain-line: #d8d8d8;
+  --plain-muted: #666666;
+  --plain-surface: #f4f4f4;
+
+  background: var(--plain-background);
+  color: var(--plain-foreground);
+  color-scheme: light dark;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 1rem;
+  line-height: 1.55;
+  margin: 0;
+  min-height: 100svh;
+  overflow-x: clip;
+}
+
+:root[data-theme="dark"]:has(> body.plain-site) {
+  background: #151515;
+}
+
+:root[data-theme="dark"] .plain-site,
+.plain-site[data-theme="dark"] {
+  --plain-background: #151515;
+  --plain-foreground: #f2f2f2;
+  --plain-link: #8ab4ed;
+  --plain-line: #484848;
+  --plain-muted: #b6b6b6;
+  --plain-surface: #222222;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]):has(> body.plain-site) {
+    background: #151515;
+  }
+
+  :root:not([data-theme]) > .plain-site {
+    --plain-background: #151515;
+    --plain-foreground: #f2f2f2;
+    --plain-link: #8ab4ed;
+    --plain-line: #484848;
+    --plain-muted: #b6b6b6;
+    --plain-surface: #222222;
+  }
+}
+
+.plain-site *,
+.plain-site *::before,
+.plain-site *::after {
+  box-sizing: border-box;
+}
+
+.plain-page a,
+.plain-footer a {
+  color: var(--plain-link);
+  overflow-wrap: anywhere;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.15em;
+}
+
+.plain-page a:hover,
+.plain-footer a:hover {
+  text-decoration-thickness: 2px;
+}
+
+.plain-page a:focus-visible,
+.plain-footer a:focus-visible {
+  border-radius: 1px;
+  outline: 1px dotted currentColor;
+  outline-offset: 3px;
+}
+
+.plain-page a:focus:not(:focus-visible),
+.plain-footer a:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.plain-site ::selection {
+  background: color-mix(in srgb, var(--plain-link) 20%, transparent);
+  color: var(--plain-foreground);
+}
+
+.plain-page {
+  margin: clamp(3.5rem, 12vh, 7rem) auto;
+  max-width: 34rem;
+  padding-inline: 1.25rem;
+}
+
+.plain-page :where(h1, h2, h3, p, ul, ol, pre, figure) {
+  font-size: inherit;
+}
+
+.plain-page :where(h1, h2, h3) {
+  line-height: inherit;
+}
+
+.plain-page h1 {
+  font-weight: 700;
+  margin: 0 0 1rem;
+}
+
+.plain-page > p,
+.plain-muted {
+  color: var(--plain-muted);
+}
+
+.plain-page > p {
+  margin: 0;
+}
+
+.plain-page section {
+  margin-top: 2rem;
+}
+
+.plain-page h2 {
+  font-weight: 700;
+  margin: 0 0 0.3rem;
+}
+
+.plain-page section > p {
+  margin: 0;
+}
+
+.plain-page section > p + p {
+  margin-top: 1rem;
+}
+
+.plain-links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.plain-links li {
+  margin: 0.1rem 0;
+}
+
+.plain-links a {
+  display: inline-block;
+  min-height: 1.5rem;
+  min-width: 1.5rem;
+}
+
+.plain-code {
+  color: var(--plain-foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.84rem;
+  line-height: 1.55;
+  margin: 0;
+  overflow-wrap: anywhere;
+  padding-block: 0.65rem;
+  white-space: pre-wrap;
+}
+
+.plain-code code {
+  font: inherit;
+}
+
+.plain-footer {
+  --background: var(--plain-background);
+  --foreground: var(--plain-foreground);
+  --focus: var(--plain-link);
+  --line: var(--plain-line);
+  --muted: var(--plain-muted);
+  --secondary: var(--plain-surface);
+  --secondary-foreground: var(--plain-foreground);
+  --surface: var(--plain-background);
+  --surface-raised: var(--plain-surface);
+
+  align-items: center;
+  border-top: 1px solid var(--plain-line);
+  color: var(--plain-muted);
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin: 0 auto;
+  max-width: 34rem;
+  overflow: clip;
+  padding: 1.5rem;
+}
+
+.plain-footer p {
+  margin: 0;
+}
+
+.plain-footer a:not(:hover, :focus-visible) {
+  color: inherit;
+}
+
+@media (max-width: 420px) {
+  .plain-page {
+    margin-block: 2.5rem;
+    padding-inline: 1rem;
+  }
+
+  .plain-footer {
+    padding-inline: 1rem;
+  }
+}
+
+@media (forced-colors: active) {
+  .plain-footer {
+    border-top: 1px solid CanvasText;
+  }
+}

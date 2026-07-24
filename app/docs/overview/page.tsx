@@ -53,7 +53,7 @@ export default async function OverviewPage() {
         </article>
       </main>
 
-      <SiteFooter>Direct pairs with the browser tool your team already uses.</SiteFooter>
+      <SiteFooter />
     </>
   );
 }

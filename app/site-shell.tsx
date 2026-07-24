@@ -1,5 +1,3 @@
-import type { ReactNode } from "react";
-
 export const DIRECT_ARTICLE_URL =
   "https://hraness.pub/articles/direct-a-harness-for-your-frontend";
 export const DIRECT_GITHUB_URL = "https://github.com/hraness/direct";
@@ -15,40 +13,22 @@ export function SiteHeader(
 ) {
   return (
     <header className="direct-site-header">
-      <div className="direct-shell direct-site-header__inner">
-        <a
-          className="direct-wordmark"
-          href="/"
-          aria-current={current("home", activeRoute)}
-          aria-label="Direct home"
-        >
-          <span aria-hidden="true">D/</span>
-          <span>Direct</span>
+      <nav aria-label="project">
+        <a href="/" aria-current={current("home", activeRoute)}>direct</a>
+        <span aria-hidden="true"> · </span>
+        <a href="/docs/overview" aria-current={current("overview", activeRoute)}>
+          overview
         </a>
-        <nav aria-label="Primary navigation">
-          <a
-            href="/docs/overview"
-            aria-current={current("overview", activeRoute)}
-          >
-            Overview
-          </a>
-          <a href={DIRECT_ARTICLE_URL}>Article</a>
-          <a href={DIRECT_GITHUB_URL}>GitHub</a>
-        </nav>
-      </div>
+      </nav>
     </header>
   );
 }
 
-export function SiteFooter(
-  { children }: Readonly<{ children?: ReactNode }>,
-) {
+export function SiteFooter() {
   return (
-    <footer className="direct-site-footer">
-      <div className="direct-shell direct-site-footer__inner">
-        <p>{children ?? "Direct is an MIT-licensed TypeScript package."}</p>
-        <a href={`${DIRECT_GITHUB_URL}#install`}>Install from GitHub</a>
-      </div>
+    <footer className="plain-footer direct-site-footer">
+      <p>MIT</p>
+      <a href={DIRECT_GITHUB_URL}>github</a>
     </footer>
   );
 }
