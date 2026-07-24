@@ -8,40 +8,40 @@ import {
   type ReactNode,
 } from "react";
 import type { JsonValue } from "./core/json-value.js";
-import type { CarapaceStore, CarapaceStoreSnapshot } from "./core/store.js";
+import type { DirectStore, DirectStoreSnapshot } from "./core/store.js";
 
-export interface CarapaceProviderProps<World extends JsonValue> {
-  readonly store: CarapaceStore<World>;
+export interface DirectProviderProps<World extends JsonValue> {
+  readonly store: DirectStore<World>;
   readonly children: ReactNode;
 }
 
-export interface CarapaceReactBindings<World extends JsonValue> {
-  readonly Context: Context<CarapaceStore<World> | null>;
-  readonly Provider: (props: CarapaceProviderProps<World>) => ReactElement;
-  readonly useStore: () => CarapaceStore<World>;
-  readonly useSnapshot: () => CarapaceStoreSnapshot<World>;
+export interface DirectReactBindings<World extends JsonValue> {
+  readonly Context: Context<DirectStore<World> | null>;
+  readonly Provider: (props: DirectProviderProps<World>) => ReactElement;
+  readonly useStore: () => DirectStore<World>;
+  readonly useSnapshot: () => DirectStoreSnapshot<World>;
   readonly useWorld: () => World;
 }
 
-export function createCarapaceReactBindings<World extends JsonValue>(): CarapaceReactBindings<World> {
-  const StoreContext = createContext<CarapaceStore<World> | null>(null);
+export function createDirectReactBindings<World extends JsonValue>(): DirectReactBindings<World> {
+  const StoreContext = createContext<DirectStore<World> | null>(null);
 
-  const useStore = (): CarapaceStore<World> => {
+  const useStore = (): DirectStore<World> => {
     const store = useContext(StoreContext);
     if (store === null) {
-      throw new Error("Carapace hooks require their matching Carapace Provider");
+      throw new Error("Direct hooks require their matching Direct Provider");
     }
     return store;
   };
 
-  const useSnapshot = (): CarapaceStoreSnapshot<World> => {
+  const useSnapshot = (): DirectStoreSnapshot<World> => {
     const store = useStore();
     return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   };
 
-  const bindings: CarapaceReactBindings<World> = {
+  const bindings: DirectReactBindings<World> = {
     Context: StoreContext,
-    Provider: ({ store, children }: CarapaceProviderProps<World>) => createElement(
+    Provider: ({ store, children }: DirectProviderProps<World>) => createElement(
       StoreContext.Provider,
       { value: store },
       children,

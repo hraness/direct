@@ -3,9 +3,9 @@ import type { JsonObject } from "../core/json-value.js";
 import { isRecord } from "../core/result.js";
 
 import { createLogicalRuntime, type LogicalRuntime } from "../core/runtime.js";
-import { createCarapaceStore } from "../core/store.js";
+import { createDirectStore } from "../core/store.js";
 import { parseTestWorld } from "../core/test-support.js";
-import { createCarapaceActivityScope } from "./activity.js";
+import { createDirectActivityScope } from "./activity.js";
 import {
   DEFAULT_SCRIPTED_TRANSPORT_LIMITS,
   createExactScriptedTransport,
@@ -163,7 +163,7 @@ describe("exact scripted transport", () => {
 
   test("runtime failures settle activity and remain verifier-visible", async () => {
     const runtime = createLogicalRuntime(undefined, () => Promise.reject(new Error("clock unavailable")));
-    const store = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+    const store = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
     if (!store.ok) throw new Error(store.error.message);
     const transport = createExactScriptedTransport({
       runtime,
@@ -171,7 +171,7 @@ describe("exact scripted transport", () => {
       parseResponse,
       parseEvent,
       parseFailure,
-      activity: createCarapaceActivityScope(store.value, runtime),
+      activity: createDirectActivityScope(store.value, runtime),
       steps: [{
         request: { id: 1, payload: "wait" },
         outcome: { kind: "response", value: { accepted: true } },
@@ -192,7 +192,7 @@ describe("exact scripted transport", () => {
 
   test("dispose cancels active waits, suppresses delayed events, and settles cleanly", async () => {
     const runtime = createLogicalRuntime();
-    const store = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+    const store = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
     if (!store.ok) throw new Error(store.error.message);
     const transport = createExactScriptedTransport({
       runtime,
@@ -200,7 +200,7 @@ describe("exact scripted transport", () => {
       parseResponse,
       parseEvent,
       parseFailure,
-      activity: createCarapaceActivityScope(store.value, runtime),
+      activity: createDirectActivityScope(store.value, runtime),
       steps: [{
         request: { id: 1, payload: "slow" },
         outcome: { kind: "response", value: { accepted: true } },
@@ -243,7 +243,7 @@ describe("exact scripted transport", () => {
 
   test("dispose reentered from activity publication starts no delivery work", async () => {
     const runtime = createLogicalRuntime(undefined, () => Promise.resolve());
-    const store = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+    const store = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
     if (!store.ok) throw new Error(store.error.message);
     const transport = createExactScriptedTransport({
       runtime,
@@ -251,7 +251,7 @@ describe("exact scripted transport", () => {
       parseResponse,
       parseEvent,
       parseFailure,
-      activity: createCarapaceActivityScope(store.value, runtime),
+      activity: createDirectActivityScope(store.value, runtime),
       steps: [{
         request: { id: 1, payload: "reentrant-dispose" },
         outcome: { kind: "response", value: { accepted: true } },
@@ -354,7 +354,7 @@ describe("exact scripted transport", () => {
 
   test("reserves a step before activity publication can reenter request", async () => {
     const runtime = createLogicalRuntime(undefined, () => Promise.resolve());
-    const store = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+    const store = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
     if (!store.ok) throw new Error(store.error.message);
     const transport = createExactScriptedTransport({
       runtime,
@@ -362,7 +362,7 @@ describe("exact scripted transport", () => {
       parseResponse,
       parseEvent,
       parseFailure,
-      activity: createCarapaceActivityScope(store.value, runtime),
+      activity: createDirectActivityScope(store.value, runtime),
       steps: [{
         request: { id: 1, payload: "once" },
         outcome: { kind: "response", value: { accepted: true } },
@@ -598,7 +598,7 @@ describe("exact scripted transport", () => {
       ...baseRuntime,
       wait: () => Promise.reject(hostile),
     }) satisfies LogicalRuntime;
-    const store = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+    const store = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
     if (!store.ok) throw new Error(store.error.message);
     const transport = createExactScriptedTransport({
       runtime,
@@ -606,7 +606,7 @@ describe("exact scripted transport", () => {
       parseResponse,
       parseEvent,
       parseFailure,
-      activity: createCarapaceActivityScope(store.value, runtime),
+      activity: createDirectActivityScope(store.value, runtime),
       steps: [{
         request: { id: 1, payload: "hostile-wait" },
         outcome: { kind: "response", value: { accepted: true } },

@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { defineCarapace } from "../core/definition.js";
+import { defineDirect } from "../core/definition.js";
 import { parseTestWorld } from "../core/test-support.js";
-import { createCarapaceSession } from "../testing/session.js";
-import type { CarapaceBrowserBridge } from "./browser-bridge.js";
-import { installCarapaceBrowser } from "./browser.js";
+import { createDirectSession } from "../testing/session.js";
+import type { DirectBrowserBridge } from "./browser-bridge.js";
+import { installDirectBrowser } from "./browser.js";
 
 const hostFetch = globalThis.fetch;
 
@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 function sessionFixture() {
-  const definition = defineCarapace({
+  const definition = defineDirect({
     parseWorld: parseTestWorld,
     defaultScenario: "chat.empty",
     scenarios: [{
@@ -29,7 +29,7 @@ function sessionFixture() {
       scenarios: ["chat.empty"],
     }],
   });
-  const session = createCarapaceSession({
+  const session = createDirectSession({
     definition,
     activation: { kind: "scenario", scenario: "chat.empty" },
     create: () => ({ kind: "chat-harness" as const }),
@@ -38,19 +38,19 @@ function sessionFixture() {
   return session.value;
 }
 
-describe("Carapace browser installation", () => {
+describe("Direct browser installation", () => {
   test("publishes one session and tears down bridge and firewall with session disposal", async () => {
     const target: Record<string, unknown> = {};
     const session = sessionFixture();
     let blocked = 0;
-    const installed = installCarapaceBrowser({
+    const installed = installDirectBrowser({
       session,
       target,
       firewall: { onBlocked: () => { blocked += 1; } },
     });
     if (!installed.ok) throw new Error(installed.error.message);
 
-    const bridge = target.__carapace as CarapaceBrowserBridge;
+    const bridge = target.__direct as DirectBrowserBridge;
     expect(bridge.coverage).toEqual(session.coverage);
     expect(bridge.snapshot()).toMatchObject({
       activationHash: session.activation.activationHash,
@@ -66,7 +66,7 @@ describe("Carapace browser installation", () => {
     session.dispose();
     expect(installed.value.isDisposed()).toBeTrue();
     expect(installed.value.disposalErrors()).toEqual([]);
-    expect("__carapace" in target).toBeFalse();
+    expect("__direct" in target).toBeFalse();
     expect(globalThis.fetch).toBe(hostFetch);
   });
 
@@ -81,7 +81,7 @@ describe("Carapace browser installation", () => {
       },
       { preconnect: hostFetch.preconnect },
     );
-    const installed = installCarapaceBrowser({
+    const installed = installDirectBrowser({
       session,
       target,
       firewall: {
@@ -94,7 +94,7 @@ describe("Carapace browser installation", () => {
     expect(await (await fetch("data:text/plain,ready")).text()).toBe("fixture");
     expect((await fetch("https://example.com")).status).toBe(501);
     expect(calls).toBe(1);
-    expect((target.__carapace as CarapaceBrowserBridge).snapshot()).toMatchObject({
+    expect((target.__direct as DirectBrowserBridge).snapshot()).toMatchObject({
       activity: { active: 0, started: 2, settled: 2 },
     });
     session.dispose();
@@ -107,7 +107,7 @@ describe("Carapace browser installation", () => {
         throw new Error("target rejected bridge");
       },
     });
-    const installed = installCarapaceBrowser({ session, target });
+    const installed = installDirectBrowser({ session, target });
     expect(installed).toMatchObject({
       ok: false,
       error: { code: "bridge-install-failed", rollbackErrors: [] },
@@ -121,7 +121,7 @@ describe("Carapace browser installation", () => {
     const target: Record<string, unknown> = {};
     const session = sessionFixture();
     session.dispose();
-    const installed = installCarapaceBrowser({ session, target });
+    const installed = installDirectBrowser({ session, target });
     expect(installed).toMatchObject({
       ok: false,
       error: {
@@ -130,41 +130,41 @@ describe("Carapace browser installation", () => {
         rollbackErrors: [],
       },
     });
-    expect("__carapace" in target).toBeFalse();
+    expect("__direct" in target).toBeFalse();
     expect(globalThis.fetch).toBe(hostFetch);
   });
 
   test("a failed replacement restores the prior live installation and its cleanup authority", () => {
     const target: Record<string, unknown> = {};
     const firstSession = sessionFixture();
-    const first = installCarapaceBrowser({ session: firstSession, target });
+    const first = installDirectBrowser({ session: firstSession, target });
     if (!first.ok) throw new Error(first.error.message);
-    const firstBridge = target.__carapace;
+    const firstBridge = target.__direct;
     const firstFetch = globalThis.fetch;
 
     const disposedSession = sessionFixture();
     disposedSession.dispose();
-    const replacement = installCarapaceBrowser({ session: disposedSession, target });
+    const replacement = installDirectBrowser({ session: disposedSession, target });
     expect(replacement).toMatchObject({
       ok: false,
       error: { code: "session-registration-failed", rollbackErrors: [] },
     });
-    expect(target.__carapace).toBe(firstBridge);
+    expect(target.__direct).toBe(firstBridge);
     expect(globalThis.fetch).toBe(firstFetch);
     expect(first.value.isDisposed()).toBeFalse();
 
     firstSession.dispose();
     expect(first.value.isDisposed()).toBeTrue();
-    expect("__carapace" in target).toBeFalse();
+    expect("__direct" in target).toBeFalse();
     expect(globalThis.fetch).toBe(hostFetch);
   });
 
   test("supports an explicit bridge-only composition", () => {
     const target: Record<string, unknown> = {};
     const session = sessionFixture();
-    const installed = installCarapaceBrowser({ session, target, firewall: false });
+    const installed = installDirectBrowser({ session, target, firewall: false });
     if (!installed.ok) throw new Error(installed.error.message);
-    expect(target.__carapace).toBeDefined();
+    expect(target.__direct).toBeDefined();
     expect(globalThis.fetch).toBe(hostFetch);
     session.dispose();
   });
@@ -175,7 +175,7 @@ describe("Carapace browser installation", () => {
         throw new Error("browser option getter failed");
       },
     });
-    expect(installCarapaceBrowser(options as never)).toMatchObject({
+    expect(installDirectBrowser(options as never)).toMatchObject({
       ok: false,
       error: { code: "invalid-options", message: "browser option getter failed" },
     });
@@ -191,7 +191,7 @@ describe("Carapace browser installation", () => {
         return value;
       },
     });
-    expect(installCarapaceBrowser({ session: unreadable })).toMatchObject({
+    expect(installDirectBrowser({ session: unreadable })).toMatchObject({
       ok: false,
       error: { code: "invalid-options", message: "probe getter failed" },
     });
@@ -201,11 +201,11 @@ describe("Carapace browser installation", () => {
       ...session,
       onDispose: () => { throw new Error("cleanup registration failed"); },
     };
-    expect(installCarapaceBrowser({ session: rejectingRegistration, target })).toMatchObject({
+    expect(installDirectBrowser({ session: rejectingRegistration, target })).toMatchObject({
       ok: false,
       error: { code: "session-registration-threw", message: "cleanup registration failed" },
     });
-    expect("__carapace" in target).toBeFalse();
+    expect("__direct" in target).toBeFalse();
     expect(globalThis.fetch).toBe(hostFetch);
 
     const hostileRegistrationResult = {
@@ -216,14 +216,14 @@ describe("Carapace browser installation", () => {
         },
       }),
     };
-    expect(installCarapaceBrowser({
+    expect(installDirectBrowser({
       session: hostileRegistrationResult as never,
       target,
     })).toMatchObject({
       ok: false,
       error: { code: "session-registration-threw", message: "cleanup registration result failed" },
     });
-    expect("__carapace" in target).toBeFalse();
+    expect("__direct" in target).toBeFalse();
     expect(globalThis.fetch).toBe(hostFetch);
     session.dispose();
   });

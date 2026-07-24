@@ -1,27 +1,27 @@
 import {
-  CARAPACE_BROWSER_BRIDGE_SCHEMA as browserBridgeSchema,
-  installCarapaceBrowserBridge as installBrowserBridge,
+  DIRECT_BROWSER_BRIDGE_SCHEMA as browserBridgeSchema,
+  installDirectBrowserBridge as installBrowserBridge,
 } from "./web/browser-bridge.js";
 import {
-  installCarapaceFetchFirewall as installFetchFirewall,
+  installDirectFetchFirewall as installFetchFirewall,
 } from "./web/fetch-firewall.js";
 
 export * from "./web/browser.js";
-export const CARAPACE_BROWSER_BRIDGE_SCHEMA = browserBridgeSchema;
-export const installCarapaceBrowserBridge: typeof installBrowserBridge = (
+export const DIRECT_BROWSER_BRIDGE_SCHEMA = browserBridgeSchema;
+export const installDirectBrowserBridge: typeof installBrowserBridge = (
   options,
 ) => installBrowserBridge(options);
 export type {
-  CarapaceBrowserBridge,
-  CarapaceBrowserBridgeError,
-  CarapaceBrowserBridgeErrorCode,
-  CarapaceBrowserBridgeOptions,
-  CarapaceBrowserBridgeUninstall,
+  DirectBrowserBridge,
+  DirectBrowserBridgeError,
+  DirectBrowserBridgeErrorCode,
+  DirectBrowserBridgeOptions,
+  DirectBrowserBridgeUninstall,
 } from "./web/browser-bridge.js";
-export const installCarapaceFetchFirewall: typeof installFetchFirewall = (
+export const installDirectFetchFirewall: typeof installFetchFirewall = (
   options,
 ) => installFetchFirewall(options);
 export type {
-  CarapaceFetchFirewallOptions,
-  CarapaceFetchFirewallUninstall,
+  DirectFetchFirewallOptions,
+  DirectFetchFirewallUninstall,
 } from "./web/fetch-firewall.js";

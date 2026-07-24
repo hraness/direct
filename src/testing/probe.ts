@@ -2,19 +2,19 @@ import { cloneJson, freezeJson, parseJsonValue } from "../core/json.js";
 import type { JsonValue } from "../core/json-value.js";
 import { renderUnknownReason } from "../core/reason.js";
 import { err, isRecord, ok, type Result } from "../core/result.js";
-import type { ActivitySnapshot, CarapaceStore } from "../core/store.js";
+import type { ActivitySnapshot, DirectStore } from "../core/store.js";
 
-export const CARAPACE_PROBE_SCHEMA = "carapace.probe/v1" as const;
-export const MAX_CARAPACE_PROBE_COUNTERS = 128;
+export const DIRECT_PROBE_SCHEMA = "direct.probe/v1" as const;
+export const MAX_DIRECT_PROBE_COUNTERS = 128;
 
-export interface CarapaceCounterSource {
+export interface DirectCounterSource {
   readonly name: string;
   /** Foreign counter reads are validated on every snapshot. */
   readonly read: () => number;
 }
 
-export interface CarapaceProbeSnapshot {
-  readonly schema: typeof CARAPACE_PROBE_SCHEMA;
+export interface DirectProbeSnapshot {
+  readonly schema: typeof DIRECT_PROBE_SCHEMA;
   readonly activationHash: string;
   readonly generation: number;
   readonly revision: number;
@@ -26,7 +26,7 @@ export interface CarapaceProbeSnapshot {
   readonly isQuiescent: boolean;
 }
 
-export type CarapaceProbeErrorCode =
+export type DirectProbeErrorCode =
   | "asynchronous-read"
   | "duplicate-counter"
   | "invalid-activation-hash"
@@ -39,32 +39,32 @@ export type CarapaceProbeErrorCode =
   | "probe-read-failed"
   | "too-many-counters";
 
-export interface CarapaceProbeError {
-  readonly code: CarapaceProbeErrorCode;
+export interface DirectProbeError {
+  readonly code: DirectProbeErrorCode;
   readonly message: string;
   readonly counter: string | null;
 }
 
-export interface CarapaceProbe {
-  readonly snapshot: () => Result<CarapaceProbeSnapshot, CarapaceProbeError>;
-  readonly isQuiescent: () => Result<boolean, CarapaceProbeError>;
+export interface DirectProbe {
+  readonly snapshot: () => Result<DirectProbeSnapshot, DirectProbeError>;
+  readonly isQuiescent: () => Result<boolean, DirectProbeError>;
 }
 
-export interface CarapaceProbeOptions<World extends JsonValue> {
-  readonly store: CarapaceStore<World>;
+export interface DirectProbeOptions<World extends JsonValue> {
+  readonly store: DirectStore<World>;
   readonly activationHash: string;
-  readonly pending?: readonly CarapaceCounterSource[];
-  readonly violations?: readonly CarapaceCounterSource[];
+  readonly pending?: readonly DirectCounterSource[];
+  readonly violations?: readonly DirectCounterSource[];
   readonly readRemainingWork?: () => JsonValue;
 }
 
-interface PreparedCounterSource extends CarapaceCounterSource {
+interface PreparedCounterSource extends DirectCounterSource {
   readonly category: "pending" | "violation";
 }
 
 function freezeCounterSources(
-  sources: readonly CarapaceCounterSource[],
-): readonly CarapaceCounterSource[] {
+  sources: readonly DirectCounterSource[],
+): readonly DirectCounterSource[] {
   return Object.freeze([...sources]);
 }
 
@@ -83,10 +83,10 @@ const SNAPSHOT_KEYS = new Set([
 const ACTIVITY_KEYS = new Set(["active", "started", "settled"]);
 
 function probeError(
-  code: CarapaceProbeErrorCode,
+  code: DirectProbeErrorCode,
   message: string,
   counter: string | null = null,
-): CarapaceProbeError {
+): DirectProbeError {
   return Object.freeze({ code, message, counter });
 }
 
@@ -120,7 +120,7 @@ function containPromiseLike(value: unknown): boolean {
 function parseSnapshotCounters(
   input: unknown,
   category: "pending" | "violation",
-): Result<Readonly<Record<string, number>>, CarapaceProbeError> {
+): Result<Readonly<Record<string, number>>, DirectProbeError> {
   if (!isRecord(input)) {
     return err(probeError("invalid-snapshot", `Probe ${category} counters must be an object`));
   }
@@ -147,51 +147,51 @@ function parseSnapshotCounters(
 }
 
 /** Parse the versioned JSON value returned by a browser bridge from `unknown`. */
-export function parseCarapaceProbeSnapshot(
+export function parseDirectProbeSnapshot(
   input: unknown,
-): Result<CarapaceProbeSnapshot, CarapaceProbeError> {
+): Result<DirectProbeSnapshot, DirectProbeError> {
   const parsed = parseJsonValue(input);
   if (!parsed.ok || !isRecord(parsed.value)) {
     return err(probeError(
       "invalid-snapshot",
-      parsed.ok ? "Carapace probe snapshot must be an object" : parsed.error.message,
+      parsed.ok ? "Direct probe snapshot must be an object" : parsed.error.message,
     ));
   }
   const record = parsed.value;
   for (const key of Object.keys(record)) {
     if (!SNAPSHOT_KEYS.has(key)) {
-      return err(probeError("invalid-snapshot", `Unknown Carapace probe snapshot key: ${key}`));
+      return err(probeError("invalid-snapshot", `Unknown Direct probe snapshot key: ${key}`));
     }
   }
-  if (record.schema !== CARAPACE_PROBE_SCHEMA) {
+  if (record.schema !== DIRECT_PROBE_SCHEMA) {
     return err(probeError(
       "invalid-snapshot",
-      `Carapace probe schema must be ${CARAPACE_PROBE_SCHEMA}`,
+      `Direct probe schema must be ${DIRECT_PROBE_SCHEMA}`,
     ));
   }
   if (typeof record.activationHash !== "string" || !validActivationHash(record.activationHash)) {
-    return err(probeError("invalid-activation-hash", "Carapace probe activation hash is invalid"));
+    return err(probeError("invalid-activation-hash", "Direct probe activation hash is invalid"));
   }
   const generation = readNonNegativeInteger(record.generation);
   const revision = readNonNegativeInteger(record.revision);
   if (generation === null || generation < 1 || revision === null) {
     return err(probeError(
       "invalid-snapshot",
-      "Carapace probe generation must be positive and revision must be non-negative",
+      "Direct probe generation must be positive and revision must be non-negative",
     ));
   }
   if (generation - 1 > revision) {
     return err(probeError(
       "invalid-snapshot",
-      "Carapace probe generation cannot exceed revision plus one",
+      "Direct probe generation cannot exceed revision plus one",
     ));
   }
   if (!isRecord(record.activity)) {
-    return err(probeError("invalid-snapshot", "Carapace probe activity must be an object"));
+    return err(probeError("invalid-snapshot", "Direct probe activity must be an object"));
   }
   for (const key of Object.keys(record.activity)) {
     if (!ACTIVITY_KEYS.has(key)) {
-      return err(probeError("invalid-snapshot", `Unknown Carapace activity key: ${key}`));
+      return err(probeError("invalid-snapshot", `Unknown Direct activity key: ${key}`));
     }
   }
   const active = readNonNegativeInteger(record.activity.active);
@@ -206,41 +206,41 @@ export function parseCarapaceProbeSnapshot(
   ) {
     return err(probeError(
       "invalid-snapshot",
-      "Carapace activity counters must be non-negative and conserve started work",
+      "Direct activity counters must be non-negative and conserve started work",
     ));
   }
   if (started > revision || settled > revision - started) {
     return err(probeError(
       "invalid-snapshot",
-      "Carapace activity transitions cannot exceed the store revision",
+      "Direct activity transitions cannot exceed the store revision",
     ));
   }
   const pending = parseSnapshotCounters(record.pending, "pending");
   if (!pending.ok) return pending;
   const violations = parseSnapshotCounters(record.violations, "violation");
   if (!violations.ok) return violations;
-  if (Object.keys(pending.value).length + Object.keys(violations.value).length > MAX_CARAPACE_PROBE_COUNTERS) {
+  if (Object.keys(pending.value).length + Object.keys(violations.value).length > MAX_DIRECT_PROBE_COUNTERS) {
     return err(probeError(
       "too-many-counters",
-      `A probe supports at most ${String(MAX_CARAPACE_PROBE_COUNTERS)} counters`,
+      `A probe supports at most ${String(MAX_DIRECT_PROBE_COUNTERS)} counters`,
     ));
   }
   if (record.remainingWork === undefined) {
-    return err(probeError("invalid-snapshot", "Carapace probe snapshot requires remainingWork"));
+    return err(probeError("invalid-snapshot", "Direct probe snapshot requires remainingWork"));
   }
   if (typeof record.isQuiescent !== "boolean") {
-    return err(probeError("invalid-snapshot", "Carapace probe isQuiescent must be boolean"));
+    return err(probeError("invalid-snapshot", "Direct probe isQuiescent must be boolean"));
   }
   const expectedQuiescence = active === 0
     && Object.values(pending.value).every((value) => value === 0);
   if (record.isQuiescent !== expectedQuiescence) {
     return err(probeError(
       "invalid-snapshot",
-      "Carapace probe isQuiescent does not match its activity and pending counters",
+      "Direct probe isQuiescent does not match its activity and pending counters",
     ));
   }
   return ok(Object.freeze({
-    schema: CARAPACE_PROBE_SCHEMA,
+    schema: DIRECT_PROBE_SCHEMA,
     activationHash: record.activationHash,
     generation,
     revision,
@@ -253,13 +253,13 @@ export function parseCarapaceProbeSnapshot(
 }
 
 function prepareCountersUnchecked(
-  pending: readonly CarapaceCounterSource[],
-  violations: readonly CarapaceCounterSource[],
-): Result<readonly PreparedCounterSource[], CarapaceProbeError> {
-  if (pending.length + violations.length > MAX_CARAPACE_PROBE_COUNTERS) {
+  pending: readonly DirectCounterSource[],
+  violations: readonly DirectCounterSource[],
+): Result<readonly PreparedCounterSource[], DirectProbeError> {
+  if (pending.length + violations.length > MAX_DIRECT_PROBE_COUNTERS) {
     return err(probeError(
       "too-many-counters",
-      `A probe supports at most ${String(MAX_CARAPACE_PROBE_COUNTERS)} counters`,
+      `A probe supports at most ${String(MAX_DIRECT_PROBE_COUNTERS)} counters`,
     ));
   }
   const prepared: PreparedCounterSource[] = [];
@@ -302,15 +302,15 @@ function prepareCountersUnchecked(
 }
 
 function prepareCounters(
-  pending: readonly CarapaceCounterSource[],
-  violations: readonly CarapaceCounterSource[],
-): Result<readonly PreparedCounterSource[], CarapaceProbeError> {
+  pending: readonly DirectCounterSource[],
+  violations: readonly DirectCounterSource[],
+): Result<readonly PreparedCounterSource[], DirectProbeError> {
   try {
     return prepareCountersUnchecked(pending, violations);
   } catch (reason) {
     return err(probeError(
       "invalid-counter-source",
-      renderUnknownReason(reason, "Carapace counter inspection failed"),
+      renderUnknownReason(reason, "Direct counter inspection failed"),
     ));
   }
 }
@@ -320,7 +320,7 @@ function readCounters(
 ): Result<{
   readonly pending: Readonly<Record<string, number>>;
   readonly violations: Readonly<Record<string, number>>;
-}, CarapaceProbeError> {
+}, DirectProbeError> {
   const pending: Record<string, number> = Object.create(null) as Record<string, number>;
   const violations: Record<string, number> = Object.create(null) as Record<string, number>;
   for (const source of sources) {
@@ -353,7 +353,7 @@ function readCounters(
   return ok({ pending: Object.freeze(pending), violations: Object.freeze(violations) });
 }
 
-function readRemaining(read: () => JsonValue): Result<JsonValue, CarapaceProbeError> {
+function readRemaining(read: () => JsonValue): Result<JsonValue, DirectProbeError> {
   let candidate: unknown;
   try {
     candidate = read();
@@ -376,13 +376,13 @@ function readRemaining(read: () => JsonValue): Result<JsonValue, CarapaceProbeEr
 }
 
 /** Build a stable, JSON-safe verifier view without publishing the product world. */
-export function createCarapaceProbe<World extends JsonValue>(
-  options: CarapaceProbeOptions<World>,
-): Result<CarapaceProbe, CarapaceProbeError> {
-  let store: CarapaceStore<World>;
+export function createDirectProbe<World extends JsonValue>(
+  options: DirectProbeOptions<World>,
+): Result<DirectProbe, DirectProbeError> {
+  let store: DirectStore<World>;
   let activationHash: string;
-  let pending: readonly CarapaceCounterSource[];
-  let violations: readonly CarapaceCounterSource[];
+  let pending: readonly DirectCounterSource[];
+  let violations: readonly DirectCounterSource[];
   let readRemainingWork: () => JsonValue;
   try {
     store = options.store;
@@ -391,17 +391,17 @@ export function createCarapaceProbe<World extends JsonValue>(
     const violationsInput = options.violations ?? [];
     readRemainingWork = options.readRemainingWork ?? (() => Object.freeze({}));
     if (!Array.isArray(pendingInput) || !Array.isArray(violationsInput)) {
-      return err(probeError("invalid-options", "Carapace probe counters must be arrays"));
+      return err(probeError("invalid-options", "Direct probe counters must be arrays"));
     }
     if (typeof readRemainingWork !== "function") {
-      return err(probeError("invalid-options", "Carapace remaining-work reader must be a function"));
+      return err(probeError("invalid-options", "Direct remaining-work reader must be a function"));
     }
     pending = freezeCounterSources(pendingInput);
     violations = freezeCounterSources(violationsInput);
   } catch (reason) {
     return err(probeError(
       "invalid-options",
-      renderUnknownReason(reason, "Carapace probe options could not be inspected"),
+      renderUnknownReason(reason, "Direct probe options could not be inspected"),
     ));
   }
 
@@ -414,7 +414,7 @@ export function createCarapaceProbe<World extends JsonValue>(
   const counters = prepareCounters(pending, violations);
   if (!counters.ok) return counters;
 
-  const snapshot = (): Result<CarapaceProbeSnapshot, CarapaceProbeError> => {
+  const snapshot = (): Result<DirectProbeSnapshot, DirectProbeError> => {
     const read = readCounters(counters.value);
     if (!read.ok) return read;
     const remaining = readRemaining(readRemainingWork);
@@ -423,7 +423,7 @@ export function createCarapaceProbe<World extends JsonValue>(
     const isQuiescent = storeSnapshot.activity.active === 0
       && Object.values(read.value.pending).every((value) => value === 0);
     const value = {
-      schema: CARAPACE_PROBE_SCHEMA,
+      schema: DIRECT_PROBE_SCHEMA,
       activationHash,
       generation: Number(storeSnapshot.generation),
       revision: storeSnapshot.revision,
@@ -432,11 +432,11 @@ export function createCarapaceProbe<World extends JsonValue>(
       violations: read.value.violations,
       remainingWork: remaining.value,
       isQuiescent,
-    } satisfies CarapaceProbeSnapshot;
+    } satisfies DirectProbeSnapshot;
     return ok(Object.freeze(value));
   };
 
-  const probe: CarapaceProbe = {
+  const probe: DirectProbe = {
     snapshot,
     isQuiescent: () => {
       const current = snapshot();

@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { assertProperty, fc } from "../core/test-support.js";
 
-import { defineCarapace } from "../core/definition.js";
+import { defineDirect } from "../core/definition.js";
 import { parseTestWorld } from "../core/test-support.js";
-import { createCarapaceSession } from "./session.js";
+import { createDirectSession } from "./session.js";
 
-const definition = defineCarapace({
+const definition = defineDirect({
   parseWorld: parseTestWorld,
   defaultScenario: "chat.empty",
   scenarios: [{
@@ -16,7 +16,7 @@ const definition = defineCarapace({
   }],
   coverage: [],
 });
-describe("Carapace session properties", () => {
+describe("Direct session properties", () => {
   test("arbitrary hostile structural activations never escape the Result boundary", () => {
     assertProperty(fc.property(
       fc.string(),
@@ -30,7 +30,7 @@ describe("Carapace session properties", () => {
               get: () => { throw new Error(message); },
             }),
         };
-        const create = () => createCarapaceSession({
+        const create = () => createDirectSession({
           definition: hostileDefinition as never,
           activation: { kind: "scenario", scenario: "chat.empty" },
           create: () => ({}),
@@ -47,7 +47,7 @@ describe("Carapace session properties", () => {
       fc.integer({ min: 1, max: 10 }),
       (values, disposeCalls) => {
         const observed: number[] = [];
-        const created = createCarapaceSession({
+        const created = createDirectSession({
           definition,
           activation: { kind: "query", source: "" },
           create: (context) => {

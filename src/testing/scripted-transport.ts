@@ -3,7 +3,7 @@ import type { JsonValue } from "../core/json-value.js";
 import { renderUnknownReason } from "../core/reason.js";
 import { err, isRecord, ok, type Result } from "../core/result.js";
 import type { LogicalRuntime, RuntimeError } from "../core/runtime.js";
-import type { CarapaceActivityLease, CarapaceActivityScope } from "./activity.js";
+import type { DirectActivityLease, DirectActivityScope } from "./activity.js";
 
 export const DEFAULT_SCRIPTED_TRANSPORT_LIMITS = Object.freeze({
   maxSteps: 10_000,
@@ -94,7 +94,7 @@ export interface ExactScriptedTransportOptions<
   readonly parseFailure: WorldParser<Failure>;
   /** An exact JSON array; unknown keys and ambiguous outcomes are rejected. */
   readonly steps: unknown;
-  readonly activity?: Pick<CarapaceActivityScope, "begin">;
+  readonly activity?: Pick<DirectActivityScope, "begin">;
   readonly activityNamespace?: string;
   readonly limits?: ScriptedTransportLimits;
   readonly onListenerError?: ScriptedTransportListenerErrorReporter;
@@ -112,7 +112,7 @@ interface CapturedScriptedTransportOptions<
   readonly parseEvent: WorldParser<Event>;
   readonly parseFailure: WorldParser<Failure>;
   readonly steps: unknown;
-  readonly beginActivity: CarapaceActivityScope["begin"] | undefined;
+  readonly beginActivity: DirectActivityScope["begin"] | undefined;
   readonly activityNamespace: string;
   readonly limits: ScriptedTransportLimits;
   readonly onListenerError: ScriptedTransportListenerErrorReporter | undefined;
@@ -497,7 +497,7 @@ export function createExactScriptedTransport<
     const suffix = droppedInternalErrors === 0 ? "" : `; ${String(droppedInternalErrors)} more omitted`;
     return currentError("internal-failure", `${internalErrors.join("; ")}${suffix}`);
   };
-  const settleLease = (lease: CarapaceActivityLease | null): void => {
+  const settleLease = (lease: DirectActivityLease | null): void => {
     if (lease === null) return;
     try {
       const released = lease.release();
@@ -506,7 +506,7 @@ export function createExactScriptedTransport<
       recordInternalError(reason);
     }
   };
-  const beginLease = (): Result<CarapaceActivityLease | null, string> => {
+  const beginLease = (): Result<DirectActivityLease | null, string> => {
     if (captured.beginActivity === undefined) return ok(null);
     try {
       const started = captured.beginActivity(captured.activityNamespace);

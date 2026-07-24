@@ -9,8 +9,8 @@
   "include": [
     "src/**/*.ts",
     "src/**/*.tsx",
-    "carapace/**/*.ts",
-    "carapace/**/*.tsx",
+    "direct/**/*.ts",
+    "direct/**/*.tsx",
     "vite.config.ts",
     "verify.ts"
   ]

@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
-import { createCarapaceStore } from "./store.js";
+import { createDirectStore } from "./store.js";
 import { operationId } from "./ids.js";
 import { parseTestWorld, type TestWorld } from "./test-support.js";
 
 function makeStore() {
-  const created = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+  const created = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
   if (!created.ok) {
     throw new Error(created.error.message);
   }
@@ -67,7 +67,7 @@ test("quiescence resolves after the final current-generation activity settles", 
 
 test("throwing subscribers cannot corrupt mutation results or starve later listeners", () => {
   const listenerErrors: unknown[] = [];
-  const created = createCarapaceStore(
+  const created = createDirectStore(
     { count: 0, messages: [] },
     parseTestWorld,
     { onListenerError: (reason) => listenerErrors.push(reason) },
@@ -156,7 +156,7 @@ test("transaction drafts never alias values returned by a world parser", () => {
     if (!Number.isFinite(parsed.count)) throw new Error("count must be finite");
     return shared;
   };
-  const created = createCarapaceStore(shared, parseSharedWorld);
+  const created = createDirectStore(shared, parseSharedWorld);
   if (!created.ok) throw new Error(created.error.message);
 
   const result = created.value.transact(
@@ -176,7 +176,7 @@ test("async subscriber failures are reported and option capture cannot be retarg
   const mutableOptions = {
     onListenerError: (reason: unknown): void => { firstErrors.push(reason); },
   };
-  const created = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld, mutableOptions);
+  const created = createDirectStore({ count: 0, messages: [] }, parseTestWorld, mutableOptions);
   if (!created.ok) throw new Error(created.error.message);
   mutableOptions.onListenerError = (reason: unknown): void => { secondErrors.push(reason); };
   created.value.subscribe(async () => {

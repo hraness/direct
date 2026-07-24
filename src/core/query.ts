@@ -10,8 +10,8 @@ import { err, ok, type Result } from "./result.js";
 import type { LogicalRuntimeSnapshot } from "./runtime.js";
 import type { ScenarioCatalog } from "./scenario.js";
 
-export const SCENARIO_QUERY_KEY = "__carapace_scenario" as const;
-export const FIXTURE_QUERY_KEY = "__carapace_fixture" as const;
+export const SCENARIO_QUERY_KEY = "__direct_scenario" as const;
+export const FIXTURE_QUERY_KEY = "__direct_fixture" as const;
 const FIXTURE_QUERY_PREFIX_BYTES = utf8ByteLength(`?${FIXTURE_QUERY_KEY}=`);
 
 /** Worst-case percent-encoded query bytes for a bounded fixture JSON string. */
@@ -21,7 +21,7 @@ export function maximumFixtureQueryBytes(maxFixtureBytes: number): number {
 
 export const DEFAULT_MAX_QUERY_BYTES = maximumFixtureQueryBytes(DEFAULT_MAX_FIXTURE_BYTES);
 
-export interface ActiveCarapace<World extends JsonValue, Route extends string> {
+export interface ActiveDirect<World extends JsonValue, Route extends string> {
   readonly kind: "active";
   readonly source: "scenario" | "fixture";
   readonly scenario: ScenarioId;
@@ -31,13 +31,13 @@ export interface ActiveCarapace<World extends JsonValue, Route extends string> {
   readonly activationHash: string;
 }
 
-export interface InactiveCarapace {
+export interface InactiveDirect {
   readonly kind: "inactive";
 }
 
-export type CarapaceActivation<World extends JsonValue, Route extends string> =
-  | InactiveCarapace
-  | ActiveCarapace<World, Route>;
+export type DirectActivation<World extends JsonValue, Route extends string> =
+  | InactiveDirect
+  | ActiveDirect<World, Route>;
 
 export type QueryErrorCode =
   | "duplicate-parameter"
@@ -55,7 +55,7 @@ export interface QueryError {
   readonly message: string;
 }
 
-export interface CarapaceQueryOptions<World extends JsonValue, Route extends string>
+export interface DirectQueryOptions<World extends JsonValue, Route extends string>
   extends FixtureParseOptions<World, Route> {
   readonly maxQueryBytes?: number;
 }
@@ -68,7 +68,7 @@ function decodeQueryPart(value: string): Result<string, QueryError> {
   try {
     return ok(decodeURIComponent(value.replaceAll("+", " ")));
   } catch {
-    return err(queryError("invalid-encoding", "Carapace query contains invalid percent encoding"));
+    return err(queryError("invalid-encoding", "Direct query contains invalid percent encoding"));
   }
 }
 
@@ -102,10 +102,10 @@ function parseActivationParameters(source: string): Result<ParsedActivationQuery
     if (!key.ok) {
       return key;
     }
-    const reserved = key.value.startsWith("__carapace_");
+    const reserved = key.value.startsWith("__direct_");
     if (key.value !== SCENARIO_QUERY_KEY && key.value !== FIXTURE_QUERY_KEY) {
       if (reserved) {
-        return err(queryError("unknown-parameter", `Unknown Carapace query parameter: ${key.value}`));
+        return err(queryError("unknown-parameter", `Unknown Direct query parameter: ${key.value}`));
       }
       continue;
     }
@@ -142,10 +142,10 @@ function activationHash<World extends JsonValue, Route extends string>(
   return `${hashed.value.algorithm}:${hashed.value.value}`;
 }
 
-export function activateCarapaceScenario<World extends JsonValue, Route extends string>(
+export function activateDirectScenario<World extends JsonValue, Route extends string>(
   id: unknown,
   scenarios: ScenarioCatalog<World, Route>,
-): Result<ActiveCarapace<World, Route>, QueryError> {
+): Result<ActiveDirect<World, Route>, QueryError> {
   const parsed = parseScenarioId(id);
   if (!parsed.ok) {
     return err(queryError("invalid-scenario", parsed.error.message));
@@ -165,19 +165,19 @@ export function activateCarapaceScenario<World extends JsonValue, Route extends 
   }));
 }
 
-export function parseCarapaceQuery<World extends JsonValue, Route extends string>(
+export function parseDirectQuery<World extends JsonValue, Route extends string>(
   source: unknown,
-  options: CarapaceQueryOptions<World, Route>,
-): Result<CarapaceActivation<World, Route>, QueryError> {
+  options: DirectQueryOptions<World, Route>,
+): Result<DirectActivation<World, Route>, QueryError> {
   const maxBytes = options.maxQueryBytes ?? DEFAULT_MAX_QUERY_BYTES;
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
     throw new Error("Query maxQueryBytes must be a positive safe integer");
   }
   if (typeof source !== "string") {
-    return err(queryError("invalid-query", "Carapace query source must be a string"));
+    return err(queryError("invalid-query", "Direct query source must be a string"));
   }
   if (utf8ByteLength(source) > maxBytes) {
-    return err(queryError("oversized-query", "Carapace query exceeds its byte limit"));
+    return err(queryError("oversized-query", "Direct query exceeds its byte limit"));
   }
   const parameters = parseActivationParameters(source);
   if (!parameters.ok) {
@@ -189,7 +189,7 @@ export function parseCarapaceQuery<World extends JsonValue, Route extends string
 
   const requestedScenario = parameters.value.scenario === null
     ? null
-    : activateCarapaceScenario(parameters.value.scenario, options.scenarios);
+    : activateDirectScenario(parameters.value.scenario, options.scenarios);
   if (requestedScenario !== null && !requestedScenario.ok) {
     return requestedScenario;
   }

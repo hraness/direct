@@ -5,12 +5,12 @@ import {
   useContext,
   useSyncExternalStore
 } from "react";
-function createCarapaceReactBindings() {
+function createDirectReactBindings() {
   const StoreContext = createContext(null);
   const useStore = () => {
     const store = useContext(StoreContext);
     if (store === null) {
-      throw new Error("Carapace hooks require their matching Carapace Provider");
+      throw new Error("Direct hooks require their matching Direct Provider");
     }
     return store;
   };
@@ -28,5 +28,5 @@ function createCarapaceReactBindings() {
   return Object.freeze(bindings);
 }
 export {
-  createCarapaceReactBindings
+  createDirectReactBindings
 };

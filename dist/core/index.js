@@ -4,28 +4,28 @@ import {
   FIXTURE_QUERY_KEY,
   FIXTURE_SCHEMA,
   SCENARIO_QUERY_KEY,
-  activateCarapaceScenario,
+  activateDirectScenario,
   createFixtureEnvelope,
   createScenarioCatalog,
   maximumFixtureQueryBytes,
-  parseCarapaceQuery,
+  parseDirectQuery,
   parseFixtureEnvelope,
   parseFixtureJson,
   serializeFixtureJson
-} from "../index-tvvxm1nf.js";
+} from "../index-zg34h2bx.js";
 import {
-  createCarapaceStore
-} from "../index-mmcdjksg.js";
+  createDirectStore
+} from "../index-x5hgch7b.js";
 import {
   DEFAULT_LOGICAL_RUNTIME_SNAPSHOT,
   LOGICAL_RUNTIME_SCHEMA,
   MAX_HOST_TIMER_MILLISECONDS,
   createLogicalRuntime,
   parseLogicalRuntimeSnapshot
-} from "../index-2mb8zsze.js";
+} from "../index-wqwbtetw.js";
 import {
-  CARAPACE_COVERAGE_SCHEMA,
   DEFAULT_JSON_LIMITS,
+  DIRECT_COVERAGE_SCHEMA,
   EMPTY_COVERAGE_CATALOG_SNAPSHOT,
   canonicalJson,
   cloneJson,
@@ -48,7 +48,7 @@ import {
   scenarioId,
   stableHash,
   utf8ByteLength
-} from "../index-xpkabpf3.js";
+} from "../index-541zzq54.js";
 // src/core/effects.ts
 function ownQueuedEffect(entry) {
   const id = parseOperationId(entry.id);
@@ -114,9 +114,9 @@ export {
   parseFixtureJson,
   parseFixtureEnvelope,
   parseExactJsonSource,
+  parseDirectQuery,
   parseCoverageKey,
   parseCoverageCatalogSnapshot,
-  parseCarapaceQuery,
   parseAndCloneWorld,
   operationId,
   ok,
@@ -129,24 +129,24 @@ export {
   createScenarioCatalog,
   createLogicalRuntime,
   createFixtureEnvelope,
+  createDirectStore,
   createCoverageCatalogSnapshot,
   createCoverageCatalog,
-  createCarapaceStore,
   coverageKey,
   consumeFault,
   consumeEffect,
   cloneJson,
   canonicalJson,
-  activateCarapaceScenario,
+  activateDirectScenario,
   SCENARIO_QUERY_KEY,
   MAX_HOST_TIMER_MILLISECONDS,
   LOGICAL_RUNTIME_SCHEMA,
   FIXTURE_SCHEMA,
   FIXTURE_QUERY_KEY,
   EMPTY_COVERAGE_CATALOG_SNAPSHOT,
+  DIRECT_COVERAGE_SCHEMA,
   DEFAULT_MAX_QUERY_BYTES,
   DEFAULT_MAX_FIXTURE_BYTES,
   DEFAULT_LOGICAL_RUNTIME_SNAPSHOT,
-  DEFAULT_JSON_LIMITS,
-  CARAPACE_COVERAGE_SCHEMA
+  DEFAULT_JSON_LIMITS
 };

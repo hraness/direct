@@ -4,9 +4,9 @@ import type { JsonObject } from "../core/json-value.js";
 import { isRecord } from "../core/result.js";
 
 import { createLogicalRuntime } from "../core/runtime.js";
-import { createCarapaceStore } from "../core/store.js";
+import { createDirectStore } from "../core/store.js";
 import { parseTestWorld } from "../core/test-support.js";
-import { createCarapaceActivityScope } from "./activity.js";
+import { createDirectActivityScope } from "./activity.js";
 import { DEFAULT_SCRIPTED_TRANSPORT_LIMITS, createExactScriptedTransport } from "./scripted-transport.js";
 
 interface IdRequest extends JsonObject {
@@ -35,7 +35,7 @@ test("property: matching concurrent requests conserve steps, activity, and logic
     fc.array(fc.integer({ min: 0, max: 1_000 }), { maxLength: 40 }),
     async (delays) => {
       const runtime = createLogicalRuntime(undefined, () => Promise.resolve());
-      const store = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+      const store = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
       if (!store.ok) throw new Error(store.error.message);
       const transport = createExactScriptedTransport({
         runtime,
@@ -43,7 +43,7 @@ test("property: matching concurrent requests conserve steps, activity, and logic
         parseResponse: parseBoolean,
         parseEvent: parseString,
         parseFailure: parseString,
-        activity: createCarapaceActivityScope(store.value, runtime),
+        activity: createDirectActivityScope(store.value, runtime),
         steps: delays.map((delayMs, id) => ({
           request: { id },
           outcome: { kind: "response", value: true },
@@ -80,7 +80,7 @@ test("property: every invalid request is retained as a drain violation", async (
     fc.array(fc.oneof(fc.string(), fc.double(), fc.boolean(), fc.constant(null)), { minLength: 1, maxLength: 40 }),
     async (invalidRequests) => {
       const runtime = createLogicalRuntime(undefined, () => Promise.resolve());
-      const store = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+      const store = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
       if (!store.ok) throw new Error(store.error.message);
       const transport = createExactScriptedTransport({
         runtime,
@@ -88,7 +88,7 @@ test("property: every invalid request is retained as a drain violation", async (
         parseResponse: parseBoolean,
         parseEvent: parseString,
         parseFailure: parseString,
-        activity: createCarapaceActivityScope(store.value, runtime),
+        activity: createDirectActivityScope(store.value, runtime),
         steps: [],
       });
       if (!transport.ok) throw new Error(transport.error.message);

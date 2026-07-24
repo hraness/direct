@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
 import { createCoverageCatalogSnapshot, type CoverageMode } from "../core/coverage.js";
-import { defineCarapace } from "../core/definition.js";
+import { defineDirect } from "../core/definition.js";
 import { assertProperty, fc, parseTestWorld } from "../core/test-support.js";
 import { parseDefinitionCoverageSnapshot } from "./coverage-binding.js";
 
-const definition = defineCarapace({
+const definition = defineDirect({
   parseWorld: parseTestWorld,
   defaultScenario: "chat.empty",
   scenarios: [

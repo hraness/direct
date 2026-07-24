@@ -1,47 +1,47 @@
 import type { JsonValue } from "../core/json-value.js";
 import { renderUnknownReason } from "../core/reason.js";
 import { err, ok, type Result } from "../core/result.js";
-import type { CarapaceActivityScopeError } from "../testing/activity.js";
-import type { CarapaceProbe } from "../testing/probe.js";
+import type { DirectActivityScopeError } from "../testing/activity.js";
+import type { DirectProbe } from "../testing/probe.js";
 import type {
-  CarapaceSession,
-  CarapaceSessionRegistrationError,
+  DirectSession,
+  DirectSessionRegistrationError,
 } from "../testing/session.js";
 import {
-  prepareCarapaceBrowserBridgeInstallation,
-  type CarapaceBrowserBridgeError,
-  type CarapaceBrowserBridgeUninstall,
-  type PreparedCarapaceBrowserBridgeInstallation,
+  prepareDirectBrowserBridgeInstallation,
+  type DirectBrowserBridgeError,
+  type DirectBrowserBridgeUninstall,
+  type PreparedDirectBrowserBridgeInstallation,
 } from "./browser-bridge.js";
 import {
-  prepareCarapaceFetchFirewallInstallation,
-  type CarapaceFetchFirewallOptions,
-  type CarapaceFetchFirewallUninstall,
-  type PreparedCarapaceFetchFirewallInstallation,
+  prepareDirectFetchFirewallInstallation,
+  type DirectFetchFirewallOptions,
+  type DirectFetchFirewallUninstall,
+  type PreparedDirectFetchFirewallInstallation,
 } from "./fetch-firewall.js";
 
-export interface CarapaceBrowserFirewallOptions extends Omit<
-  CarapaceFetchFirewallOptions,
+export interface DirectBrowserFirewallOptions extends Omit<
+  DirectFetchFirewallOptions,
   "beginActivity"
 > {
   /** Observe activity bookkeeping failures without allowing them to escape the fetch boundary. */
-  readonly onActivityError?: (error: CarapaceActivityScopeError) => void;
+  readonly onActivityError?: (error: DirectActivityScopeError) => void;
 }
 
-export interface InstallCarapaceBrowserOptions<
+export interface InstallDirectBrowserOptions<
   World extends JsonValue,
   Route extends string,
   Harness,
 > {
   /** The installation registers its teardown with this session. */
-  readonly session: CarapaceSession<World, Route, Harness>;
+  readonly session: DirectSession<World, Route, Harness>;
   readonly reset?: () => undefined;
   readonly target?: object;
   /** Fail closed by default. Set false only when another boundary owns application fetch. */
-  readonly firewall?: CarapaceBrowserFirewallOptions | false;
+  readonly firewall?: DirectBrowserFirewallOptions | false;
 }
 
-export type CarapaceBrowserInstallError =
+export type DirectBrowserInstallError =
   | {
     readonly code: "invalid-options" | "firewall-install-failed";
     readonly message: string;
@@ -52,7 +52,7 @@ export type CarapaceBrowserInstallError =
   | {
     readonly code: "bridge-install-failed";
     readonly message: string;
-    readonly bridgeError: CarapaceBrowserBridgeError;
+    readonly bridgeError: DirectBrowserBridgeError;
     readonly registrationError: null;
     readonly rollbackErrors: readonly string[];
   }
@@ -60,7 +60,7 @@ export type CarapaceBrowserInstallError =
     readonly code: "session-registration-failed";
     readonly message: string;
     readonly bridgeError: null;
-    readonly registrationError: CarapaceSessionRegistrationError;
+    readonly registrationError: DirectSessionRegistrationError;
     readonly rollbackErrors: readonly string[];
   }
   | {
@@ -71,7 +71,7 @@ export type CarapaceBrowserInstallError =
     readonly rollbackErrors: readonly string[];
   };
 
-export interface CarapaceBrowserInstallation {
+export interface DirectBrowserInstallation {
   /** Uninstall browser globals and the fetch firewall without disposing the owning session. */
   readonly dispose: () => undefined;
   readonly isDisposed: () => boolean;
@@ -101,8 +101,8 @@ function containPromiseLike(value: unknown): boolean {
 }
 
 function notifyActivityError(
-  observer: ((error: CarapaceActivityScopeError) => void) | undefined,
-  error: CarapaceActivityScopeError,
+  observer: ((error: DirectActivityScopeError) => void) | undefined,
+  error: DirectActivityScopeError,
 ): void {
   if (observer === undefined) return;
   try {
@@ -114,8 +114,8 @@ function notifyActivityError(
 }
 
 function runBrowserCleanup(
-  bridge: CarapaceBrowserBridgeUninstall | null,
-  firewall: CarapaceFetchFirewallUninstall | null,
+  bridge: DirectBrowserBridgeUninstall | null,
+  firewall: DirectFetchFirewallUninstall | null,
 ): readonly string[] {
   const errors: string[] = [];
   for (const [label, cleanup] of [
@@ -127,10 +127,10 @@ function runBrowserCleanup(
       const returned: unknown = cleanup();
       if (returned !== undefined) {
         containPromiseLike(returned);
-        errors.push(`Carapace browser ${label} cleanup must return undefined`);
+        errors.push(`Direct browser ${label} cleanup must return undefined`);
       }
     } catch (reason) {
-      errors.push(renderUnknownReason(reason, `Carapace browser ${label} cleanup failed`));
+      errors.push(renderUnknownReason(reason, `Direct browser ${label} cleanup failed`));
     }
   }
   return freezeMessages(errors);
@@ -141,20 +141,20 @@ function runBrowserCleanup(
  * one session. Installation is failure-atomic and teardown is registered with
  * the session, so session disposal remains the aggregate lifecycle boundary.
  */
-export function installCarapaceBrowser<
+export function installDirectBrowser<
   World extends JsonValue,
   Route extends string,
   Harness,
 >(
-  options: InstallCarapaceBrowserOptions<World, Route, Harness>,
-): Result<CarapaceBrowserInstallation, CarapaceBrowserInstallError> {
-  let activity: CarapaceSession<World, Route, Harness>["activity"];
-  let coverage: CarapaceSession<World, Route, Harness>["coverage"];
-  let onDispose: CarapaceSession<World, Route, Harness>["onDispose"];
-  let probe: CarapaceProbe;
+  options: InstallDirectBrowserOptions<World, Route, Harness>,
+): Result<DirectBrowserInstallation, DirectBrowserInstallError> {
+  let activity: DirectSession<World, Route, Harness>["activity"];
+  let coverage: DirectSession<World, Route, Harness>["coverage"];
+  let onDispose: DirectSession<World, Route, Harness>["onDispose"];
+  let probe: DirectProbe;
   let reset: (() => undefined) | undefined;
   let target: object | undefined;
-  let firewallOptions: CarapaceBrowserFirewallOptions | false;
+  let firewallOptions: DirectBrowserFirewallOptions | false;
   try {
     const session = options.session;
     activity = session.activity;
@@ -167,18 +167,18 @@ export function installCarapaceBrowser<
   } catch (reason) {
     return err(Object.freeze({
       code: "invalid-options",
-      message: renderUnknownReason(reason, "Carapace browser options could not be inspected"),
+      message: renderUnknownReason(reason, "Direct browser options could not be inspected"),
       bridgeError: null,
       registrationError: null,
       rollbackErrors: freezeMessages([]),
     }));
   }
 
-  let preparedFirewall: PreparedCarapaceFetchFirewallInstallation | null = null;
+  let preparedFirewall: PreparedDirectFetchFirewallInstallation | null = null;
   if (firewallOptions !== false) {
     try {
       const { onActivityError, ...lowLevelOptions } = firewallOptions;
-      preparedFirewall = prepareCarapaceFetchFirewallInstallation({
+      preparedFirewall = prepareDirectFetchFirewallInstallation({
         ...lowLevelOptions,
         beginActivity: () => {
           const started = activity.begin("browser-fetch");
@@ -196,7 +196,7 @@ export function installCarapaceBrowser<
     } catch (reason) {
       return err(Object.freeze({
         code: "firewall-install-failed",
-        message: renderUnknownReason(reason, "Carapace fetch firewall installation failed"),
+        message: renderUnknownReason(reason, "Direct fetch firewall installation failed"),
         bridgeError: null,
         registrationError: null,
         rollbackErrors: freezeMessages([]),
@@ -204,7 +204,7 @@ export function installCarapaceBrowser<
     }
   }
 
-  const preparedBridgeResult = prepareCarapaceBrowserBridgeInstallation({
+  const preparedBridgeResult = prepareDirectBrowserBridgeInstallation({
     probe,
     coverage,
     ...(reset === undefined ? {} : { reset }),
@@ -220,7 +220,7 @@ export function installCarapaceBrowser<
       rollbackErrors,
     }));
   }
-  const preparedBridge: PreparedCarapaceBrowserBridgeInstallation = preparedBridgeResult.value;
+  const preparedBridge: PreparedDirectBrowserBridgeInstallation = preparedBridgeResult.value;
 
   let disposed = false;
   let committed = false;
@@ -233,7 +233,7 @@ export function installCarapaceBrowser<
       : runBrowserCleanup(preparedBridge.rollback, preparedFirewall?.rollback ?? null);
     return undefined;
   };
-  const installation: CarapaceBrowserInstallation = Object.freeze({
+  const installation: DirectBrowserInstallation = Object.freeze({
     dispose,
     isDisposed: () => disposed,
     disposalErrors: () => disposalErrors,
@@ -254,7 +254,7 @@ export function installCarapaceBrowser<
     dispose();
     return err(Object.freeze({
       code: "session-registration-threw",
-      message: renderUnknownReason(reason, "Carapace session cleanup registration failed"),
+      message: renderUnknownReason(reason, "Direct session cleanup registration failed"),
       bridgeError: null,
       registrationError: null,
       rollbackErrors: disposalErrors,
@@ -263,7 +263,7 @@ export function installCarapaceBrowser<
   if (disposed) {
     return err(Object.freeze({
       code: "session-registration-threw",
-      message: "Carapace session disposed browser ownership during cleanup registration",
+      message: "Direct session disposed browser ownership during cleanup registration",
       bridgeError: null,
       registrationError: null,
       rollbackErrors: disposalErrors,

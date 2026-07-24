@@ -1,6 +1,6 @@
 # Architecture
 
-Carapace changes the development composition below the behavior under review. The real interface, feature state, reducers, parsing, and navigation remain. Deterministic adapters replace the external boundary that makes a state slow, unavailable, or nondeterministic.
+Direct changes the development composition below the behavior under review. The real interface, feature state, reducers, parsing, and navigation remain. Deterministic adapters replace the external boundary that makes a state slow, unavailable, or nondeterministic.
 
 ## Own the semantic port in the product
 
@@ -17,11 +17,11 @@ adapter            adapter
 
 Use the lowest port that preserves the behavior under review. A task interface should depend on a task repository, not a simulated database client. A desktop renderer should depend on a renderer-safe runtime transport, not a simulated native message protocol. The product owns request, response, event, and failure meanings.
 
-Carapace presents three public abstractions:
+Direct presents three public abstractions:
 
-- A **definition** validates the product's world parser, named scenarios, default activation, and `fixture`, `mixed`, or `direct` coverage claims. Use `defineCarapace` for authored configuration, `tryDefineCarapace` for typed configuration assembled dynamically, and `parseCarapaceDefinition` for a genuinely unknown value.
+- A **definition** validates the product's world parser, named scenarios, default activation, and `fixture`, `mixed`, or `direct` coverage claims. Use `defineDirect` for authored configuration, `tryDefineDirect` for typed configuration assembled dynamically, and `parseDirectDefinition` for a genuinely unknown value.
 - A **session** activates one scenario and owns its immutable world seed, logical clock, generation-fenced store, activity scope, product harness, probe, cancellation signal, coverage snapshot, and reverse-order cleanup.
-- A **browser installation** publishes one session through `window.__carapace` and optionally installs the fail-closed application-`fetch` firewall. Installation and rollback are atomic. The session registers its cleanup, and one disposable handle can remove both browser hooks earlier.
+- A **browser installation** publishes one session through `window.__direct` and optionally installs the fail-closed application-`fetch` firewall. Installation and rollback are atomic. The session registers its cleanup, and one disposable handle can remove both browser hooks earlier.
 
 React bindings and low-level deterministic mechanics remain available as escape hatches. They are not additional lifecycle owners.
 
@@ -36,22 +36,22 @@ The shared store retains the immutable scenario seed and activity ledger. A prod
 Use distinct entries and compositions:
 
 ```text
-production entry                 Carapace entry
+production entry                 Direct entry
       |                                |
 production adapters + UI      deterministic adapters + UI
       |                                |
-browser/service/platform       @cclrte/carapace
+browser/service/platform       @cclrte/direct
 ```
 
-Do not conditionally import fixtures from a query string, build flag, or runtime environment variable inside the production entry. Put Carapace in `devDependencies`, compile it from a separate entry, and scan emitted production assets for package, wire, query, fixture, and workbench markers.
+Do not conditionally import fixtures from a query string, build flag, or runtime environment variable inside the production entry. Put Direct in `devDependencies`, compile it from a separate entry, and scan emitted production assets for package, wire, query, fixture, and workbench markers.
 
 A clean marker scan is narrow evidence: the scanned files did not contain the configured markers. It does not prove native linkage, runtime loading, service behavior, or operating-system behavior.
 
 ## Keep optional surfaces isolated
 
-The default `@cclrte/carapace` export is the curated definition and activation path. Advanced JSON, fixture, catalog, store, runtime, effect, and resource mechanics live under `@cclrte/carapace/core`. React bindings live under `@cclrte/carapace/react`, sessions and scripted test utilities under `@cclrte/carapace/testing`, and browser installation under `@cclrte/carapace/web`. None of the default, core, or testing surfaces imports React or browser globals. The package runtime does not import React Native or Expo; the React Native example composes these surfaces from a platform-resolved web entry.
+The default `@cclrte/direct` export is the curated definition and activation path. Advanced JSON, fixture, catalog, store, runtime, effect, and resource mechanics live under `@cclrte/direct/core`. React bindings live under `@cclrte/direct/react`, sessions and scripted test utilities under `@cclrte/direct/testing`, and browser installation under `@cclrte/direct/web`. None of the default, core, or testing surfaces imports React or browser globals. The package runtime does not import React Native or Expo; the React Native example composes these surfaces from a platform-resolved web entry.
 
-`installCarapaceBrowser` enables the fetch firewall by default. It intercepts application calls to `fetch` in its JavaScript realm and denies a request unless the product's allow predicate accepts its parsed URL. It does not intercept WebSockets, EventSource, navigation, asset loading, native calls, or traffic in another realm. Use it only in a Carapace browser entry. Pass `firewall: false` only when another checked boundary owns network containment.
+`installDirectBrowser` enables the fetch firewall by default. It intercepts application calls to `fetch` in its JavaScript realm and denies a request unless the product's allow predicate accepts its parsed URL. It does not intercept WebSockets, EventSource, navigation, asset loading, native calls, or traffic in another realm. Use it only in a Direct browser entry. Pass `firewall: false` only when another checked boundary owns network containment.
 
 ## Resolve React Native compositions structurally
 
@@ -60,7 +60,7 @@ For a small Expo app, Metro can choose distinct roots:
 ```text
 root.native.tsx                 root.web.tsx
        |                              |
-native product adapters       Carapace session + adapters
+native product adapters       Direct session + adapters
        |                              |
        +-------- real screen --------+
 ```
@@ -73,16 +73,16 @@ Expo Router entry + shared routes/layouts
      import "./app-composition"
           /                         \
 app-composition.native.tsx   app-composition.web.tsx
-native providers, chrome,    Carapace session, deterministic
+native providers, chrome,    Direct session, deterministic
 and production adapters      adapters, and web fixture chrome
           \                         /
              shared screens/state
 ```
 
-The shared module imports `./app-composition` without a platform suffix. The native variant owns production adapters and native navigation providers. In a native product whose web target is the fixture surface, the web variant owns the Carapace session and deterministic adapters. Route files, screens, reducers, and other feature state stay shared unless platform behavior is itself the subject of a direct test. Do not duplicate feature behavior across the variants or choose a composition with a runtime flag.
+The shared module imports `./app-composition` without a platform suffix. The native variant owns production adapters and native navigation providers. In a native product whose web target is the fixture surface, the web variant owns the Direct session and deterministic adapters. Route files, screens, reducers, and other feature state stay shared unless platform behavior is itself the subject of a direct test. Do not duplicate feature behavior across the variants or choose a composition with a runtime flag.
 
-If web is also a production target, keep its `.web` composition production-safe. Give Carapace a distinct development entry or app graph instead of replacing the production web composition. Platform suffixes define build graphs; they are not a substitute for a second entry when two compositions target the same platform.
+If web is also a production target, keep its `.web` composition production-safe. Give Direct a distinct development entry or app graph instead of replacing the production web composition. Platform suffixes define build graphs; they are not a substitute for a second entry when two compositions target the same platform.
 
 The web variant may substitute browser-renderable chrome for native-only stacks, tabs, headers, safe areas, or gestures. Browser fixture evidence can then support claims about the shared screen, shared feature state, and product-port interactions. It cannot prove the substituted chrome's native layout, transitions, back behavior, deep linking, gesture handling, or operating-system integration. Record those as separate direct or mixed claims instead of treating a visually similar web shell as the native navigator.
 
-Keep the default root production-safe and Carapace in `devDependencies`. Export iOS, Android, and the Carapace web composition separately with source maps. For each native map, positively require the claimed shared route, screen, and state modules plus the `.native` composition and production adapter; reject the `.web` composition and Carapace modules. For the web map, positively require those same shared behavior modules plus the `.web` composition and Carapace provider. An absence-only scan can pass on an unrelated bundle, so it is not sufficient structural evidence.
+Keep the default root production-safe and Direct in `devDependencies`. Export iOS, Android, and the Direct web composition separately with source maps. For each native map, positively require the claimed shared route, screen, and state modules plus the `.native` composition and production adapter; reject the `.web` composition and Direct modules. For the web map, positively require those same shared behavior modules plus the `.web` composition and Direct provider. An absence-only scan can pass on an unrelated bundle, so it is not sufficient structural evidence.

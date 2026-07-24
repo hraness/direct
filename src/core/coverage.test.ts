@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  CARAPACE_COVERAGE_SCHEMA,
+  DIRECT_COVERAGE_SCHEMA,
   createCoverageCatalog,
   createCoverageCatalogSnapshot,
   parseCoverageCatalogSnapshot,
@@ -28,7 +28,7 @@ describe("coverage wire snapshots", () => {
     const snapshot = createCoverageCatalogSnapshot(catalog.value);
     const parsed = parseCoverageCatalogSnapshot(JSON.parse(JSON.stringify(snapshot)));
     if (!parsed.ok) throw new Error(parsed.error.message);
-    expect(parsed.value.schema).toBe(CARAPACE_COVERAGE_SCHEMA);
+    expect(parsed.value.schema).toBe(DIRECT_COVERAGE_SCHEMA);
     expect(parsed.value.entries.map(({ key }) => String(key))).toEqual(["chat.ready", "native.lifecycle"]);
     expect(parsed.value.entries.some((entry) => "route" in entry)).toBeFalse();
     expect(Object.isFrozen(parsed.value)).toBeTrue();
@@ -36,7 +36,7 @@ describe("coverage wire snapshots", () => {
   });
 
   test("rejects foreign keys, incomplete entries, legacy schemas, and invalid proof modes", () => {
-    expect(parseCoverageCatalogSnapshot({ schema: CARAPACE_COVERAGE_SCHEMA, entries: [{
+    expect(parseCoverageCatalogSnapshot({ schema: DIRECT_COVERAGE_SCHEMA, entries: [{
       key: "chat.ready",
       mode: "fixture",
       claim: "Ready chat renders",
@@ -44,24 +44,24 @@ describe("coverage wire snapshots", () => {
       status: "verified",
     }] })).toMatchObject({ ok: false, error: { code: "invalid-coverage" } });
     expect(parseCoverageCatalogSnapshot({
-      schema: CARAPACE_COVERAGE_SCHEMA,
+      schema: DIRECT_COVERAGE_SCHEMA,
       entries: [{ key: "chat.ready" }],
     })).toMatchObject({
       ok: false,
       error: { code: "invalid-coverage" },
     });
-    expect(parseCoverageCatalogSnapshot({ schema: CARAPACE_COVERAGE_SCHEMA, entries: [{
+    expect(parseCoverageCatalogSnapshot({ schema: DIRECT_COVERAGE_SCHEMA, entries: [{
       key: "chat.ready",
       mode: "probable",
       claim: "Ready chat renders",
       scenarios: ["chat.ready"],
     }] })).toMatchObject({ ok: false, error: { code: "invalid-coverage" } });
-    expect(parseCoverageCatalogSnapshot({ schema: "carapace.coverage/v1", entries: [] })).toMatchObject({
+    expect(parseCoverageCatalogSnapshot({ schema: "direct.coverage/v1", entries: [] })).toMatchObject({
       ok: false,
       error: { code: "invalid-coverage" },
     });
     expect(parseCoverageCatalogSnapshot({
-      schema: CARAPACE_COVERAGE_SCHEMA,
+      schema: DIRECT_COVERAGE_SCHEMA,
       entries: [],
       status: "verified",
     })).toMatchObject({ ok: false, error: { code: "invalid-coverage" } });
@@ -69,7 +69,7 @@ describe("coverage wire snapshots", () => {
 
   test("rejects inconsistent mode scenarios and legacy singular routes", () => {
     const snapshot = (entry: unknown) => ({
-      schema: CARAPACE_COVERAGE_SCHEMA,
+      schema: DIRECT_COVERAGE_SCHEMA,
       entries: [entry],
     });
     expect(parseCoverageCatalogSnapshot(snapshot({

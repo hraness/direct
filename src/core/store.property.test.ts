@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
 import { assertProperty, fc } from "./test-support.js";
 import { operationId } from "./ids.js";
-import { createCarapaceStore } from "./store.js";
+import { createDirectStore } from "./store.js";
 import { parseTestWorld } from "./test-support.js";
 
 test("property: every reset invalidates every prior generation transaction", () => {
   assertProperty(fc.property(fc.array(fc.integer(), { minLength: 1, maxLength: 30 }), (counts) => {
-    const created = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+    const created = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
     if (!created.ok) {
       throw new Error(created.error.message);
     }
@@ -25,7 +25,7 @@ test("property: every reset invalidates every prior generation transaction", () 
 
 test("property: reset fences every active lease without leaking activity into the new generation", () => {
   assertProperty(fc.property(fc.integer({ min: 1, max: 30 }), fc.integer(), (activityCount, resetCount) => {
-    const created = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+    const created = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
     if (!created.ok) {
       throw new Error(created.error.message);
     }

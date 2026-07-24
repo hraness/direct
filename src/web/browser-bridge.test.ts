@@ -1,23 +1,23 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  CARAPACE_COVERAGE_SCHEMA,
+  DIRECT_COVERAGE_SCHEMA,
   createCoverageCatalog,
   createCoverageCatalogSnapshot,
 } from "../core/coverage.js";
-import { createCarapaceStore } from "../core/store.js";
+import { createDirectStore } from "../core/store.js";
 import { parseTestWorld } from "../core/test-support.js";
-import { createCarapaceProbe } from "../testing/probe.js";
+import { createDirectProbe } from "../testing/probe.js";
 import {
-  CARAPACE_BROWSER_BRIDGE_SCHEMA,
-  installCarapaceBrowserBridge,
-  type CarapaceBrowserBridge,
+  DIRECT_BROWSER_BRIDGE_SCHEMA,
+  installDirectBrowserBridge,
+  type DirectBrowserBridge,
 } from "./browser-bridge.js";
 
 function probeFixture() {
-  const store = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+  const store = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
   if (!store.ok) throw new Error(store.error.message);
-  const probe = createCarapaceProbe({
+  const probe = createDirectProbe({
     store: store.value,
     activationHash: "bridge-hash",
     pending: [{ name: "requests", read: () => 0 }],
@@ -48,14 +48,14 @@ function hostileThrownValue(): Error {
   });
 }
 
-describe("Carapace browser bridge", () => {
+describe("Direct browser bridge", () => {
   test("exposes one canonical global, then restores prior ownership idempotently", () => {
     const originalBridge = { original: true };
     const target: Record<string, unknown> = {
-      __carapace: originalBridge,
+      __direct: originalBridge,
     };
     let resets = 0;
-    const installed = installCarapaceBrowserBridge({
+    const installed = installDirectBrowserBridge({
       target,
       probe: probeFixture(),
       coverage: coverageFixture(),
@@ -66,16 +66,16 @@ describe("Carapace browser bridge", () => {
     });
     if (!installed.ok) throw new Error(installed.error.message);
 
-    const bridge = target.__carapace as CarapaceBrowserBridge;
-    expect(bridge.schema).toBe(CARAPACE_BROWSER_BRIDGE_SCHEMA);
+    const bridge = target.__direct as DirectBrowserBridge;
+    expect(bridge.schema).toBe(DIRECT_BROWSER_BRIDGE_SCHEMA);
     expect(bridge.snapshot()).toMatchObject({
-      schema: "carapace.probe/v1",
+      schema: "direct.probe/v1",
       activationHash: "bridge-hash",
       isQuiescent: true,
     });
     expect(bridge.coverage).toEqual(coverageFixture());
     expect(bridge.coverage).toEqual({
-      schema: CARAPACE_COVERAGE_SCHEMA,
+      schema: DIRECT_COVERAGE_SCHEMA,
       entries: [expect.objectContaining({ key: "surface.ready", mode: "fixture" })],
     });
     bridge.reset();
@@ -83,48 +83,48 @@ describe("Carapace browser bridge", () => {
 
     installed.value();
     installed.value();
-    expect(target.__carapace).toBe(originalBridge);
+    expect(target.__direct).toBe(originalBridge);
   });
 
   test("a later install safely replaces the earlier install across targets", () => {
     const firstTarget: Record<string, unknown> = {};
     const secondTarget: Record<string, unknown> = {};
-    const first = installCarapaceBrowserBridge({ target: firstTarget, probe: probeFixture() });
+    const first = installDirectBrowserBridge({ target: firstTarget, probe: probeFixture() });
     if (!first.ok) throw new Error(first.error.message);
-    const firstBridge = firstTarget.__carapace;
-    const second = installCarapaceBrowserBridge({ target: secondTarget, probe: probeFixture() });
+    const firstBridge = firstTarget.__direct;
+    const second = installDirectBrowserBridge({ target: secondTarget, probe: probeFixture() });
     if (!second.ok) throw new Error(second.error.message);
 
-    expect("__carapace" in firstTarget).toBe(false);
-    expect(secondTarget.__carapace).not.toBe(firstBridge);
+    expect("__direct" in firstTarget).toBe(false);
+    expect(secondTarget.__direct).not.toBe(firstBridge);
     first.value();
-    expect("__carapace" in secondTarget).toBe(true);
+    expect("__direct" in secondTarget).toBe(true);
     second.value();
-    expect("__carapace" in secondTarget).toBe(false);
+    expect("__direct" in secondTarget).toBe(false);
   });
 
   test("uninstall does not overwrite a newer external owner", () => {
     const target: Record<string, unknown> = {};
-    const installed = installCarapaceBrowserBridge({ target, probe: probeFixture() });
+    const installed = installDirectBrowserBridge({ target, probe: probeFixture() });
     if (!installed.ok) throw new Error(installed.error.message);
     const external = { external: true };
-    target.__carapace = external;
+    target.__direct = external;
     installed.value();
-    expect(target.__carapace).toBe(external);
+    expect(target.__direct).toBe(external);
   });
 
   test("rejects malformed or semantically invalid coverage without mutating the target", () => {
     const target: Record<string, unknown> = {};
-    expect(installCarapaceBrowserBridge({
+    expect(installDirectBrowserBridge({
       target,
       probe: probeFixture(),
       coverage: { invalid: undefined },
     })).toMatchObject({ ok: false, error: { code: "invalid-coverage" } });
-    expect(installCarapaceBrowserBridge({
+    expect(installDirectBrowserBridge({
       target,
       probe: probeFixture(),
       coverage: {
-        schema: CARAPACE_COVERAGE_SCHEMA,
+        schema: DIRECT_COVERAGE_SCHEMA,
         entries: [{ key: "surface.ready", mode: "fixture" }],
       },
     })).toMatchObject({ ok: false, error: { code: "invalid-coverage" } });
@@ -144,17 +144,17 @@ describe("Carapace browser bridge", () => {
         return Reflect.defineProperty(current, key, descriptor);
       },
     });
-    const first = installCarapaceBrowserBridge({ target, probe: probeFixture() });
+    const first = installDirectBrowserBridge({ target, probe: probeFixture() });
     if (!first.ok) throw new Error(first.error.message);
-    const firstBridge = target.__carapace;
+    const firstBridge = target.__direct;
     definitionsBeforeFailure = 0;
 
-    expect(installCarapaceBrowserBridge({
+    expect(installDirectBrowserBridge({
       target,
       probe: probeFixture(),
     })).toMatchObject({ ok: false, error: { code: "install-failed" } });
-    expect(target.__carapace).toBe(firstBridge);
-    expect((target.__carapace as CarapaceBrowserBridge).snapshot()).toMatchObject({
+    expect(target.__direct).toBe(firstBridge);
+    expect((target.__direct as DirectBrowserBridge).snapshot()).toMatchObject({
       activationHash: "bridge-hash",
     });
     first.value();
@@ -164,7 +164,7 @@ describe("Carapace browser bridge", () => {
   test("wraps hostile probe failures in controlled errors", () => {
     const hostile = hostileThrownValue();
     const hostileProbeTarget: Record<string, unknown> = {};
-    const hostileProbe = installCarapaceBrowserBridge({
+    const hostileProbe = installDirectBrowserBridge({
       target: hostileProbeTarget,
       probe: {
         snapshot: () => {
@@ -173,8 +173,8 @@ describe("Carapace browser bridge", () => {
       },
     });
     if (!hostileProbe.ok) throw new Error(hostileProbe.error.message);
-    expect(() => (hostileProbeTarget.__carapace as CarapaceBrowserBridge).snapshot()).toThrow(
-      "Carapace probe failed: Unknown failure",
+    expect(() => (hostileProbeTarget.__direct as DirectBrowserBridge).snapshot()).toThrow(
+      "Direct probe failed: Unknown failure",
     );
     hostileProbe.value();
   });
@@ -186,7 +186,7 @@ describe("Carapace browser bridge", () => {
       value: () => ({
         ok: true,
         value: {
-          schema: "carapace.probe/v1",
+          schema: "direct.probe/v1",
           activationHash: "forged",
           generation: 1,
           revision: 0,
@@ -198,13 +198,13 @@ describe("Carapace browser bridge", () => {
         },
       }),
     });
-    const installed = installCarapaceBrowserBridge({
+    const installed = installDirectBrowserBridge({
       target,
       probe: forgedProbe,
     });
     if (!installed.ok) throw new Error(installed.error.message);
 
-    expect(() => (target.__carapace as CarapaceBrowserBridge).snapshot()).toThrow(
+    expect(() => (target.__direct as DirectBrowserBridge).snapshot()).toThrow(
       "activity counters must be non-negative and conserve started work",
     );
     installed.value();
@@ -220,10 +220,10 @@ describe("Carapace browser bridge", () => {
     Object.defineProperty(resetOptions, "reset", {
       value: () => Promise.reject(new Error("reset rejected")),
     });
-    const reset = installCarapaceBrowserBridge(resetOptions);
+    const reset = installDirectBrowserBridge(resetOptions);
     if (!reset.ok) throw new Error(reset.error.message);
-    expect(() => (resetTarget.__carapace as CarapaceBrowserBridge).reset()).toThrow(
-      "Carapace reset failed: Carapace reset must complete synchronously and return undefined",
+    expect(() => (resetTarget.__direct as DirectBrowserBridge).reset()).toThrow(
+      "Direct reset failed: Direct reset must complete synchronously and return undefined",
     );
     await Promise.resolve();
     reset.value();
@@ -233,12 +233,12 @@ describe("Carapace browser bridge", () => {
     Object.defineProperty(probe, "snapshot", {
       value: () => Promise.reject(new Error("probe rejected")),
     });
-    const asynchronousProbe = installCarapaceBrowserBridge({
+    const asynchronousProbe = installDirectBrowserBridge({
       target: probeTarget,
       probe,
     });
     if (!asynchronousProbe.ok) throw new Error(asynchronousProbe.error.message);
-    expect(() => (probeTarget.__carapace as CarapaceBrowserBridge).snapshot()).toThrow(
+    expect(() => (probeTarget.__direct as DirectBrowserBridge).snapshot()).toThrow(
       "must complete synchronously",
     );
     await Promise.resolve();
@@ -252,9 +252,9 @@ describe("Carapace browser bridge", () => {
         throw hostile;
       },
     });
-    expect(installCarapaceBrowserBridge({ target, probe: probeFixture() })).toEqual({
+    expect(installDirectBrowserBridge({ target, probe: probeFixture() })).toEqual({
       ok: false,
-      error: { code: "install-failed", message: "Carapace browser bridge installation failed" },
+      error: { code: "install-failed", message: "Direct browser bridge installation failed" },
     });
   });
 });

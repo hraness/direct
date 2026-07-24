@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { defineCarapace } from "../core/definition.js";
+import { defineDirect } from "../core/definition.js";
 import { assertProperty, fc, parseTestWorld } from "../core/test-support.js";
-import { createCarapaceSession } from "../testing/session.js";
-import type { CarapaceBrowserBridge } from "./browser-bridge.js";
-import { installCarapaceBrowser } from "./browser.js";
+import { createDirectSession } from "../testing/session.js";
+import type { DirectBrowserBridge } from "./browser-bridge.js";
+import { installDirectBrowser } from "./browser.js";
 
 const hostFetch = globalThis.fetch;
 
@@ -12,7 +12,7 @@ afterEach(() => {
   globalThis.fetch = hostFetch;
 });
 
-const definition = defineCarapace({
+const definition = defineDirect({
   parseWorld: parseTestWorld,
   defaultScenario: "chat.empty",
   scenarios: [{
@@ -25,7 +25,7 @@ const definition = defineCarapace({
 });
 
 function createSession() {
-  const session = createCarapaceSession({
+  const session = createDirectSession({
     definition,
     activation: { kind: "query", source: "" },
     create: () => ({}),
@@ -34,7 +34,7 @@ function createSession() {
   return session.value;
 }
 
-describe("Carapace browser installation properties", () => {
+describe("Direct browser installation properties", () => {
   test("every fetch settles exactly once and every disposal sequence restores ownership", async () => {
     await fc.assert(fc.asyncProperty(
       fc.array(fc.boolean(), { maxLength: 40 }),
@@ -51,7 +51,7 @@ describe("Carapace browser installation properties", () => {
           },
           { preconnect: hostFetch.preconnect },
         );
-        const installed = installCarapaceBrowser({
+        const installed = installDirectBrowser({
           session,
           target,
           firewall: {
@@ -65,7 +65,7 @@ describe("Carapace browser installation properties", () => {
         for (const isAllowed of allowedRequests) {
           await fetch(isAllowed ? "data:text/plain,fixture" : "https://example.com/unmapped");
         }
-        const snapshot = (target.__carapace as CarapaceBrowserBridge).snapshot();
+        const snapshot = (target.__direct as DirectBrowserBridge).snapshot();
         expect(snapshot.activity).toEqual({
           active: 0,
           started: allowedRequests.length,
@@ -78,7 +78,7 @@ describe("Carapace browser installation properties", () => {
         for (let index = 0; index < extraDisposals; index += 1) installed.value.dispose();
         expect(installed.value.isDisposed()).toBeTrue();
         expect(installed.value.disposalErrors()).toEqual([]);
-        expect("__carapace" in target).toBeFalse();
+        expect("__direct" in target).toBeFalse();
         expect(globalThis.fetch).toBe(hostFetch);
       },
     ), { numRuns: 80 });
@@ -89,15 +89,15 @@ describe("Carapace browser installation properties", () => {
       fc.jsonValue(),
       (priorOwner) => {
         const session = createSession();
-        const backing: Record<string, unknown> = { __carapace: priorOwner };
+        const backing: Record<string, unknown> = { __direct: priorOwner };
         const target = new Proxy(backing, {
           defineProperty: () => {
             throw new Error("generated target rejection");
           },
         });
-        const installed = installCarapaceBrowser({ session, target });
+        const installed = installDirectBrowser({ session, target });
         expect(installed.ok).toBeFalse();
-        expect(backing.__carapace).toEqual(priorOwner);
+        expect(backing.__direct).toEqual(priorOwner);
         expect(globalThis.fetch).toBe(hostFetch);
         session.dispose();
       },
@@ -110,23 +110,23 @@ describe("Carapace browser installation properties", () => {
       (replacementCount) => {
         const target: Record<string, unknown> = {};
         const ownerSession = createSession();
-        const owner = installCarapaceBrowser({ session: ownerSession, target });
+        const owner = installDirectBrowser({ session: ownerSession, target });
         if (!owner.ok) throw new Error(owner.error.message);
-        const ownerBridge = target.__carapace;
+        const ownerBridge = target.__direct;
         const ownerFetch = globalThis.fetch;
 
         for (let index = 0; index < replacementCount; index += 1) {
           const disposedSession = createSession();
           disposedSession.dispose();
-          expect(installCarapaceBrowser({ session: disposedSession, target }).ok).toBeFalse();
-          expect(target.__carapace).toBe(ownerBridge);
+          expect(installDirectBrowser({ session: disposedSession, target }).ok).toBeFalse();
+          expect(target.__direct).toBe(ownerBridge);
           expect(globalThis.fetch).toBe(ownerFetch);
           expect(owner.value.isDisposed()).toBeFalse();
         }
 
         ownerSession.dispose();
         expect(owner.value.isDisposed()).toBeTrue();
-        expect("__carapace" in target).toBeFalse();
+        expect("__direct" in target).toBeFalse();
         expect(globalThis.fetch).toBe(hostFetch);
       },
     ));

@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Carapace device lab",
-    "slug": "carapace-react-native-example",
+    "name": "Direct device lab",
+    "slug": "direct-react-native-example",
     "version": "1.0.0",
     "platforms": ["ios", "android", "web"],
     "orientation": "default",

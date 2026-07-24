@@ -2,17 +2,17 @@ import { expect, test } from "bun:test";
 import { assertAsyncProperty, assertProperty, fc } from "../core/test-support.js";
 
 import { createLogicalRuntime } from "../core/runtime.js";
-import { createCarapaceStore } from "../core/store.js";
+import { createDirectStore } from "../core/store.js";
 import { parseTestWorld } from "../core/test-support.js";
-import { createCarapaceActivityScope } from "./activity.js";
+import { createDirectActivityScope } from "./activity.js";
 
 test("property: arbitrary repeated releases conserve activity accounting", () => {
   assertProperty(fc.property(
     fc.array(fc.integer({ min: 1, max: 8 }), { maxLength: 50 }),
     (releaseCounts) => {
-      const store = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+      const store = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
       if (!store.ok) throw new Error(store.error.message);
-      const scope = createCarapaceActivityScope(
+      const scope = createDirectActivityScope(
         store.value,
         createLogicalRuntime(undefined, () => Promise.resolve()),
       );
@@ -35,9 +35,9 @@ test("property: arbitrary error messages remain Result failures", async () => {
     fc.string(),
     async (message) => {
       const reason = new Error(message);
-      const store = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+      const store = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
       if (!store.ok) throw new Error(store.error.message);
-      const scope = createCarapaceActivityScope(
+      const scope = createDirectActivityScope(
         store.value,
         createLogicalRuntime(undefined, () => Promise.resolve()),
       );

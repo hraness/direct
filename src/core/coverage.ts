@@ -2,7 +2,7 @@ import { parseCoverageKey, parseScenarioId, type CoverageKey, type ScenarioId } 
 import { parseJsonValue } from "./json.js";
 import { err, isRecord, ok, type Result } from "./result.js";
 
-export const CARAPACE_COVERAGE_SCHEMA = "carapace.coverage/v2" as const;
+export const DIRECT_COVERAGE_SCHEMA = "direct.coverage/v2" as const;
 
 export type CoverageMode = "fixture" | "mixed" | "direct";
 
@@ -66,12 +66,12 @@ export interface CoverageCatalog {
 }
 
 export interface CoverageCatalogSnapshot {
-  readonly schema: typeof CARAPACE_COVERAGE_SCHEMA;
+  readonly schema: typeof DIRECT_COVERAGE_SCHEMA;
   readonly entries: readonly CoverageEntry[];
 }
 
 export const EMPTY_COVERAGE_CATALOG_SNAPSHOT = Object.freeze({
-  schema: CARAPACE_COVERAGE_SCHEMA,
+  schema: DIRECT_COVERAGE_SCHEMA,
   entries: Object.freeze([]),
 }) satisfies CoverageCatalogSnapshot;
 
@@ -101,7 +101,7 @@ export function createCoverageCatalogSnapshot(
   catalog: CoverageCatalog,
 ): CoverageCatalogSnapshot {
   return Object.freeze({
-    schema: CARAPACE_COVERAGE_SCHEMA,
+    schema: DIRECT_COVERAGE_SCHEMA,
     entries: catalog.list(),
   });
 }
@@ -122,10 +122,10 @@ export function parseCoverageCatalogSnapshot(
       return err(coverageError("invalid-coverage", `Unknown coverage snapshot key: ${key}`));
     }
   }
-  if (parsed.value.schema !== CARAPACE_COVERAGE_SCHEMA) {
+  if (parsed.value.schema !== DIRECT_COVERAGE_SCHEMA) {
     return err(coverageError(
       "invalid-coverage",
-      `Coverage snapshot schema must be ${CARAPACE_COVERAGE_SCHEMA}`,
+      `Coverage snapshot schema must be ${DIRECT_COVERAGE_SCHEMA}`,
     ));
   }
   if (!Array.isArray(parsed.value.entries)) {

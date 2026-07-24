@@ -3,7 +3,7 @@ import { parseJsonValue } from "./json.js";
 import { renderUnknownReason } from "./reason.js";
 import { err, isRecord, ok, type Result } from "./result.js";
 
-export const LOGICAL_RUNTIME_SCHEMA = "carapace.runtime/v1" as const;
+export const LOGICAL_RUNTIME_SCHEMA = "direct.runtime/v1" as const;
 export const MAX_HOST_TIMER_MILLISECONDS = 2_147_483_647;
 
 export interface LogicalRuntimeSnapshot {

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Carapace verification"
-  short_description: "Verify evidence and production exclusion"
-  default_prompt: "Use $carapace-verify to verify this Carapace composition and report its proof boundary."

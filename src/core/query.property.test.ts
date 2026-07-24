@@ -5,7 +5,7 @@ import {
   FIXTURE_QUERY_KEY,
   SCENARIO_QUERY_KEY,
   maximumFixtureQueryBytes,
-  parseCarapaceQuery,
+  parseDirectQuery,
 } from "./query.js";
 import { parseFixtureEnvelope, parseFixtureJson, serializeFixtureJson } from "./fixture.js";
 import { parseTestWorld, testScenarios } from "./test-support.js";
@@ -16,7 +16,7 @@ test("property: query and fixture parsers are total over arbitrary input", () =>
     fc.anything({ withBigInt: true }),
     (query, fixture) => {
       const options = { scenarios: testScenarios(), parseWorld: parseTestWorld };
-      expect(() => parseCarapaceQuery(query, options)).not.toThrow();
+      expect(() => parseDirectQuery(query, options)).not.toThrow();
       expect(() => parseFixtureEnvelope(fixture, options)).not.toThrow();
       expect(() => parseFixtureJson(query, options)).not.toThrow();
     },
@@ -27,7 +27,7 @@ test("property: duplicate activation parameters are rejected regardless of their
   assertProperty(fc.property(fc.string(), fc.string(), (first, second) => {
     const options = { scenarios: testScenarios(), parseWorld: parseTestWorld };
     const query = `?${SCENARIO_QUERY_KEY}=${encodeURIComponent(first)}&x=kept&${SCENARIO_QUERY_KEY}=${encodeURIComponent(second)}`;
-    expect(parseCarapaceQuery(query, options)).toMatchObject({
+    expect(parseDirectQuery(query, options)).toMatchObject({
       ok: false,
       error: { code: "duplicate-parameter" },
     });

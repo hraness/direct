@@ -1,4 +1,4 @@
-import type { CarapaceDefinition } from "../core/definition.js";
+import type { DirectDefinition } from "../core/definition.js";
 import {
   createCoverageCatalogSnapshot,
   type CoverageCatalogSnapshot,
@@ -14,69 +14,69 @@ import {
   type LogicalSleep,
 } from "../core/runtime.js";
 import {
-  createCarapaceStore,
-  type CarapaceStore,
-  type CarapaceStoreOptions,
+  createDirectStore,
+  type DirectStore,
+  type DirectStoreOptions,
   type StoreError,
 } from "../core/store.js";
-import type { ActiveCarapace, QueryError } from "../core/query.js";
-import { createCarapaceActivityScope, type CarapaceActivityScope } from "./activity.js";
+import type { ActiveDirect, QueryError } from "../core/query.js";
+import { createDirectActivityScope, type DirectActivityScope } from "./activity.js";
 import {
-  createCarapaceProbe,
-  type CarapaceCounterSource,
-  type CarapaceProbe,
-  type CarapaceProbeError,
+  createDirectProbe,
+  type DirectCounterSource,
+  type DirectProbe,
+  type DirectProbeError,
 } from "./probe.js";
 
 /** A synchronous cleanup callback. Promise-returning teardown is intentionally unsupported. */
-export type CarapaceSessionCleanup = () => undefined;
+export type DirectSessionCleanup = () => undefined;
 
-export interface CarapaceSessionRegistrationError {
+export interface DirectSessionRegistrationError {
   readonly code: "invalid-cleanup" | "session-disposed";
   readonly message: string;
 }
 
-export type CarapaceSessionActivation =
+export type DirectSessionActivation =
   | { readonly kind: "query"; readonly source: string }
   | { readonly kind: "scenario"; readonly scenario: unknown };
 
-export interface CarapaceSessionContext<World extends JsonValue, Route extends string> {
-  readonly activation: ActiveCarapace<World, Route>;
+export interface DirectSessionContext<World extends JsonValue, Route extends string> {
+  readonly activation: ActiveDirect<World, Route>;
   readonly world: World;
-  readonly store: CarapaceStore<World>;
+  readonly store: DirectStore<World>;
   readonly clock: LogicalRuntime;
-  readonly activity: CarapaceActivityScope;
+  readonly activity: DirectActivityScope;
   /** Aborted before registered cleanup callbacks run. */
   readonly signal: AbortSignal;
   /** Register synchronous cleanup during harness and observation construction. */
-  readonly onDispose: (cleanup: CarapaceSessionCleanup) => undefined;
+  readonly onDispose: (cleanup: DirectSessionCleanup) => undefined;
 }
 
-export interface CarapaceSessionObservation {
-  readonly pending?: readonly CarapaceCounterSource[];
-  readonly violations?: readonly CarapaceCounterSource[];
+export interface DirectSessionObservation {
+  readonly pending?: readonly DirectCounterSource[];
+  readonly violations?: readonly DirectCounterSource[];
   readonly readRemainingWork?: () => JsonValue;
 }
 
-export interface CarapaceSessionOptions<
+export interface DirectSessionOptions<
   World extends JsonValue,
   Route extends string,
   Harness,
 > {
-  readonly definition: CarapaceDefinition<World, Route>;
-  readonly activation: CarapaceSessionActivation;
-  /** Runs synchronously. Carapace does not await a Promise returned as the harness value. */
-  readonly create: (context: CarapaceSessionContext<World, Route>) => Harness;
+  readonly definition: DirectDefinition<World, Route>;
+  readonly activation: DirectSessionActivation;
+  /** Runs synchronously. Direct does not await a Promise returned as the harness value. */
+  readonly create: (context: DirectSessionContext<World, Route>) => Harness;
   /** Runs synchronously after harness construction. Omit when no additional counters are needed. */
   readonly observe?: (
     harness: Harness,
-    context: CarapaceSessionContext<World, Route>,
-  ) => CarapaceSessionObservation;
+    context: DirectSessionContext<World, Route>,
+  ) => DirectSessionObservation;
   readonly sleep?: LogicalSleep;
-  readonly storeOptions?: CarapaceStoreOptions;
+  readonly storeOptions?: DirectStoreOptions;
 }
 
-export type CarapaceSessionError =
+export type DirectSessionError =
   | {
     readonly code: "invalid-options";
     readonly message: string;
@@ -114,30 +114,30 @@ export type CarapaceSessionError =
     readonly message: string;
     readonly queryError: null;
     readonly storeError: null;
-    readonly probeError: CarapaceProbeError;
+    readonly probeError: DirectProbeError;
     readonly cleanupErrors: readonly string[];
   };
 
-export interface CarapaceSession<
+export interface DirectSession<
   World extends JsonValue,
   Route extends string,
   Harness,
 > {
-  readonly activation: ActiveCarapace<World, Route>;
+  readonly activation: ActiveDirect<World, Route>;
   readonly world: World;
-  readonly store: CarapaceStore<World>;
+  readonly store: DirectStore<World>;
   readonly clock: LogicalRuntime;
-  readonly activity: CarapaceActivityScope;
+  readonly activity: DirectActivityScope;
   /** The product-owned deterministic ports and controls created for this session. */
   readonly harness: Harness;
-  readonly probe: CarapaceProbe;
+  readonly probe: DirectProbe;
   /** Exact, versioned proof catalog ready for the browser bridge. */
   readonly coverage: CoverageCatalogSnapshot;
   readonly signal: AbortSignal;
   /** Register additional synchronous teardown until the session is disposed. */
   readonly onDispose: (
-    cleanup: CarapaceSessionCleanup,
-  ) => Result<true, CarapaceSessionRegistrationError>;
+    cleanup: DirectSessionCleanup,
+  ) => Result<true, DirectSessionRegistrationError>;
   /** Abort first, then invoke registered cleanup callbacks in reverse order. */
   readonly dispose: () => undefined;
   readonly isDisposed: () => boolean;
@@ -156,29 +156,29 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
 }
 
 function freezeCounterSources(
-  sources: readonly CarapaceCounterSource[],
-): readonly CarapaceCounterSource[] {
+  sources: readonly DirectCounterSource[],
+): readonly DirectCounterSource[] {
   return Object.freeze([...sources]);
 }
 
 function prepareSessionObservation(
-  input: CarapaceSessionObservation,
-): CarapaceSessionObservation {
+  input: DirectSessionObservation,
+): DirectSessionObservation {
   const candidate: unknown = input;
   if (!isRecord(candidate)) {
-    throw new Error("Carapace observation must be an object");
+    throw new Error("Direct observation must be an object");
   }
   const pending = input.pending;
   const violations = input.violations;
   const readRemainingWork = input.readRemainingWork;
   if (pending !== undefined && !Array.isArray(pending)) {
-    throw new Error("Carapace observation pending counters must be an array");
+    throw new Error("Direct observation pending counters must be an array");
   }
   if (violations !== undefined && !Array.isArray(violations)) {
-    throw new Error("Carapace observation violation counters must be an array");
+    throw new Error("Direct observation violation counters must be an array");
   }
   if (readRemainingWork !== undefined && typeof readRemainingWork !== "function") {
-    throw new Error("Carapace observation remaining-work reader must be a function");
+    throw new Error("Direct observation remaining-work reader must be a function");
   }
   return Object.freeze({
     ...(pending === undefined ? {} : { pending: freezeCounterSources(pending) }),
@@ -187,8 +187,8 @@ function prepareSessionObservation(
   });
 }
 
-type SessionErrorWithoutCleanup = CarapaceSessionError extends infer Failure
-  ? Failure extends CarapaceSessionError
+type SessionErrorWithoutCleanup = DirectSessionError extends infer Failure
+  ? Failure extends DirectSessionError
     ? Omit<Failure, "cleanupErrors">
     : never
   : never;
@@ -196,7 +196,7 @@ type SessionErrorWithoutCleanup = CarapaceSessionError extends infer Failure
 function sessionError(
   error: SessionErrorWithoutCleanup,
   cleanupErrors: readonly string[] = [],
-): CarapaceSessionError {
+): DirectSessionError {
   const failures = frozenMessages(cleanupErrors);
   switch (error.code) {
     case "invalid-options":
@@ -211,7 +211,7 @@ function sessionError(
 
 function runCleanup(
   controller: AbortController,
-  cleanups: readonly CarapaceSessionCleanup[],
+  cleanups: readonly DirectSessionCleanup[],
 ): readonly string[] {
   const failures: string[] = [];
   try {
@@ -226,19 +226,19 @@ function runCleanup(
         if (isPromiseLike(returned)) {
           void Promise.resolve(returned).catch(() => undefined);
         }
-        failures.push("Carapace cleanup must complete synchronously and return undefined");
+        failures.push("Direct cleanup must complete synchronously and return undefined");
       }
     } catch (reason) {
-      failures.push(renderUnknownReason(reason, "Carapace cleanup failed"));
+      failures.push(renderUnknownReason(reason, "Direct cleanup failed"));
     }
   }
   return frozenMessages(failures);
 }
 
 function activateSession<World extends JsonValue, Route extends string>(
-  definition: CarapaceDefinition<World, Route>,
-  activation: CarapaceSessionActivation,
-): Result<ActiveCarapace<World, Route>, QueryError> {
+  definition: DirectDefinition<World, Route>,
+  activation: DirectSessionActivation,
+): Result<ActiveDirect<World, Route>, QueryError> {
   switch (activation.kind) {
     case "query":
       return definition.activate(activation.source);
@@ -249,24 +249,24 @@ function activateSession<World extends JsonValue, Route extends string>(
 
 /**
  * Construct one product-owned deterministic composition around a validated
- * definition. Carapace owns activation, logical time, activity, observation,
+ * definition. Direct owns activation, logical time, activity, observation,
  * cancellation, and teardown; the harness factory owns product semantic ports.
  */
-export function createCarapaceSession<
+export function createDirectSession<
   World extends JsonValue,
   Route extends string,
   Harness,
 >(
-  options: CarapaceSessionOptions<World, Route, Harness>,
-): Result<CarapaceSession<World, Route, Harness>, CarapaceSessionError> {
-  let definition: CarapaceDefinition<World, Route>;
-  let requestedActivation: CarapaceSessionActivation;
-  let createHarness: CarapaceSessionOptions<World, Route, Harness>["create"];
-  let observeHarness: CarapaceSessionOptions<World, Route, Harness>["observe"];
-  let parseWorld: CarapaceDefinition<World, Route>["parseWorld"];
+  options: DirectSessionOptions<World, Route, Harness>,
+): Result<DirectSession<World, Route, Harness>, DirectSessionError> {
+  let definition: DirectDefinition<World, Route>;
+  let requestedActivation: DirectSessionActivation;
+  let createHarness: DirectSessionOptions<World, Route, Harness>["create"];
+  let observeHarness: DirectSessionOptions<World, Route, Harness>["observe"];
+  let parseWorld: DirectDefinition<World, Route>["parseWorld"];
   let coverage: CoverageCatalogSnapshot;
   let sleep: LogicalSleep | undefined;
-  let storeOptions: CarapaceStoreOptions | undefined;
+  let storeOptions: DirectStoreOptions | undefined;
   try {
     definition = options.definition;
     parseWorld = definition.parseWorld;
@@ -277,7 +277,7 @@ export function createCarapaceSession<
     } else if (activationInput.kind === "scenario") {
       requestedActivation = Object.freeze({ kind: "scenario", scenario: activationInput.scenario });
     } else {
-      throw new Error("Carapace session activation kind must be query or scenario");
+      throw new Error("Direct session activation kind must be query or scenario");
     }
     createHarness = options.create;
     observeHarness = options.observe;
@@ -294,15 +294,15 @@ export function createCarapaceSession<
   } catch (reason) {
     return err(sessionError({
       code: "invalid-options",
-      message: renderUnknownReason(reason, "Carapace session options could not be inspected"),
+      message: renderUnknownReason(reason, "Direct session options could not be inspected"),
       queryError: null,
       storeError: null,
       probeError: null,
     }));
   }
 
-  let activationSource: ActiveCarapace<World, Route>["source"];
-  let activationScenario: ActiveCarapace<World, Route>["scenario"];
+  let activationSource: ActiveDirect<World, Route>["source"];
+  let activationScenario: ActiveDirect<World, Route>["scenario"];
   let activationRoute: Route;
   let activationWorld: World;
   let activationRuntime: LogicalRuntimeSnapshot;
@@ -323,18 +323,18 @@ export function createCarapaceSession<
       }));
     }
     const candidate = activated.value;
-    if (candidate.kind !== "active") throw new Error("Carapace activation kind must be active");
+    if (candidate.kind !== "active") throw new Error("Direct activation kind must be active");
     if (candidate.source !== "scenario" && candidate.source !== "fixture") {
-      throw new Error("Carapace activation source must be scenario or fixture");
+      throw new Error("Direct activation source must be scenario or fixture");
     }
     if (typeof candidate.scenario !== "string") {
-      throw new Error("Carapace activation scenario must be a string");
+      throw new Error("Direct activation scenario must be a string");
     }
     if (typeof candidate.route !== "string") {
-      throw new Error("Carapace activation route must be a string");
+      throw new Error("Direct activation route must be a string");
     }
     if (typeof candidate.activationHash !== "string" || candidate.activationHash.length === 0) {
-      throw new Error("Carapace activation hash must be a non-empty string");
+      throw new Error("Direct activation hash must be a non-empty string");
     }
     const parsedRuntime = parseLogicalRuntimeSnapshot(candidate.runtime);
     if (!parsedRuntime.ok) throw new Error(parsedRuntime.error.message);
@@ -347,7 +347,7 @@ export function createCarapaceSession<
   } catch (reason) {
     return err(sessionError({
       code: "invalid-options",
-      message: renderUnknownReason(reason, "Carapace session activation failed unexpectedly"),
+      message: renderUnknownReason(reason, "Direct session activation failed unexpectedly"),
       queryError: null,
       storeError: null,
       probeError: null,
@@ -355,8 +355,8 @@ export function createCarapaceSession<
   }
 
   const store = storeOptions === undefined
-    ? createCarapaceStore(activationWorld, parseWorld)
-    : createCarapaceStore(activationWorld, parseWorld, storeOptions);
+    ? createDirectStore(activationWorld, parseWorld)
+    : createDirectStore(activationWorld, parseWorld, storeOptions);
   if (!store.ok) {
     return err(sessionError({
       code: "store-failed",
@@ -370,7 +370,7 @@ export function createCarapaceSession<
   const clock = sleep === undefined
     ? createLogicalRuntime(activationRuntime)
     : createLogicalRuntime(activationRuntime, sleep);
-  const activation: ActiveCarapace<World, Route> = Object.freeze({
+  const activation: ActiveDirect<World, Route> = Object.freeze({
     kind: "active",
     source: activationSource,
     scenario: activationScenario,
@@ -380,19 +380,19 @@ export function createCarapaceSession<
     activationHash,
   });
   const controller = new AbortController();
-  const activity = createCarapaceActivityScope(store.value, clock, { signal: controller.signal });
-  const cleanups: CarapaceSessionCleanup[] = [];
+  const activity = createDirectActivityScope(store.value, clock, { signal: controller.signal });
+  const cleanups: DirectSessionCleanup[] = [];
   let registrationOpen = true;
-  const context: CarapaceSessionContext<World, Route> = Object.freeze({
+  const context: DirectSessionContext<World, Route> = Object.freeze({
     activation,
     world: activation.world,
     store: store.value,
     clock,
     activity,
     signal: controller.signal,
-    onDispose: (cleanup: CarapaceSessionCleanup): undefined => {
+    onDispose: (cleanup: DirectSessionCleanup): undefined => {
       if (!registrationOpen) {
-        throw new Error("Carapace cleanup must be registered during synchronous session construction");
+        throw new Error("Direct cleanup must be registered during synchronous session construction");
       }
       cleanups.push(cleanup);
       return undefined;
@@ -404,28 +404,28 @@ export function createCarapaceSession<
     harness = createHarness(context);
     if (isPromiseLike(harness)) {
       void Promise.resolve(harness).catch(() => undefined);
-      throw new Error("Carapace harness construction must complete synchronously");
+      throw new Error("Direct harness construction must complete synchronously");
     }
   } catch (reason) {
     registrationOpen = false;
     const cleanupErrors = runCleanup(controller, cleanups);
     return err(sessionError({
       code: "harness-failed",
-      message: renderUnknownReason(reason, "Carapace harness construction failed"),
+      message: renderUnknownReason(reason, "Direct harness construction failed"),
       queryError: null,
       storeError: null,
       probeError: null,
     }, cleanupErrors));
   }
 
-  let observation: CarapaceSessionObservation;
+  let observation: DirectSessionObservation;
   try {
     const observed = observeHarness === undefined
       ? Object.freeze({})
       : observeHarness(harness, context);
     if (isPromiseLike(observed)) {
       void Promise.resolve(observed).catch(() => undefined);
-      throw new Error("Carapace observation construction must complete synchronously");
+      throw new Error("Direct observation construction must complete synchronously");
     }
     observation = prepareSessionObservation(observed);
   } catch (reason) {
@@ -433,7 +433,7 @@ export function createCarapaceSession<
     const cleanupErrors = runCleanup(controller, cleanups);
     return err(sessionError({
       code: "observation-failed",
-      message: renderUnknownReason(reason, "Carapace observation construction failed"),
+      message: renderUnknownReason(reason, "Direct observation construction failed"),
       queryError: null,
       storeError: null,
       probeError: null,
@@ -441,7 +441,7 @@ export function createCarapaceSession<
   }
   registrationOpen = false;
 
-  const probe = createCarapaceProbe({
+  const probe = createDirectProbe({
     store: store.value,
     activationHash: activation.activationHash,
     ...(observation.pending === undefined ? {} : { pending: observation.pending }),
@@ -464,18 +464,18 @@ export function createCarapaceSession<
   let disposed = false;
   let disposalErrors: readonly string[] = Object.freeze([]);
   const onDispose = (
-    cleanup: CarapaceSessionCleanup,
-  ): Result<true, CarapaceSessionRegistrationError> => {
+    cleanup: DirectSessionCleanup,
+  ): Result<true, DirectSessionRegistrationError> => {
     if (typeof cleanup !== "function") {
       return err(Object.freeze({
         code: "invalid-cleanup",
-        message: "Carapace cleanup must be a function",
+        message: "Direct cleanup must be a function",
       }));
     }
     if (disposed) {
       return err(Object.freeze({
         code: "session-disposed",
-        message: "Cannot register cleanup on a disposed Carapace session",
+        message: "Cannot register cleanup on a disposed Direct session",
       }));
     }
     cleanups.push(cleanup);

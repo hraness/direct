@@ -1,15 +1,15 @@
 import { describe, expect, test } from "bun:test";
 
 import { createLogicalRuntime } from "../core/runtime.js";
-import { createCarapaceStore } from "../core/store.js";
+import { createDirectStore } from "../core/store.js";
 import { parseTestWorld } from "../core/test-support.js";
-import { createCarapaceActivityScope } from "./activity.js";
+import { createDirectActivityScope } from "./activity.js";
 
 function setup() {
-  const store = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+  const store = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
   if (!store.ok) throw new Error(store.error.message);
   const runtime = createLogicalRuntime(undefined, () => Promise.resolve());
-  return { store: store.value, scope: createCarapaceActivityScope(store.value, runtime) };
+  return { store: store.value, scope: createDirectActivityScope(store.value, runtime) };
 }
 
 function hostileThrownValue(): Error {
@@ -23,7 +23,7 @@ function hostileThrownValue(): Error {
   });
 }
 
-describe("Carapace activity scope", () => {
+describe("Direct activity scope", () => {
   test("leases begin once and release idempotently", () => {
     const { store, scope } = setup();
     const started = scope.begin("fetch");
@@ -123,10 +123,10 @@ describe("Carapace activity scope", () => {
   });
 
   test("an aborted scope fences new and reentrant activity without leaking a lease", async () => {
-    const store = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+    const store = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
     if (!store.ok) throw new Error(store.error.message);
     const controller = new AbortController();
-    const scope = createCarapaceActivityScope(
+    const scope = createDirectActivityScope(
       store.value,
       createLogicalRuntime(undefined, () => Promise.resolve()),
       { signal: controller.signal },
@@ -145,7 +145,7 @@ describe("Carapace activity scope", () => {
     });
 
     const reentrantController = new AbortController();
-    const reentrantScope = createCarapaceActivityScope(
+    const reentrantScope = createDirectActivityScope(
       store.value,
       createLogicalRuntime(undefined, () => Promise.resolve()),
       { signal: reentrantController.signal },

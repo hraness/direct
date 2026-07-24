@@ -6,61 +6,61 @@ import {
   type CoverageCatalogSnapshot,
 } from "../core/coverage.js";
 import {
-  parseCarapaceProbeSnapshot,
-  type CarapaceProbe,
-  type CarapaceProbeSnapshot,
+  parseDirectProbeSnapshot,
+  type DirectProbe,
+  type DirectProbeSnapshot,
 } from "../testing/probe.js";
 
-export const CARAPACE_BROWSER_BRIDGE_SCHEMA = "carapace.browser-bridge/v1" as const;
+export const DIRECT_BROWSER_BRIDGE_SCHEMA = "direct.browser-bridge/v1" as const;
 
-export interface CarapaceBrowserBridge {
-  readonly schema: typeof CARAPACE_BROWSER_BRIDGE_SCHEMA;
-  readonly snapshot: () => CarapaceProbeSnapshot;
+export interface DirectBrowserBridge {
+  readonly schema: typeof DIRECT_BROWSER_BRIDGE_SCHEMA;
+  readonly snapshot: () => DirectProbeSnapshot;
   readonly reset: () => undefined;
   readonly coverage: CoverageCatalogSnapshot;
 }
 
-export interface CarapaceBrowserBridgeOptions {
-  readonly probe: Pick<CarapaceProbe, "snapshot">;
+export interface DirectBrowserBridgeOptions {
+  readonly probe: Pick<DirectProbe, "snapshot">;
   readonly coverage?: unknown;
   readonly reset?: () => undefined;
   readonly target?: object;
 }
 
-export type CarapaceBrowserBridgeErrorCode = "install-failed" | "invalid-coverage";
+export type DirectBrowserBridgeErrorCode = "install-failed" | "invalid-coverage";
 
-export interface CarapaceBrowserBridgeError {
-  readonly code: CarapaceBrowserBridgeErrorCode;
+export interface DirectBrowserBridgeError {
+  readonly code: DirectBrowserBridgeErrorCode;
   readonly message: string;
 }
 
-export type CarapaceBrowserBridgeUninstall = () => undefined;
+export type DirectBrowserBridgeUninstall = () => undefined;
 
-export interface PreparedCarapaceBrowserBridgeInstallation {
+export interface PreparedDirectBrowserBridgeInstallation {
   /** Make this provisional replacement the process owner. Cannot fail. */
   readonly commit: () => undefined;
   /** Restore the exact owner observed before preparation. */
   readonly rollback: () => undefined;
   /** Remove a committed replacement and restore its underlying owner. */
-  readonly uninstall: CarapaceBrowserBridgeUninstall;
+  readonly uninstall: DirectBrowserBridgeUninstall;
 }
 
-const BRIDGE_KEYS = ["__carapace"] as const;
+const BRIDGE_KEYS = ["__direct"] as const;
 
 interface ActiveBridgeInstallation {
   readonly target: object;
   readonly installed: ReadonlyMap<string, unknown>;
   readonly restore: ReadonlyMap<string, PropertyDescriptor | undefined>;
   readonly deactivate: () => undefined;
-  readonly uninstall: CarapaceBrowserBridgeUninstall;
+  readonly uninstall: DirectBrowserBridgeUninstall;
 }
 
 let activeBridgeInstallation: ActiveBridgeInstallation | null = null;
 
 function bridgeError(
-  code: CarapaceBrowserBridgeErrorCode,
+  code: DirectBrowserBridgeErrorCode,
   message: string,
-): CarapaceBrowserBridgeError {
+): DirectBrowserBridgeError {
   return Object.freeze({ code, message });
 }
 
@@ -85,7 +85,7 @@ function containPromiseLike(value: unknown): boolean {
 function requireSynchronousResetResult(value: unknown): undefined {
   containPromiseLike(value);
   if (value !== undefined) {
-    throw new Error("Carapace reset must complete synchronously and return undefined");
+    throw new Error("Direct reset must complete synchronously and return undefined");
   }
   return undefined;
 }
@@ -120,16 +120,16 @@ function restoreInstalledValue(
 }
 
 /** Prepare a reversible bridge replacement without deactivating the current owner. */
-export function prepareCarapaceBrowserBridgeInstallation(
-  options: CarapaceBrowserBridgeOptions,
-): Result<PreparedCarapaceBrowserBridgeInstallation, CarapaceBrowserBridgeError> {
+export function prepareDirectBrowserBridgeInstallation(
+  options: DirectBrowserBridgeOptions,
+): Result<PreparedDirectBrowserBridgeInstallation, DirectBrowserBridgeError> {
   let coverageInput: unknown;
   try {
     coverageInput = options.coverage === undefined
       ? EMPTY_COVERAGE_CATALOG_SNAPSHOT
       : options.coverage;
   } catch (reason) {
-    return err(bridgeError("invalid-coverage", renderUnknownReason(reason, "Failed to read Carapace coverage")));
+    return err(bridgeError("invalid-coverage", renderUnknownReason(reason, "Failed to read Direct coverage")));
   }
   const parsedCoverage = parseCoverageCatalogSnapshot(coverageInput);
   if (!parsedCoverage.ok) {
@@ -139,7 +139,7 @@ export function prepareCarapaceBrowserBridgeInstallation(
 
   let target: object;
   let reset: () => undefined;
-  let probe: Pick<CarapaceProbe, "snapshot">;
+  let probe: Pick<DirectProbe, "snapshot">;
   try {
     target = options.target ?? globalThis;
     reset = options.reset ?? defaultReset;
@@ -147,7 +147,7 @@ export function prepareCarapaceBrowserBridgeInstallation(
   } catch (reason) {
     return err(bridgeError(
       "install-failed",
-      renderUnknownReason(reason, "Failed to read Carapace browser bridge options"),
+      renderUnknownReason(reason, "Failed to read Direct browser bridge options"),
     ));
   }
   const previousInstallation = activeBridgeInstallation;
@@ -167,29 +167,29 @@ export function prepareCarapaceBrowserBridgeInstallation(
   } catch (reason) {
     return err(bridgeError(
       "install-failed",
-      renderUnknownReason(reason, "Failed to inspect the Carapace browser bridge target"),
+      renderUnknownReason(reason, "Failed to inspect the Direct browser bridge target"),
     ));
   }
 
-  const readSnapshot = (): CarapaceProbeSnapshot => {
+  const readSnapshot = (): DirectProbeSnapshot => {
     try {
       const snapshot: unknown = probe.snapshot();
       if (containPromiseLike(snapshot)) {
-        throw new Error("Carapace probe snapshots must complete synchronously");
+        throw new Error("Direct probe snapshots must complete synchronously");
       }
       if ((typeof snapshot !== "object" || snapshot === null) && typeof snapshot !== "function") {
-        throw new Error("Carapace probe returned an invalid result");
+        throw new Error("Direct probe returned an invalid result");
       }
       const succeeded: unknown = Reflect.get(snapshot, "ok");
       if (succeeded !== true) {
         if (succeeded === false) throw new Error(renderUnknownReason(Reflect.get(snapshot, "error")));
-        throw new Error("Carapace probe returned an invalid result");
+        throw new Error("Direct probe returned an invalid result");
       }
-      const parsed = parseCarapaceProbeSnapshot(Reflect.get(snapshot, "value"));
+      const parsed = parseDirectProbeSnapshot(Reflect.get(snapshot, "value"));
       if (!parsed.ok) throw new Error(parsed.error.message);
       return parsed.value;
     } catch (reason) {
-      throw new Error(`Carapace probe failed: ${renderUnknownReason(reason)}`);
+      throw new Error(`Direct probe failed: ${renderUnknownReason(reason)}`);
     }
   };
   const runReset = (): undefined => {
@@ -197,16 +197,16 @@ export function prepareCarapaceBrowserBridgeInstallation(
       const returned: unknown = reset();
       return requireSynchronousResetResult(returned);
     } catch (reason) {
-      throw new Error(`Carapace reset failed: ${renderUnknownReason(reason)}`);
+      throw new Error(`Direct reset failed: ${renderUnknownReason(reason)}`);
     }
   };
-  const bridge: CarapaceBrowserBridge = Object.freeze({
-    schema: CARAPACE_BROWSER_BRIDGE_SCHEMA,
+  const bridge: DirectBrowserBridge = Object.freeze({
+    schema: DIRECT_BROWSER_BRIDGE_SCHEMA,
     snapshot: readSnapshot,
     reset: runReset,
     coverage,
   });
-  const installed = new Map<string, unknown>([["__carapace", bridge]]);
+  const installed = new Map<string, unknown>([["__direct", bridge]]);
 
   try {
     for (const [key, value] of installed) {
@@ -223,7 +223,7 @@ export function prepareCarapaceBrowserBridgeInstallation(
     }
     return err(bridgeError(
       "install-failed",
-      renderUnknownReason(reason, "Carapace browser bridge installation failed"),
+      renderUnknownReason(reason, "Direct browser bridge installation failed"),
     ));
   }
 
@@ -281,10 +281,10 @@ export function prepareCarapaceBrowserBridgeInstallation(
  * Install one process-local browser automation bridge. A later installation
  * restores and replaces the earlier one; stale uninstall handles are harmless.
  */
-export function installCarapaceBrowserBridge(
-  options: CarapaceBrowserBridgeOptions,
-): Result<CarapaceBrowserBridgeUninstall, CarapaceBrowserBridgeError> {
-  const prepared = prepareCarapaceBrowserBridgeInstallation(options);
+export function installDirectBrowserBridge(
+  options: DirectBrowserBridgeOptions,
+): Result<DirectBrowserBridgeUninstall, DirectBrowserBridgeError> {
+  const prepared = prepareDirectBrowserBridgeInstallation(options);
   if (!prepared.ok) return prepared;
   prepared.value.commit();
   return ok(prepared.value.uninstall);

@@ -1,1 +1,1 @@
-export { ReactNativeCarapaceRoot as default } from "../carapace/web-provider";
+export { ReactNativeDirectRoot as default } from "../direct/web-provider";

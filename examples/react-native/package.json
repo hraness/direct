@@ -1,11 +1,11 @@
 {
-  "name": "@cclrte/carapace-react-native-example",
+  "name": "@cclrte/direct-react-native-example",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "main": "./index.ts",
   "scripts": {
     "start": "expo start --web",
-    "test": "bun test ./carapace"
+    "test": "bun test ./direct"
   }
 }

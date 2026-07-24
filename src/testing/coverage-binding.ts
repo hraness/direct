@@ -5,7 +5,7 @@ import {
   type CoverageEntry,
   type CoverageError,
 } from "../core/coverage.js";
-import type { CarapaceDefinition } from "../core/definition.js";
+import type { DirectDefinition } from "../core/definition.js";
 import type { JsonValue } from "../core/json-value.js";
 import { renderUnknownReason } from "../core/reason.js";
 import { err, ok, type Result } from "../core/result.js";
@@ -60,14 +60,14 @@ export function parseExpectedCoverageCatalogSnapshot(
     ) {
       return err(Object.freeze({
         code: "coverage-mismatch",
-        message: "Published Carapace coverage does not exactly match the authored definition",
+        message: "Published Direct coverage does not exactly match the authored definition",
         coverageError: null,
       }));
     }
   } catch (reason) {
     return err(Object.freeze({
       code: "invalid-definition",
-      message: renderUnknownReason(reason, "Expected Carapace coverage could not be inspected"),
+      message: renderUnknownReason(reason, "Expected Direct coverage could not be inspected"),
       coverageError: null,
     }));
   }
@@ -83,7 +83,7 @@ export function parseDefinitionCoverageSnapshot<
   Route extends string,
 >(
   input: unknown,
-  definition: Pick<CarapaceDefinition<World, Route>, "coverage">,
+  definition: Pick<DirectDefinition<World, Route>, "coverage">,
 ): Result<CoverageCatalogSnapshot, CoverageBindingError> {
   let expected: CoverageCatalogSnapshot;
   try {
@@ -91,7 +91,7 @@ export function parseDefinitionCoverageSnapshot<
   } catch (reason) {
     return err(Object.freeze({
       code: "invalid-definition",
-      message: renderUnknownReason(reason, "Carapace definition coverage could not be inspected"),
+      message: renderUnknownReason(reason, "Direct definition coverage could not be inspected"),
       coverageError: null,
     }));
   }

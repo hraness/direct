@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  defineCarapace,
-  parseCarapaceDefinition,
-  tryDefineCarapace,
+  defineDirect,
+  parseDirectDefinition,
+  tryDefineDirect,
 } from "./definition.js";
 import { DEFAULT_MAX_FIXTURE_BYTES } from "./fixture.js";
 import { utf8ByteLength } from "./json.js";
@@ -15,7 +15,7 @@ import {
 import { parseTestWorld, type TestRoute, type TestWorld } from "./test-support.js";
 
 function definition() {
-  return defineCarapace({
+  return defineDirect({
     parseWorld: parseTestWorld,
     defaultScenario: "chat.empty",
     scenarios: [
@@ -44,7 +44,7 @@ function definition() {
 }
 
 function authoredTypeContracts(): void {
-  defineCarapace({
+  defineDirect({
     parseWorld: parseTestWorld,
     // @ts-expect-error Authored defaults must name a scenario in the same definition.
     defaultScenario: "chat.missing",
@@ -56,7 +56,7 @@ function authoredTypeContracts(): void {
     }],
     coverage: [],
   });
-  defineCarapace({
+  defineDirect({
     parseWorld: parseTestWorld,
     defaultScenario: "chat.empty",
     scenarios: [{
@@ -73,7 +73,7 @@ function authoredTypeContracts(): void {
       scenarios: ["chat.missing"],
     }],
   });
-  defineCarapace({
+  defineDirect({
     parseWorld: parseTestWorld,
     defaultScenario: "chat.empty",
     scenarios: [{
@@ -91,7 +91,7 @@ function authoredTypeContracts(): void {
       scenarios: ["chat.empty"],
     }],
   });
-  defineCarapace({
+  defineDirect({
     parseWorld: parseTestWorld,
     defaultScenario: "chat.empty",
     scenarios: [{
@@ -110,7 +110,7 @@ function authoredTypeContracts(): void {
       },
     ],
   });
-  defineCarapace({
+  defineDirect({
     parseWorld: parseTestWorld,
     defaultScenario: "chat.empty",
     scenarios: [{
@@ -132,7 +132,7 @@ function authoredTypeContracts(): void {
 }
 void authoredTypeContracts;
 
-describe("Carapace definition", () => {
+describe("Direct definition", () => {
   test("parses a genuinely unknown definition without asserting it into an owned type", () => {
     const input: unknown = {
       parseWorld: parseTestWorld,
@@ -150,7 +150,7 @@ describe("Carapace definition", () => {
         scenarios: ["chat.empty"],
       }],
     };
-    const parsed = parseCarapaceDefinition(input);
+    const parsed = parseDirectDefinition(input);
     if (!parsed.ok) throw new Error(parsed.error.message);
     expect(parsed.value.activate("")).toMatchObject({
       ok: true,
@@ -162,7 +162,7 @@ describe("Carapace definition", () => {
         throw new Error("foreign definition getter failed");
       },
     });
-    expect(parseCarapaceDefinition(hostile)).toMatchObject({
+    expect(parseDirectDefinition(hostile)).toMatchObject({
       ok: false,
       error: { code: "invalid-options", message: "foreign definition getter failed" },
     });
@@ -199,7 +199,7 @@ describe("Carapace definition", () => {
   });
 
   test("rejects an unknown default and coverage drift", () => {
-    const unknownDefault = tryDefineCarapace<TestWorld, TestRoute>({
+    const unknownDefault = tryDefineDirect<TestWorld, TestRoute>({
       parseWorld: parseTestWorld,
       defaultScenario: "missing",
       scenarios: [{
@@ -215,7 +215,7 @@ describe("Carapace definition", () => {
       error: { code: "invalid-default-scenario" },
     });
 
-    const unknownCoverageScenario = tryDefineCarapace<TestWorld, TestRoute>({
+    const unknownCoverageScenario = tryDefineDirect<TestWorld, TestRoute>({
       parseWorld: parseTestWorld,
       defaultScenario: "chat.empty",
       scenarios: [{
@@ -237,7 +237,7 @@ describe("Carapace definition", () => {
     });
 
     try {
-      defineCarapace({
+      defineDirect({
         parseWorld: parseTestWorld,
         // Deliberately bypass the authored type law to verify the runtime boundary.
         defaultScenario: "missing" as "chat.empty",
@@ -257,7 +257,7 @@ describe("Carapace definition", () => {
   });
 
   test("rejects invalid activation limits before accepting the definition", () => {
-    const created = tryDefineCarapace<TestWorld, TestRoute>({
+    const created = tryDefineDirect<TestWorld, TestRoute>({
       parseWorld: parseTestWorld,
       defaultScenario: "chat.empty",
       scenarios: [{
@@ -273,7 +273,7 @@ describe("Carapace definition", () => {
   });
 
   test("freezes limits and binds fixture parsing, creation, and serialization to them", () => {
-    const created = defineCarapace({
+    const created = defineDirect({
       parseWorld: parseTestWorld,
       defaultScenario: "chat.empty",
       scenarios: [{
@@ -304,7 +304,7 @@ describe("Carapace definition", () => {
   });
 
   test("rejects limits that cannot carry every valid fixture through the query boundary", () => {
-    expect(tryDefineCarapace<TestWorld, TestRoute>({
+    expect(tryDefineDirect<TestWorld, TestRoute>({
       parseWorld: parseTestWorld,
       defaultScenario: "chat.empty",
       scenarios: [{
@@ -321,7 +321,15 @@ describe("Carapace definition", () => {
 
   test("activates an exactly byte-limit fixture with worst-case-heavy percent encoding", () => {
     const created = definition();
-    const messages = ['"'.repeat(32_669)];
+    const baseline = created.serializeFixture({
+      scenario: "chat.empty",
+      world: { count: 0, messages: [""] },
+    });
+    if (!baseline.ok) throw new Error(baseline.error.message);
+    const remainingBytes = DEFAULT_MAX_FIXTURE_BYTES - utf8ByteLength(baseline.value);
+    expect(remainingBytes).toBeGreaterThan(0);
+    expect(remainingBytes % 2).toBe(0);
+    const messages = ['"'.repeat(remainingBytes / 2)];
     const serialized = created.serializeFixture({
       scenario: "chat.empty",
       world: { count: 0, messages },

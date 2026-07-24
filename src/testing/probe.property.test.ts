@@ -2,10 +2,10 @@ import { expect, test } from "bun:test";
 import { assertProperty, fc } from "../core/test-support.js";
 
 import { createLogicalRuntime } from "../core/runtime.js";
-import { createCarapaceStore } from "../core/store.js";
+import { createDirectStore } from "../core/store.js";
 import { parseTestWorld } from "../core/test-support.js";
-import { createCarapaceActivityScope } from "./activity.js";
-import { createCarapaceProbe, parseCarapaceProbeSnapshot } from "./probe.js";
+import { createDirectActivityScope } from "./activity.js";
+import { createDirectProbe, parseDirectProbeSnapshot } from "./probe.js";
 
 test("property: quiescence is exactly zero store activity and zero pending counters", () => {
   assertProperty(fc.property(
@@ -13,9 +13,9 @@ test("property: quiescence is exactly zero store activity and zero pending count
     fc.array(fc.integer({ min: 0, max: 10_000 }), { maxLength: 20 }),
     fc.integer({ min: 0, max: 20 }),
     (pending, violations, activeCount) => {
-      const store = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+      const store = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
       if (!store.ok) throw new Error(store.error.message);
-      const activity = createCarapaceActivityScope(
+      const activity = createDirectActivityScope(
         store.value,
         createLogicalRuntime(undefined, () => Promise.resolve()),
       );
@@ -24,7 +24,7 @@ test("property: quiescence is exactly zero store activity and zero pending count
         if (!lease.ok) throw new Error(lease.error.message);
         return lease.value;
       });
-      const probe = createCarapaceProbe({
+      const probe = createDirectProbe({
         store: store.value,
         activationHash: "property-hash",
         pending: pending.map((value, index) => ({ name: `pending${String(index)}`, read: () => value })),
@@ -43,7 +43,7 @@ test("property: quiescence is exactly zero store activity and zero pending count
         settled: 0,
       });
       expect(JSON.parse(JSON.stringify(snapshot.value))).toEqual(snapshot.value);
-      expect(parseCarapaceProbeSnapshot(JSON.parse(JSON.stringify(snapshot.value)))).toEqual(snapshot);
+      expect(parseDirectProbeSnapshot(JSON.parse(JSON.stringify(snapshot.value)))).toEqual(snapshot);
       for (const lease of leases) expect(lease.release()).toEqual({ ok: true, value: true });
     },
   ));
@@ -51,7 +51,7 @@ test("property: quiescence is exactly zero store activity and zero pending count
 
 test("property: the probe wire parser is total for arbitrary JavaScript values", () => {
   assertProperty(fc.property(fc.anything(), (candidate) => {
-    const parsed = parseCarapaceProbeSnapshot(candidate);
+    const parsed = parseDirectProbeSnapshot(candidate);
     expect(typeof parsed.ok).toBe("boolean");
   }));
 });
@@ -60,13 +60,13 @@ test("property: genuine reset and activity traces always round-trip through the 
   assertProperty(fc.property(
     fc.array(fc.integer({ min: 0, max: 5 }), { maxLength: 25 }),
     (activityCounts) => {
-      const store = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+      const store = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
       if (!store.ok) throw new Error(store.error.message);
-      const activity = createCarapaceActivityScope(
+      const activity = createDirectActivityScope(
         store.value,
         createLogicalRuntime(undefined, () => Promise.resolve()),
       );
-      const probe = createCarapaceProbe({
+      const probe = createDirectProbe({
         store: store.value,
         activationHash: "reset-trace-hash",
       });
@@ -74,7 +74,7 @@ test("property: genuine reset and activity traces always round-trip through the 
       const expectRoundTrip = (): void => {
         const snapshot = probe.value.snapshot();
         if (!snapshot.ok) throw new Error(snapshot.error.message);
-        expect(parseCarapaceProbeSnapshot(JSON.parse(JSON.stringify(snapshot.value)))).toEqual(snapshot);
+        expect(parseDirectProbeSnapshot(JSON.parse(JSON.stringify(snapshot.value)))).toEqual(snapshot);
       };
 
       expectRoundTrip();

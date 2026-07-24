@@ -1,17 +1,17 @@
 import {
-  parseCarapaceProbeSnapshot
-} from "./index-v9j3cdd6.js";
+  parseDirectProbeSnapshot
+} from "./index-s10kw9hv.js";
 import {
   EMPTY_COVERAGE_CATALOG_SNAPSHOT,
   err,
   ok,
   parseCoverageCatalogSnapshot,
   renderUnknownReason
-} from "./index-xpkabpf3.js";
+} from "./index-541zzq54.js";
 
 // src/web/browser-bridge.ts
-var CARAPACE_BROWSER_BRIDGE_SCHEMA = "carapace.browser-bridge/v1";
-var BRIDGE_KEYS = ["__carapace"];
+var DIRECT_BROWSER_BRIDGE_SCHEMA = "direct.browser-bridge/v1";
+var BRIDGE_KEYS = ["__direct"];
 var activeBridgeInstallation = null;
 function bridgeError(code, message) {
   return Object.freeze({ code, message });
@@ -37,7 +37,7 @@ function containPromiseLike(value) {
 function requireSynchronousResetResult(value) {
   containPromiseLike(value);
   if (value !== undefined) {
-    throw new Error("Carapace reset must complete synchronously and return undefined");
+    throw new Error("Direct reset must complete synchronously and return undefined");
   }
   return;
 }
@@ -59,12 +59,12 @@ function restoreInstalledValue(target, key, installedValue, previous) {
       restoreDescriptor(target, key, previous);
   } catch {}
 }
-function prepareCarapaceBrowserBridgeInstallation(options) {
+function prepareDirectBrowserBridgeInstallation(options) {
   let coverageInput;
   try {
     coverageInput = options.coverage === undefined ? EMPTY_COVERAGE_CATALOG_SNAPSHOT : options.coverage;
   } catch (reason) {
-    return err(bridgeError("invalid-coverage", renderUnknownReason(reason, "Failed to read Carapace coverage")));
+    return err(bridgeError("invalid-coverage", renderUnknownReason(reason, "Failed to read Direct coverage")));
   }
   const parsedCoverage = parseCoverageCatalogSnapshot(coverageInput);
   if (!parsedCoverage.ok) {
@@ -79,7 +79,7 @@ function prepareCarapaceBrowserBridgeInstallation(options) {
     reset = options.reset ?? defaultReset;
     probe = options.probe;
   } catch (reason) {
-    return err(bridgeError("install-failed", renderUnknownReason(reason, "Failed to read Carapace browser bridge options")));
+    return err(bridgeError("install-failed", renderUnknownReason(reason, "Failed to read Direct browser bridge options")));
   }
   const previousInstallation = activeBridgeInstallation;
   const rollbackDescriptors = new Map;
@@ -92,29 +92,29 @@ function prepareCarapaceBrowserBridgeInstallation(options) {
       restore.set(key, previousOwnsValue ? previousInstallation.restore.get(key) : descriptor);
     }
   } catch (reason) {
-    return err(bridgeError("install-failed", renderUnknownReason(reason, "Failed to inspect the Carapace browser bridge target")));
+    return err(bridgeError("install-failed", renderUnknownReason(reason, "Failed to inspect the Direct browser bridge target")));
   }
   const readSnapshot = () => {
     try {
       const snapshot = probe.snapshot();
       if (containPromiseLike(snapshot)) {
-        throw new Error("Carapace probe snapshots must complete synchronously");
+        throw new Error("Direct probe snapshots must complete synchronously");
       }
       if ((typeof snapshot !== "object" || snapshot === null) && typeof snapshot !== "function") {
-        throw new Error("Carapace probe returned an invalid result");
+        throw new Error("Direct probe returned an invalid result");
       }
       const succeeded = Reflect.get(snapshot, "ok");
       if (succeeded !== true) {
         if (succeeded === false)
           throw new Error(renderUnknownReason(Reflect.get(snapshot, "error")));
-        throw new Error("Carapace probe returned an invalid result");
+        throw new Error("Direct probe returned an invalid result");
       }
-      const parsed = parseCarapaceProbeSnapshot(Reflect.get(snapshot, "value"));
+      const parsed = parseDirectProbeSnapshot(Reflect.get(snapshot, "value"));
       if (!parsed.ok)
         throw new Error(parsed.error.message);
       return parsed.value;
     } catch (reason) {
-      throw new Error(`Carapace probe failed: ${renderUnknownReason(reason)}`);
+      throw new Error(`Direct probe failed: ${renderUnknownReason(reason)}`);
     }
   };
   const runReset = () => {
@@ -122,16 +122,16 @@ function prepareCarapaceBrowserBridgeInstallation(options) {
       const returned = reset();
       return requireSynchronousResetResult(returned);
     } catch (reason) {
-      throw new Error(`Carapace reset failed: ${renderUnknownReason(reason)}`);
+      throw new Error(`Direct reset failed: ${renderUnknownReason(reason)}`);
     }
   };
   const bridge = Object.freeze({
-    schema: CARAPACE_BROWSER_BRIDGE_SCHEMA,
+    schema: DIRECT_BROWSER_BRIDGE_SCHEMA,
     snapshot: readSnapshot,
     reset: runReset,
     coverage
   });
-  const installed = new Map([["__carapace", bridge]]);
+  const installed = new Map([["__direct", bridge]]);
   try {
     for (const [key, value] of installed) {
       Object.defineProperty(target, key, {
@@ -145,7 +145,7 @@ function prepareCarapaceBrowserBridgeInstallation(options) {
     for (const key of BRIDGE_KEYS) {
       restoreInstalledValue(target, key, installed.get(key), rollbackDescriptors.get(key));
     }
-    return err(bridgeError("install-failed", renderUnknownReason(reason, "Carapace browser bridge installation failed")));
+    return err(bridgeError("install-failed", renderUnknownReason(reason, "Direct browser bridge installation failed")));
   }
   let state = "prepared";
   const rollback = () => {
@@ -204,8 +204,8 @@ function prepareCarapaceBrowserBridgeInstallation(options) {
     uninstall
   }));
 }
-function installCarapaceBrowserBridge(options) {
-  const prepared = prepareCarapaceBrowserBridgeInstallation(options);
+function installDirectBrowserBridge(options) {
+  const prepared = prepareDirectBrowserBridgeInstallation(options);
   if (!prepared.ok)
     return prepared;
   prepared.value.commit();
@@ -238,14 +238,14 @@ function requestUrl(input) {
       return new URL(input.url);
     const browserGlobal = globalThis;
     const locationOrigin = browserGlobal.location?.origin;
-    const base = locationOrigin === undefined || locationOrigin === "null" ? "http://carapace.invalid" : locationOrigin;
+    const base = locationOrigin === undefined || locationOrigin === "null" ? "http://direct.invalid" : locationOrigin;
     return new URL(String(input), base);
   } catch {
     return null;
   }
 }
 function blockedResponse() {
-  return new Response(JSON.stringify({ error: "Carapace blocked an unmapped network request." }), { status: 501, headers: { "content-type": "application/json" } });
+  return new Response(JSON.stringify({ error: "Direct blocked an unmapped network request." }), { status: 501, headers: { "content-type": "application/json" } });
 }
 function beginBoundary(beginActivity, url) {
   if (beginActivity === undefined) {
@@ -301,7 +301,7 @@ function notifyBlocked(onBlocked, url) {
     containPromiseLike2(returned);
   } catch {}
 }
-function prepareCarapaceFetchFirewallInstallation(options = {}) {
+function prepareDirectFetchFirewallInstallation(options = {}) {
   const previousInstallation = activeFirewallInstallation;
   const currentFetch = globalThis.fetch;
   const previousOwnsCurrent = previousInstallation?.guardedFetch === currentFetch;
@@ -311,7 +311,7 @@ function prepareCarapaceFetchFirewallInstallation(options = {}) {
   const onBlocked = options.onBlocked;
   const originalFetch = options.originalFetch ?? restoreFetch;
   if (typeof originalFetch !== "function") {
-    throw new TypeError("Carapace fetch firewall requires a callable fetch implementation");
+    throw new TypeError("Direct fetch firewall requires a callable fetch implementation");
   }
   const guardedCall = async (input, init) => {
     const url = requestUrl(input);
@@ -351,7 +351,7 @@ function prepareCarapaceFetchFirewallInstallation(options = {}) {
   try {
     globalThis.fetch = guardedFetch;
     if (globalThis.fetch !== guardedFetch) {
-      throw new TypeError("Carapace fetch firewall could not replace global fetch");
+      throw new TypeError("Direct fetch firewall could not replace global fetch");
     }
   } catch (reason) {
     try {
@@ -410,8 +410,8 @@ function prepareCarapaceFetchFirewallInstallation(options = {}) {
     uninstall
   });
 }
-function installCarapaceFetchFirewall(options = {}) {
-  const prepared = prepareCarapaceFetchFirewallInstallation(options);
+function installDirectFetchFirewall(options = {}) {
+  const prepared = prepareDirectFetchFirewallInstallation(options);
   prepared.commit();
   return prepared.uninstall;
 }
@@ -458,15 +458,15 @@ function runBrowserCleanup(bridge, firewall) {
       const returned = cleanup();
       if (returned !== undefined) {
         containPromiseLike3(returned);
-        errors.push(`Carapace browser ${label} cleanup must return undefined`);
+        errors.push(`Direct browser ${label} cleanup must return undefined`);
       }
     } catch (reason) {
-      errors.push(renderUnknownReason(reason, `Carapace browser ${label} cleanup failed`));
+      errors.push(renderUnknownReason(reason, `Direct browser ${label} cleanup failed`));
     }
   }
   return freezeMessages(errors);
 }
-function installCarapaceBrowser(options) {
+function installDirectBrowser(options) {
   let activity;
   let coverage;
   let onDispose;
@@ -486,7 +486,7 @@ function installCarapaceBrowser(options) {
   } catch (reason) {
     return err(Object.freeze({
       code: "invalid-options",
-      message: renderUnknownReason(reason, "Carapace browser options could not be inspected"),
+      message: renderUnknownReason(reason, "Direct browser options could not be inspected"),
       bridgeError: null,
       registrationError: null,
       rollbackErrors: freezeMessages([])
@@ -496,7 +496,7 @@ function installCarapaceBrowser(options) {
   if (firewallOptions !== false) {
     try {
       const { onActivityError, ...lowLevelOptions } = firewallOptions;
-      preparedFirewall = prepareCarapaceFetchFirewallInstallation({
+      preparedFirewall = prepareDirectFetchFirewallInstallation({
         ...lowLevelOptions,
         beginActivity: () => {
           const started = activity.begin("browser-fetch");
@@ -515,14 +515,14 @@ function installCarapaceBrowser(options) {
     } catch (reason) {
       return err(Object.freeze({
         code: "firewall-install-failed",
-        message: renderUnknownReason(reason, "Carapace fetch firewall installation failed"),
+        message: renderUnknownReason(reason, "Direct fetch firewall installation failed"),
         bridgeError: null,
         registrationError: null,
         rollbackErrors: freezeMessages([])
       }));
     }
   }
-  const preparedBridgeResult = prepareCarapaceBrowserBridgeInstallation({
+  const preparedBridgeResult = prepareDirectBrowserBridgeInstallation({
     probe,
     coverage,
     ...reset === undefined ? {} : { reset },
@@ -570,7 +570,7 @@ function installCarapaceBrowser(options) {
     dispose();
     return err(Object.freeze({
       code: "session-registration-threw",
-      message: renderUnknownReason(reason, "Carapace session cleanup registration failed"),
+      message: renderUnknownReason(reason, "Direct session cleanup registration failed"),
       bridgeError: null,
       registrationError: null,
       rollbackErrors: disposalErrors
@@ -579,7 +579,7 @@ function installCarapaceBrowser(options) {
   if (disposed) {
     return err(Object.freeze({
       code: "session-registration-threw",
-      message: "Carapace session disposed browser ownership during cleanup registration",
+      message: "Direct session disposed browser ownership during cleanup registration",
       bridgeError: null,
       registrationError: null,
       rollbackErrors: disposalErrors
@@ -592,12 +592,12 @@ function installCarapaceBrowser(options) {
 }
 
 // src/web.ts
-var CARAPACE_BROWSER_BRIDGE_SCHEMA2 = CARAPACE_BROWSER_BRIDGE_SCHEMA;
-var installCarapaceBrowserBridge2 = (options) => installCarapaceBrowserBridge(options);
-var installCarapaceFetchFirewall2 = (options) => installCarapaceFetchFirewall(options);
+var DIRECT_BROWSER_BRIDGE_SCHEMA2 = DIRECT_BROWSER_BRIDGE_SCHEMA;
+var installDirectBrowserBridge2 = (options) => installDirectBrowserBridge(options);
+var installDirectFetchFirewall2 = (options) => installDirectFetchFirewall(options);
 export {
-  installCarapaceFetchFirewall2 as installCarapaceFetchFirewall,
-  installCarapaceBrowserBridge2 as installCarapaceBrowserBridge,
-  installCarapaceBrowser,
-  CARAPACE_BROWSER_BRIDGE_SCHEMA2 as CARAPACE_BROWSER_BRIDGE_SCHEMA
+  installDirectFetchFirewall2 as installDirectFetchFirewall,
+  installDirectBrowserBridge2 as installDirectBrowserBridge,
+  installDirectBrowser,
+  DIRECT_BROWSER_BRIDGE_SCHEMA2 as DIRECT_BROWSER_BRIDGE_SCHEMA
 };

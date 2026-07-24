@@ -2,10 +2,10 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const packageName = "@cclrte/carapace";
-const importSpecifiers = ["@cclrte/carapace","@cclrte/carapace/core","@cclrte/carapace/react","@cclrte/carapace/testing","@cclrte/carapace/web"];
+const packageName = "@cclrte/direct";
+const importSpecifiers = ["@cclrte/direct","@cclrte/direct/core","@cclrte/direct/react","@cclrte/direct/testing","@cclrte/direct/web"];
 const binNames = [];
-const verificationPackages = ["@eslint/js@^9.39.2","@expo/metro-runtime@~57.0.6","@types/bun@^1.3.14","@types/react@^19.2.14","@types/react-dom@^19.2.3","@vitejs/plugin-react@^6.0.3","eslint@^9.39.2","expo@~57.0.8","fast-check@^4.8.0","react@19.2.3","react-dom@19.2.3","react-native@0.86.0","react-native-web@~0.21.2","typescript@^6.0.3","typescript-eslint@^8.53.0","vite@^8.1.5"];
+const verificationPackages = ["@eslint/js@^9.39.2","@expo/metro-runtime@~57.0.6","@types/bun@^1.3.14","@types/node@^24.10.0","@types/react@^19.2.14","@types/react-dom@^19.2.3","@vitejs/plugin-react@^6.0.3","eslint@^9.39.2","expo@~57.0.8","fast-check@^4.8.0","marked@^17.0.1","next@16.2.9","react@19.2.3","react-dom@19.2.3","react-native@0.86.0","react-native-web@~0.21.2","typescript@^6.0.3","typescript-eslint@^8.53.0","vite@^8.1.5"];
 
 async function run(command: string[], cwd: string): Promise<void> {
   const process = Bun.spawn(command, { cwd, stdout: "inherit", stderr: "inherit" });
@@ -43,7 +43,7 @@ try {
     "-e",
     `await Promise.all(${JSON.stringify(importSpecifiers)}.map((specifier) => import(specifier)))`,
   ], consumer);
-  await writeFile(join(consumer, "index.ts"), "import * as surface0 from \"@cclrte/carapace\";\nimport * as surface1 from \"@cclrte/carapace/core\";\nimport * as surface2 from \"@cclrte/carapace/react\";\nimport * as surface3 from \"@cclrte/carapace/testing\";\nimport * as surface4 from \"@cclrte/carapace/web\";\nvoid [surface0, surface1, surface2, surface3, surface4];\n");
+  await writeFile(join(consumer, "index.ts"), "import * as surface0 from \"@cclrte/direct\";\nimport * as surface1 from \"@cclrte/direct/core\";\nimport * as surface2 from \"@cclrte/direct/react\";\nimport * as surface3 from \"@cclrte/direct/testing\";\nimport * as surface4 from \"@cclrte/direct/web\";\nvoid [surface0, surface1, surface2, surface3, surface4];\n");
   await writeFile(join(consumer, "tsconfig.bundler.json"), "{\n  \"compilerOptions\": {\n    \"target\": \"ES2023\",\n    \"lib\": [\n      \"ES2023\",\n      \"DOM\",\n      \"DOM.Iterable\"\n    ],\n    \"strict\": true,\n    \"noEmit\": true,\n    \"skipLibCheck\": false,\n    \"module\": \"Preserve\",\n    \"moduleResolution\": \"Bundler\"\n  },\n  \"include\": [\n    \"index.ts\"\n  ]\n}");
   await writeFile(join(consumer, "tsconfig.nodenext.json"), "{\n  \"compilerOptions\": {\n    \"target\": \"ES2023\",\n    \"lib\": [\n      \"ES2023\",\n      \"DOM\",\n      \"DOM.Iterable\"\n    ],\n    \"strict\": true,\n    \"noEmit\": true,\n    \"skipLibCheck\": false,\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\"\n  },\n  \"include\": [\n    \"index.ts\"\n  ]\n}");
   await run([process.execPath, "x", "tsc", "-p", "./tsconfig.bundler.json"], consumer);

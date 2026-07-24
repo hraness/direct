@@ -4,9 +4,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  scanReactNativeCarapaceWebOutput,
+  scanReactNativeDirectWebOutput,
   scanReactNativeProductionOutput,
-} from "./carapace/check-native-boundary";
+} from "./direct/check-native-boundary";
 
 const exampleRoot = dirname(fileURLToPath(import.meta.url));
 const expoExportLog = join(exampleRoot, ".expo", "dev", "logs", "export.log");
@@ -57,7 +57,7 @@ async function exportPlatform(
 }
 
 async function verifyReactNativeExample(): Promise<void> {
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "cclrte-carapace-react-native-"));
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "cclrte-direct-react-native-"));
   const iosOutput = join(temporaryRoot, "ios");
   const androidOutput = join(temporaryRoot, "android");
   const webOutput = join(temporaryRoot, "web");
@@ -66,17 +66,17 @@ async function verifyReactNativeExample(): Promise<void> {
     await exportPlatform("ios", iosOutput);
     const iosBoundary = await scanReactNativeProductionOutput(iosOutput);
     if (iosBoundary.violations.length > 0) {
-      throw new Error(`iOS production output contains Carapace markers: ${JSON.stringify(iosBoundary.violations)}`);
+      throw new Error(`iOS production output contains Direct markers: ${JSON.stringify(iosBoundary.violations)}`);
     }
 
     await exportPlatform("android", androidOutput);
     const androidBoundary = await scanReactNativeProductionOutput(androidOutput);
     if (androidBoundary.violations.length > 0) {
-      throw new Error(`Android production output contains Carapace markers: ${JSON.stringify(androidBoundary.violations)}`);
+      throw new Error(`Android production output contains Direct markers: ${JSON.stringify(androidBoundary.violations)}`);
     }
 
     await exportPlatform("web", webOutput);
-    const webBoundary = await scanReactNativeCarapaceWebOutput(webOutput);
+    const webBoundary = await scanReactNativeDirectWebOutput(webOutput);
     console.log([
       `React Native iOS boundary passed (${String(iosBoundary.scanned.length)} files).`,
       `React Native Android boundary passed (${String(androidBoundary.scanned.length)} files).`,

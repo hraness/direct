@@ -9,7 +9,7 @@
 
 # Guidelines
 
-- Do not import Carapace or read scenario activation in this directory.
+- Do not import Direct or read scenario activation in this directory.
 - Parse local-storage JSON from `unknown`, reject unknown fields and duplicate IDs, and return owned records.
 - Keep UI errors actionable and preserve the last successfully loaded list after a failed write.
 - Keep controls accessible by name and native semantics so browser verification can act in product terms.

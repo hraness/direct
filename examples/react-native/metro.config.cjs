@@ -27,7 +27,7 @@ config.resolver.nodeModulesPaths = [...new Set([
 ])];
 config.resolver.extraNodeModules = {
   ...config.resolver.extraNodeModules,
-  "@cclrte/carapace": packageRoot,
+  "@cclrte/direct": packageRoot,
 };
 config.resolver.unstable_enablePackageExports = true;
 config.resolver.resolveRequest = (context, moduleName, platform) => {

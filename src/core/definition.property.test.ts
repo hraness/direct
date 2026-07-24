@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { assertProperty, fc } from "./test-support.js";
 
-import { defineCarapace, parseCarapaceDefinition } from "./definition.js";
+import { defineDirect, parseDirectDefinition } from "./definition.js";
 import { FIXTURE_QUERY_KEY } from "./query.js";
 import { parseTestWorld } from "./test-support.js";
 
-const created = defineCarapace({
+const created = defineDirect({
   parseWorld: parseTestWorld,
   defaultScenario: "chat.empty",
   scenarios: [{
@@ -16,7 +16,7 @@ const created = defineCarapace({
   }],
   coverage: [],
 });
-describe("Carapace definition properties", () => {
+describe("Direct definition properties", () => {
   test("unreserved query parameters cannot perturb the default activation", () => {
     assertProperty(fc.property(
       fc.array(fc.tuple(
@@ -42,7 +42,7 @@ describe("Carapace definition properties", () => {
 
   test("foreign definition values never escape the fallible boundary", () => {
     assertProperty(fc.property(fc.anything(), (candidate) => {
-      expect(() => parseCarapaceDefinition(candidate)).not.toThrow();
+      expect(() => parseDirectDefinition(candidate)).not.toThrow();
     }));
   });
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { installCarapaceFetchFirewall } from "./fetch-firewall.js";
+import { installDirectFetchFirewall } from "./fetch-firewall.js";
 
 const nativeFetch = globalThis.fetch;
 
@@ -8,12 +8,12 @@ afterEach(() => {
   globalThis.fetch = nativeFetch;
 });
 
-describe("Carapace fetch firewall", () => {
+describe("Direct fetch firewall", () => {
   test("blocks relative, same-origin, malformed, and external requests without reaching fetch", async () => {
     let calls = 0;
     let active = 0;
     const blocked: (URL | null)[] = [];
-    const uninstall = installCarapaceFetchFirewall({
+    const uninstall = installDirectFetchFirewall({
       originalFetch: () => {
         calls += 1;
         return Promise.reject(new Error("must not reach network"));
@@ -25,10 +25,10 @@ describe("Carapace fetch firewall", () => {
       onBlocked: (url) => blocked.push(url),
     });
 
-    for (const url of ["/api/agent", "http://carapace.invalid/api/chat", "https://example.com/"]) {
+    for (const url of ["/api/agent", "http://direct.invalid/api/chat", "https://example.com/"]) {
       const response = await fetch(url);
       expect(response.status).toBe(501);
-      expect(await response.json()).toEqual({ error: "Carapace blocked an unmapped network request." });
+      expect(await response.json()).toEqual({ error: "Direct blocked an unmapped network request." });
     }
     expect(calls).toBe(0);
     expect(active).toBe(0);
@@ -42,7 +42,7 @@ describe("Carapace fetch firewall", () => {
       calls += 1;
       return Promise.resolve(new Response("fixture"));
     }, { preconnect: nativeFetch.preconnect });
-    const uninstall = installCarapaceFetchFirewall({
+    const uninstall = installDirectFetchFirewall({
       originalFetch: original,
       allow: (url) => url.protocol === "data:",
     });
@@ -56,9 +56,9 @@ describe("Carapace fetch firewall", () => {
   });
 
   test("a later installation safely replaces the earlier firewall", () => {
-    const first = installCarapaceFetchFirewall();
+    const first = installDirectFetchFirewall();
     const firstFetch = globalThis.fetch;
-    const second = installCarapaceFetchFirewall();
+    const second = installDirectFetchFirewall();
     expect(globalThis.fetch).not.toBe(firstFetch);
     first();
     expect(globalThis.fetch).not.toBe(nativeFetch);
@@ -67,7 +67,7 @@ describe("Carapace fetch firewall", () => {
   });
 
   test("a failed replacement leaves the active firewall installed", async () => {
-    const first = installCarapaceFetchFirewall();
+    const first = installDirectFetchFirewall();
     const firstFetch = globalThis.fetch;
     const hostileOptions = new Proxy({}, {
       get: (_target, key) => {
@@ -76,7 +76,7 @@ describe("Carapace fetch firewall", () => {
       },
     });
 
-    expect(() => installCarapaceFetchFirewall(hostileOptions)).toThrow("option getter rejected");
+    expect(() => installDirectFetchFirewall(hostileOptions)).toThrow("option getter rejected");
     expect(globalThis.fetch).toBe(firstFetch);
     expect((await fetch("https://example.com")).status).toBe(501);
     first();
@@ -96,7 +96,7 @@ describe("Carapace fetch firewall", () => {
     ) as typeof fetch;
     globalThis.fetch = hostFetch;
 
-    const uninstall = installCarapaceFetchFirewall({
+    const uninstall = installDirectFetchFirewall({
       allow: (url) => url.protocol === "data:",
       beginActivity: () => {
         started += 1;
@@ -137,7 +137,7 @@ describe("Carapace fetch firewall", () => {
         return Promise.reject(new Error("reporter rejected"));
       },
     });
-    const first = installCarapaceFetchFirewall(firstOptions);
+    const first = installDirectFetchFirewall(firstOptions);
     expect((await fetch("https://example.com")).status).toBe(501);
     await Promise.resolve();
     expect(originalCalls).toBe(0);
@@ -147,7 +147,7 @@ describe("Carapace fetch firewall", () => {
     const asynchronousBegin = (() => Promise.reject(new Error("begin rejected"))) as unknown as (
       url: URL | null
     ) => () => void;
-    const second = installCarapaceFetchFirewall({
+    const second = installDirectFetchFirewall({
       allow: () => true,
       beginActivity: asynchronousBegin,
       originalFetch: () => {

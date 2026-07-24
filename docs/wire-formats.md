@@ -1,21 +1,21 @@
 # Wire formats
 
-Carapace wire values are exact, versioned JSON. Parse every value from `unknown`; reject unknown object keys rather than silently accepting a nearby format.
+Direct wire values are exact, versioned JSON. Parse every value from `unknown`; reject unknown object keys rather than silently accepting a nearby format.
 
 ## Reserved query keys
 
-- `__carapace_scenario=<id>` activates a scenario from the product catalog.
-- `__carapace_fixture=<encoded-json>` activates a portable fixture envelope.
+- `__direct_scenario=<id>` activates a scenario from the product catalog.
+- `__direct_fixture=<encoded-json>` activates a portable fixture envelope.
 
-Both keys may appear together only when they name the same scenario. Duplicate keys, malformed percent encoding, unknown `__carapace_*` keys, unknown scenarios, oversized queries, and mismatched routes fail closed. Other product query parameters are preserved and ignored by Carapace activation.
+Both keys may appear together only when they name the same scenario. Duplicate keys, malformed percent encoding, unknown `__direct_*` keys, unknown scenarios, oversized queries, and mismatched routes fail closed. Other product query parameters are preserved and ignored by Direct activation.
 
 ## Fixture envelope
 
-Schema: `carapace.fixture/v1`
+Schema: `direct.fixture/v1`
 
 ```json
 {
-  "schema": "carapace.fixture/v1",
+  "schema": "direct.fixture/v1",
   "scenario": "todos.populated",
   "route": "/",
   "world": {
@@ -24,7 +24,7 @@ Schema: `carapace.fixture/v1`
     "writeFailure": null
   },
   "runtime": {
-    "schema": "carapace.runtime/v1",
+    "schema": "direct.runtime/v1",
     "nowMs": 0,
     "nextOperation": 1,
     "acceleration": 100
@@ -36,13 +36,13 @@ The route is derived from the catalog when a fixture is created. Parsing require
 
 ## Logical runtime
 
-Schema: `carapace.runtime/v1`
+Schema: `direct.runtime/v1`
 
 The runtime snapshot records non-negative logical milliseconds, the next positive operation sequence, and an acceleration in the supported finite range. Logical waits advance in call order and do not advance after cancellation.
 
 ## Probe
 
-Schema: `carapace.probe/v1`
+Schema: `direct.probe/v1`
 
 A probe snapshot contains the activation hash, store generation and revision, conserved activity totals, product-named pending counters, product-named violation counters, JSON-safe remaining-work diagnostics, and derived quiescence.
 
@@ -50,9 +50,9 @@ Consumers must parse a snapshot before trusting it. The parser rejects unknown f
 
 ## Browser bridge
 
-Schema: `carapace.browser-bridge/v1`
+Schema: `direct.browser-bridge/v1`
 
-`installCarapaceBrowser({ session })` installs the canonical bridge as `window.__carapace`. It derives the validated probe and coverage snapshot from the session and exposes:
+`installDirectBrowser({ session })` installs the canonical bridge as `window.__direct`. It derives the validated probe and coverage snapshot from the session and exposes:
 
 - `snapshot()` for the current validated probe value;
 - `reset()` for the synchronous product-owned reset action; and
@@ -60,11 +60,11 @@ Schema: `carapace.browser-bridge/v1`
 
 The reset callback must complete synchronously and return `undefined`. If an asserted or hostile callback returns a thenable, the bridge contains its settlement and throws a controlled synchronous-completion error.
 
-The coverage value uses schema `carapace.coverage/v2` and has the exact shape:
+The coverage value uses schema `direct.coverage/v2` and has the exact shape:
 
 ```json
 {
-  "schema": "carapace.coverage/v2",
+  "schema": "direct.coverage/v2",
   "entries": [
     {
       "key": "todos.completion",

@@ -11,7 +11,7 @@ import { err, isRecord, ok, type Result } from "./result.js";
 import { parseLogicalRuntimeSnapshot, type LogicalRuntimeSnapshot } from "./runtime.js";
 import type { ScenarioCatalog } from "./scenario.js";
 
-export const FIXTURE_SCHEMA = "carapace.fixture/v1" as const;
+export const FIXTURE_SCHEMA = "direct.fixture/v1" as const;
 export const DEFAULT_MAX_FIXTURE_BYTES = 65_536;
 
 export interface FixtureEnvelope<World extends JsonValue, Route extends string> {

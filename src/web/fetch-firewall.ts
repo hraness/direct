@@ -1,4 +1,4 @@
-export interface CarapaceFetchFirewallOptions {
+export interface DirectFetchFirewallOptions {
   readonly allow?: (url: URL) => boolean;
   readonly beginActivity?: (url: URL | null) => () => void;
   readonly onBlocked?: (url: URL | null) => void;
@@ -7,19 +7,19 @@ export interface CarapaceFetchFirewallOptions {
 
 type FetchCall = (...arguments_: Parameters<typeof fetch>) => ReturnType<typeof fetch>;
 
-export type CarapaceFetchFirewallUninstall = () => undefined;
+export type DirectFetchFirewallUninstall = () => undefined;
 
-export interface PreparedCarapaceFetchFirewallInstallation {
+export interface PreparedDirectFetchFirewallInstallation {
   readonly commit: () => undefined;
   readonly rollback: () => undefined;
-  readonly uninstall: CarapaceFetchFirewallUninstall;
+  readonly uninstall: DirectFetchFirewallUninstall;
 }
 
 interface ActiveFetchFirewallInstallation {
   readonly guardedFetch: typeof fetch;
   readonly restoreFetch: typeof fetch;
-  readonly deactivate: CarapaceFetchFirewallUninstall;
-  readonly uninstall: CarapaceFetchFirewallUninstall;
+  readonly deactivate: DirectFetchFirewallUninstall;
+  readonly uninstall: DirectFetchFirewallUninstall;
 }
 
 interface ActivityBoundary {
@@ -52,7 +52,7 @@ function requestUrl(input: unknown): URL | null {
     const browserGlobal = globalThis as typeof globalThis & { readonly location?: { readonly origin?: string } };
     const locationOrigin = browserGlobal.location?.origin;
     const base = locationOrigin === undefined || locationOrigin === "null"
-      ? "http://carapace.invalid"
+      ? "http://direct.invalid"
       : locationOrigin;
     return new URL(String(input), base);
   } catch {
@@ -62,7 +62,7 @@ function requestUrl(input: unknown): URL | null {
 
 function blockedResponse(): Response {
   return new Response(
-    JSON.stringify({ error: "Carapace blocked an unmapped network request." }),
+    JSON.stringify({ error: "Direct blocked an unmapped network request." }),
     { status: 501, headers: { "content-type": "application/json" } },
   );
 }
@@ -128,9 +128,9 @@ function notifyBlocked(
 }
 
 /** Prepare a reversible replacement without deactivating the current owner. */
-export function prepareCarapaceFetchFirewallInstallation(
-  options: CarapaceFetchFirewallOptions = {},
-): PreparedCarapaceFetchFirewallInstallation {
+export function prepareDirectFetchFirewallInstallation(
+  options: DirectFetchFirewallOptions = {},
+): PreparedDirectFetchFirewallInstallation {
   const previousInstallation = activeFirewallInstallation;
   const currentFetch = globalThis.fetch;
   const previousOwnsCurrent = previousInstallation?.guardedFetch === currentFetch;
@@ -145,7 +145,7 @@ export function prepareCarapaceFetchFirewallInstallation(
   const onBlocked = options.onBlocked;
   const originalFetch: FetchCall = options.originalFetch ?? restoreFetch;
   if (typeof originalFetch !== "function") {
-    throw new TypeError("Carapace fetch firewall requires a callable fetch implementation");
+    throw new TypeError("Direct fetch firewall requires a callable fetch implementation");
   }
 
   const guardedCall: FetchCall = async (input, init) => {
@@ -188,7 +188,7 @@ export function prepareCarapaceFetchFirewallInstallation(
   try {
     globalThis.fetch = guardedFetch;
     if (globalThis.fetch !== guardedFetch) {
-      throw new TypeError("Carapace fetch firewall could not replace global fetch");
+      throw new TypeError("Direct fetch firewall could not replace global fetch");
     }
   } catch (reason) {
     try {
@@ -241,11 +241,11 @@ export function prepareCarapaceFetchFirewallInstallation(
   });
 }
 
-/** Install one process-local, fail-closed fetch boundary for a browser Carapace frame. */
-export function installCarapaceFetchFirewall(
-  options: CarapaceFetchFirewallOptions = {},
-): CarapaceFetchFirewallUninstall {
-  const prepared = prepareCarapaceFetchFirewallInstallation(options);
+/** Install one process-local, fail-closed fetch boundary for a browser Direct frame. */
+export function installDirectFetchFirewall(
+  options: DirectFetchFirewallOptions = {},
+): DirectFetchFirewallUninstall {
+  const prepared = prepareDirectFetchFirewallInstallation(options);
   prepared.commit();
   return prepared.uninstall;
 }

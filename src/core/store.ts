@@ -13,7 +13,7 @@ export interface ActivitySnapshot {
   readonly settled: number;
 }
 
-export interface CarapaceStoreSnapshot<World extends JsonValue> {
+export interface DirectStoreSnapshot<World extends JsonValue> {
   readonly generation: StoreGeneration;
   readonly revision: number;
   readonly world: World;
@@ -39,18 +39,18 @@ export interface StoreError {
 export interface TypedActivityLease<World extends JsonValue> {
   readonly generation: StoreGeneration;
   readonly operation: OperationId;
-  readonly settle: () => Result<CarapaceStoreSnapshot<World>, StoreError>;
+  readonly settle: () => Result<DirectStoreSnapshot<World>, StoreError>;
 }
 
-export interface CarapaceStore<World extends JsonValue> {
-  readonly getSnapshot: () => CarapaceStoreSnapshot<World>;
+export interface DirectStore<World extends JsonValue> {
+  readonly getSnapshot: () => DirectStoreSnapshot<World>;
   readonly subscribe: (listener: () => void | PromiseLike<void>) => () => void;
   readonly transact: (
     generation: StoreGeneration,
     operation: OperationId,
     update: (draft: World) => World | void,
-  ) => Result<CarapaceStoreSnapshot<World>, StoreError>;
-  readonly reset: (world: World) => Result<CarapaceStoreSnapshot<World>, StoreError>;
+  ) => Result<DirectStoreSnapshot<World>, StoreError>;
+  readonly reset: (world: World) => Result<DirectStoreSnapshot<World>, StoreError>;
   readonly beginActivity: (
     generation: StoreGeneration,
     operation: OperationId,
@@ -58,14 +58,14 @@ export interface CarapaceStore<World extends JsonValue> {
   readonly settleActivity: (
     generation: StoreGeneration,
     operation: OperationId,
-  ) => Result<CarapaceStoreSnapshot<World>, StoreError>;
+  ) => Result<DirectStoreSnapshot<World>, StoreError>;
   readonly isQuiescent: (generation: StoreGeneration) => Result<boolean, StoreError>;
   readonly whenQuiescent: (
     generation: StoreGeneration,
-  ) => Promise<Result<CarapaceStoreSnapshot<World>, StoreError>>;
+  ) => Promise<Result<DirectStoreSnapshot<World>, StoreError>>;
 }
 
-export interface CarapaceStoreOptions {
+export interface DirectStoreOptions {
   /** Listener failures are isolated from committed state and reported here. */
   readonly onListenerError?: (reason: unknown) => void;
 }
@@ -87,7 +87,7 @@ function storeSnapshot<World extends JsonValue>(
   revision: number,
   world: World,
   currentActivity: ActivitySnapshot,
-): CarapaceStoreSnapshot<World> {
+): DirectStoreSnapshot<World> {
   return Object.freeze({ generation: currentGeneration, revision, world, activity: currentActivity });
 }
 
@@ -97,11 +97,11 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   ) && typeof Reflect.get(value, "then") === "function";
 }
 
-export function createCarapaceStore<World extends JsonValue>(
+export function createDirectStore<World extends JsonValue>(
   initialWorld: World,
   parseWorld: WorldParser<World>,
-  options: CarapaceStoreOptions = {},
-): Result<CarapaceStore<World>, StoreError> {
+  options: DirectStoreOptions = {},
+): Result<DirectStore<World>, StoreError> {
   const initial = parseAndCloneWorld(initialWorld, parseWorld);
   if (!initial.ok) {
     return err(storeError("invalid-world", initial.error.message));
@@ -127,7 +127,7 @@ export function createCarapaceStore<World extends JsonValue>(
     }
   };
 
-  const publish = (world: World = snapshot.world): CarapaceStoreSnapshot<World> => {
+  const publish = (world: World = snapshot.world): DirectStoreSnapshot<World> => {
     revision += 1;
     const committed = storeSnapshot(currentGeneration, revision, world, currentActivity);
     snapshot = committed;
@@ -164,7 +164,7 @@ export function createCarapaceStore<World extends JsonValue>(
   const settleActivity = (
     expected: StoreGeneration,
     candidate: OperationId,
-  ): Result<CarapaceStoreSnapshot<World>, StoreError> => {
+  ): Result<DirectStoreSnapshot<World>, StoreError> => {
     const operation = validateOperation(candidate);
     if (!operation.ok) {
       return operation;
@@ -184,7 +184,7 @@ export function createCarapaceStore<World extends JsonValue>(
     return ok(publish());
   };
 
-  const store: CarapaceStore<World> = {
+  const store: DirectStore<World> = {
     getSnapshot: () => snapshot,
     subscribe: (listener: () => void | PromiseLike<void>) => {
       listeners.add(listener);

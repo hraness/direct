@@ -1,16 +1,16 @@
 import { describe, expect, test } from "bun:test";
 
-import { defineCarapace } from "../core/definition.js";
+import { defineDirect } from "../core/definition.js";
 import { SCENARIO_QUERY_KEY } from "../core/query.js";
 import { parseTestWorld } from "../core/test-support.js";
 import {
-  createCarapaceSession,
-  type CarapaceSessionCleanup,
-  type CarapaceSessionObservation,
+  createDirectSession,
+  type DirectSessionCleanup,
+  type DirectSessionObservation,
 } from "./session.js";
 
 function definition() {
-  return defineCarapace({
+  return defineDirect({
     parseWorld: parseTestWorld,
     defaultScenario: "chat.empty",
     scenarios: [{
@@ -23,11 +23,11 @@ function definition() {
   });
 }
 
-describe("Carapace session", () => {
+describe("Direct session", () => {
   test("owns activation, clock, activity, harness observation, and teardown", () => {
     const cleanup: string[] = [];
     let pending = 1;
-    const created = createCarapaceSession({
+    const created = createDirectSession({
       definition: definition(),
       activation: { kind: "query", source: "" },
       create: (context) => {
@@ -45,7 +45,7 @@ describe("Carapace session", () => {
     expect(String(created.value.activation.scenario)).toBe("chat.empty");
     expect(created.value.clock.now()).toBe(0);
     expect(created.value.harness).toEqual({ count: 0 });
-    expect(created.value.coverage).toEqual({ schema: "carapace.coverage/v2", entries: [] });
+    expect(created.value.coverage).toEqual({ schema: "direct.coverage/v2", entries: [] });
     expect(created.value.probe.isQuiescent()).toEqual({ ok: true, value: false });
     pending = 0;
     expect(created.value.probe.snapshot()).toMatchObject({
@@ -63,7 +63,7 @@ describe("Carapace session", () => {
 
   test("does not construct a harness after invalid activation", () => {
     let constructions = 0;
-    const created = createCarapaceSession({
+    const created = createDirectSession({
       definition: definition(),
       activation: { kind: "query", source: `?${SCENARIO_QUERY_KEY}=missing` },
       create: () => {
@@ -84,7 +84,7 @@ describe("Carapace session", () => {
       },
     };
     let mutateDuringParse = false;
-    const customDefinition = defineCarapace({
+    const customDefinition = defineDirect({
       parseWorld: (input) => {
         if (mutateDuringParse) {
           storeOptions.onListenerError = () => {
@@ -103,7 +103,7 @@ describe("Carapace session", () => {
       coverage: [],
     });
     mutateDuringParse = true;
-    const created = createCarapaceSession({
+    const created = createDirectSession({
       definition: customDefinition,
       activation: { kind: "scenario", scenario: "chat.empty" },
       storeOptions,
@@ -127,7 +127,7 @@ describe("Carapace session", () => {
         throw new Error("session option getter failed");
       },
     });
-    expect(createCarapaceSession(hostileOptions as never)).toMatchObject({
+    expect(createDirectSession(hostileOptions as never)).toMatchObject({
       ok: false,
       error: { code: "invalid-options", message: "session option getter failed" },
     });
@@ -139,9 +139,9 @@ describe("Carapace session", () => {
       activation: unsupportedActivation,
       create: () => ({}),
     };
-    expect(createCarapaceSession(invalidActivationOptions as never)).toMatchObject({
+    expect(createDirectSession(invalidActivationOptions as never)).toMatchObject({
       ok: false,
-      error: { code: "invalid-options", message: "Carapace session activation kind must be query or scenario" },
+      error: { code: "invalid-options", message: "Direct session activation kind must be query or scenario" },
     });
   });
 
@@ -152,7 +152,7 @@ describe("Carapace session", () => {
         throw new Error("structural activation failed");
       },
     };
-    expect(createCarapaceSession({
+    expect(createDirectSession({
       definition: throwingDefinition,
       activation: { kind: "scenario", scenario: "chat.empty" },
       create: () => ({}),
@@ -169,7 +169,7 @@ describe("Carapace session", () => {
         },
       }),
     };
-    expect(createCarapaceSession({
+    expect(createDirectSession({
       definition: hostileResultDefinition as never,
       activation: { kind: "query", source: "" },
       create: () => ({}),
@@ -182,7 +182,7 @@ describe("Carapace session", () => {
   test("aborts and unwinds registered cleanup when harness construction fails", () => {
     const cleanup: string[] = [];
     let aborted = false;
-    const created = createCarapaceSession({
+    const created = createDirectSession({
       definition: definition(),
       activation: { kind: "scenario", scenario: "chat.empty" },
       create: (context) => {
@@ -203,8 +203,8 @@ describe("Carapace session", () => {
   test("turns hostile observation values into Results and always unwinds construction", () => {
     const revoked = Proxy.revocable({}, {});
     revoked.revoke();
-    const cases: readonly [label: string, observe: () => CarapaceSessionObservation][] = [
-      ["null", () => null as unknown as CarapaceSessionObservation],
+    const cases: readonly [label: string, observe: () => DirectSessionObservation][] = [
+      ["null", () => null as unknown as DirectSessionObservation],
       ["revoked proxy", () => revoked.proxy],
       ["throwing accessor", () => Object.defineProperty({}, "pending", {
         get: () => {
@@ -215,7 +215,7 @@ describe("Carapace session", () => {
 
     for (const [label, observe] of cases) {
       const lifecycle = { aborted: false, cleanups: 0 };
-      const created = createCarapaceSession({
+      const created = createDirectSession({
         definition: definition(),
         activation: { kind: "scenario", scenario: "chat.empty" },
         create: (context) => {
@@ -240,7 +240,7 @@ describe("Carapace session", () => {
 
   test("unwinds construction when observation counters cannot form a probe", () => {
     const lifecycle = { aborted: false, cleanups: 0 };
-    const created = createCarapaceSession({
+    const created = createDirectSession({
       definition: definition(),
       activation: { kind: "scenario", scenario: "chat.empty" },
       create: (context) => {
@@ -263,7 +263,7 @@ describe("Carapace session", () => {
 
   test("records cleanup failures while still running every callback", () => {
     const cleanup: string[] = [];
-    const created = createCarapaceSession({
+    const created = createDirectSession({
       definition: definition(),
       activation: { kind: "query", source: "" },
       create: (context) => {
@@ -281,7 +281,7 @@ describe("Carapace session", () => {
 
   test("accepts post-construction cleanup until disposal and then fails closed", () => {
     const cleanup: string[] = [];
-    const created = createCarapaceSession({
+    const created = createDirectSession({
       definition: definition(),
       activation: { kind: "scenario", scenario: "chat.empty" },
       create: () => ({}),
@@ -306,7 +306,7 @@ describe("Carapace session", () => {
 
   test("fences session-owned activity before reentrant cleanup and after disposal", () => {
     const duringCleanup: unknown[] = [];
-    const created = createCarapaceSession({
+    const created = createDirectSession({
       definition: definition(),
       activation: { kind: "scenario", scenario: "chat.empty" },
       create: (context) => {
@@ -328,7 +328,7 @@ describe("Carapace session", () => {
       ok: false,
       error: {
         code: "scope-closed",
-        message: "The Carapace activity scope is closed",
+        message: "The Direct activity scope is closed",
         operation: null,
         storeError: null,
         reason: null,
@@ -343,7 +343,7 @@ describe("Carapace session", () => {
   });
 
   test("supports programmatic scenario activation without an observation adapter", () => {
-    const created = createCarapaceSession({
+    const created = createDirectSession({
       definition: definition(),
       activation: { kind: "scenario", scenario: "chat.empty" },
       create: (context) => ({ route: context.activation.route }),
@@ -358,7 +358,7 @@ describe("Carapace session", () => {
   });
 
   test("fails closed on asynchronous construction and reports asynchronous cleanup", () => {
-    const product = createCarapaceSession({
+    const product = createDirectSession({
       definition: definition(),
       activation: { kind: "scenario", scenario: "chat.empty" },
       create: () => Promise.resolve({}),
@@ -367,36 +367,36 @@ describe("Carapace session", () => {
       ok: false,
       error: {
         code: "harness-failed",
-        message: "Carapace harness construction must complete synchronously",
+        message: "Direct harness construction must complete synchronously",
       },
     });
 
-    const observation = createCarapaceSession({
+    const observation = createDirectSession({
       definition: definition(),
       activation: { kind: "scenario", scenario: "chat.empty" },
       create: () => ({}),
-      observe: (() => Promise.resolve({})) as unknown as () => CarapaceSessionObservation,
+      observe: (() => Promise.resolve({})) as unknown as () => DirectSessionObservation,
     });
     expect(observation).toMatchObject({
       ok: false,
       error: {
         code: "observation-failed",
-        message: "Carapace observation construction must complete synchronously",
+        message: "Direct observation construction must complete synchronously",
       },
     });
 
-    const cleanup = createCarapaceSession({
+    const cleanup = createDirectSession({
       definition: definition(),
       activation: { kind: "scenario", scenario: "chat.empty" },
       create: (context) => {
-        context.onDispose((() => Promise.resolve()) as unknown as CarapaceSessionCleanup);
+        context.onDispose((() => Promise.resolve()) as unknown as DirectSessionCleanup);
         return {};
       },
     });
     if (!cleanup.ok) throw new Error(cleanup.error.message);
     cleanup.value.dispose();
     expect(cleanup.value.disposalErrors()).toEqual([
-      "Carapace cleanup must complete synchronously and return undefined",
+      "Direct cleanup must complete synchronously and return undefined",
     ]);
   });
 });

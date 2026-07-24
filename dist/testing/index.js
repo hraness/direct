@@ -1,16 +1,16 @@
 import {
-  createCarapaceStore
-} from "../index-mmcdjksg.js";
+  createDirectStore
+} from "../index-x5hgch7b.js";
 import {
   createLogicalRuntime,
   parseLogicalRuntimeSnapshot
-} from "../index-2mb8zsze.js";
+} from "../index-wqwbtetw.js";
 import {
-  CARAPACE_PROBE_SCHEMA,
-  MAX_CARAPACE_PROBE_COUNTERS,
-  createCarapaceProbe,
-  parseCarapaceProbeSnapshot
-} from "../index-v9j3cdd6.js";
+  DIRECT_PROBE_SCHEMA,
+  MAX_DIRECT_PROBE_COUNTERS,
+  createDirectProbe,
+  parseDirectProbeSnapshot
+} from "../index-s10kw9hv.js";
 import {
   canonicalJson,
   createCoverageCatalogSnapshot,
@@ -21,11 +21,11 @@ import {
   parseCoverageCatalogSnapshot,
   parseJsonValue,
   renderUnknownReason
-} from "../index-xpkabpf3.js";
+} from "../index-541zzq54.js";
 
 // src/testing/activity.ts
 function storeErrorMessage(cause) {
-  return renderUnknownReason(cause, "Carapace store operation failed");
+  return renderUnknownReason(cause, "Direct store operation failed");
 }
 function operationError(reason) {
   return Object.freeze({
@@ -39,7 +39,7 @@ function operationError(reason) {
 function closedScopeError() {
   return Object.freeze({
     code: "scope-closed",
-    message: "The Carapace activity scope is closed",
+    message: "The Direct activity scope is closed",
     operation: null,
     storeError: null,
     reason: null
@@ -54,7 +54,7 @@ function storeError(code, operation, cause) {
     reason: null
   });
 }
-function createCarapaceActivityScope(store, runtime, options = {}) {
+function createDirectActivityScope(store, runtime, options = {}) {
   const signal = options.signal;
   const isClosed = () => signal?.aborted === true;
   const begin = (namespace = "activity") => {
@@ -167,14 +167,14 @@ function parseExpectedCoverageCatalogSnapshot(input, expected) {
     })) {
       return err(Object.freeze({
         code: "coverage-mismatch",
-        message: "Published Carapace coverage does not exactly match the authored definition",
+        message: "Published Direct coverage does not exactly match the authored definition",
         coverageError: null
       }));
     }
   } catch (reason) {
     return err(Object.freeze({
       code: "invalid-definition",
-      message: renderUnknownReason(reason, "Expected Carapace coverage could not be inspected"),
+      message: renderUnknownReason(reason, "Expected Direct coverage could not be inspected"),
       coverageError: null
     }));
   }
@@ -187,7 +187,7 @@ function parseDefinitionCoverageSnapshot(input, definition) {
   } catch (reason) {
     return err(Object.freeze({
       code: "invalid-definition",
-      message: renderUnknownReason(reason, "Carapace definition coverage could not be inspected"),
+      message: renderUnknownReason(reason, "Direct definition coverage could not be inspected"),
       coverageError: null
     }));
   }
@@ -228,19 +228,19 @@ function freezeCounterSources(sources) {
 function prepareSessionObservation(input) {
   const candidate = input;
   if (!isRecord(candidate)) {
-    throw new Error("Carapace observation must be an object");
+    throw new Error("Direct observation must be an object");
   }
   const pending = input.pending;
   const violations = input.violations;
   const readRemainingWork = input.readRemainingWork;
   if (pending !== undefined && !Array.isArray(pending)) {
-    throw new Error("Carapace observation pending counters must be an array");
+    throw new Error("Direct observation pending counters must be an array");
   }
   if (violations !== undefined && !Array.isArray(violations)) {
-    throw new Error("Carapace observation violation counters must be an array");
+    throw new Error("Direct observation violation counters must be an array");
   }
   if (readRemainingWork !== undefined && typeof readRemainingWork !== "function") {
-    throw new Error("Carapace observation remaining-work reader must be a function");
+    throw new Error("Direct observation remaining-work reader must be a function");
   }
   return Object.freeze({
     ...pending === undefined ? {} : { pending: freezeCounterSources(pending) },
@@ -276,10 +276,10 @@ function runCleanup(controller, cleanups) {
             return;
           });
         }
-        failures.push("Carapace cleanup must complete synchronously and return undefined");
+        failures.push("Direct cleanup must complete synchronously and return undefined");
       }
     } catch (reason) {
-      failures.push(renderUnknownReason(reason, "Carapace cleanup failed"));
+      failures.push(renderUnknownReason(reason, "Direct cleanup failed"));
     }
   }
   return frozenMessages(failures);
@@ -292,7 +292,7 @@ function activateSession(definition, activation) {
       return definition.activateScenario(activation.scenario);
   }
 }
-function createCarapaceSession(options) {
+function createDirectSession(options) {
   let definition;
   let requestedActivation;
   let createHarness;
@@ -311,7 +311,7 @@ function createCarapaceSession(options) {
     } else if (activationInput.kind === "scenario") {
       requestedActivation = Object.freeze({ kind: "scenario", scenario: activationInput.scenario });
     } else {
-      throw new Error("Carapace session activation kind must be query or scenario");
+      throw new Error("Direct session activation kind must be query or scenario");
     }
     createHarness = options.create;
     observeHarness = options.observe;
@@ -328,7 +328,7 @@ function createCarapaceSession(options) {
   } catch (reason) {
     return err(sessionError({
       code: "invalid-options",
-      message: renderUnknownReason(reason, "Carapace session options could not be inspected"),
+      message: renderUnknownReason(reason, "Direct session options could not be inspected"),
       queryError: null,
       storeError: null,
       probeError: null
@@ -357,18 +357,18 @@ function createCarapaceSession(options) {
     }
     const candidate = activated.value;
     if (candidate.kind !== "active")
-      throw new Error("Carapace activation kind must be active");
+      throw new Error("Direct activation kind must be active");
     if (candidate.source !== "scenario" && candidate.source !== "fixture") {
-      throw new Error("Carapace activation source must be scenario or fixture");
+      throw new Error("Direct activation source must be scenario or fixture");
     }
     if (typeof candidate.scenario !== "string") {
-      throw new Error("Carapace activation scenario must be a string");
+      throw new Error("Direct activation scenario must be a string");
     }
     if (typeof candidate.route !== "string") {
-      throw new Error("Carapace activation route must be a string");
+      throw new Error("Direct activation route must be a string");
     }
     if (typeof candidate.activationHash !== "string" || candidate.activationHash.length === 0) {
-      throw new Error("Carapace activation hash must be a non-empty string");
+      throw new Error("Direct activation hash must be a non-empty string");
     }
     const parsedRuntime = parseLogicalRuntimeSnapshot(candidate.runtime);
     if (!parsedRuntime.ok)
@@ -382,13 +382,13 @@ function createCarapaceSession(options) {
   } catch (reason) {
     return err(sessionError({
       code: "invalid-options",
-      message: renderUnknownReason(reason, "Carapace session activation failed unexpectedly"),
+      message: renderUnknownReason(reason, "Direct session activation failed unexpectedly"),
       queryError: null,
       storeError: null,
       probeError: null
     }));
   }
-  const store = storeOptions === undefined ? createCarapaceStore(activationWorld, parseWorld) : createCarapaceStore(activationWorld, parseWorld, storeOptions);
+  const store = storeOptions === undefined ? createDirectStore(activationWorld, parseWorld) : createDirectStore(activationWorld, parseWorld, storeOptions);
   if (!store.ok) {
     return err(sessionError({
       code: "store-failed",
@@ -409,7 +409,7 @@ function createCarapaceSession(options) {
     activationHash
   });
   const controller = new AbortController;
-  const activity = createCarapaceActivityScope(store.value, clock, { signal: controller.signal });
+  const activity = createDirectActivityScope(store.value, clock, { signal: controller.signal });
   const cleanups = [];
   let registrationOpen = true;
   const context = Object.freeze({
@@ -421,7 +421,7 @@ function createCarapaceSession(options) {
     signal: controller.signal,
     onDispose: (cleanup) => {
       if (!registrationOpen) {
-        throw new Error("Carapace cleanup must be registered during synchronous session construction");
+        throw new Error("Direct cleanup must be registered during synchronous session construction");
       }
       cleanups.push(cleanup);
       return;
@@ -434,14 +434,14 @@ function createCarapaceSession(options) {
       Promise.resolve(harness).catch(() => {
         return;
       });
-      throw new Error("Carapace harness construction must complete synchronously");
+      throw new Error("Direct harness construction must complete synchronously");
     }
   } catch (reason) {
     registrationOpen = false;
     const cleanupErrors = runCleanup(controller, cleanups);
     return err(sessionError({
       code: "harness-failed",
-      message: renderUnknownReason(reason, "Carapace harness construction failed"),
+      message: renderUnknownReason(reason, "Direct harness construction failed"),
       queryError: null,
       storeError: null,
       probeError: null
@@ -454,7 +454,7 @@ function createCarapaceSession(options) {
       Promise.resolve(observed).catch(() => {
         return;
       });
-      throw new Error("Carapace observation construction must complete synchronously");
+      throw new Error("Direct observation construction must complete synchronously");
     }
     observation = prepareSessionObservation(observed);
   } catch (reason) {
@@ -462,14 +462,14 @@ function createCarapaceSession(options) {
     const cleanupErrors = runCleanup(controller, cleanups);
     return err(sessionError({
       code: "observation-failed",
-      message: renderUnknownReason(reason, "Carapace observation construction failed"),
+      message: renderUnknownReason(reason, "Direct observation construction failed"),
       queryError: null,
       storeError: null,
       probeError: null
     }, cleanupErrors));
   }
   registrationOpen = false;
-  const probe = createCarapaceProbe({
+  const probe = createDirectProbe({
     store: store.value,
     activationHash: activation.activationHash,
     ...observation.pending === undefined ? {} : { pending: observation.pending },
@@ -492,13 +492,13 @@ function createCarapaceSession(options) {
     if (typeof cleanup !== "function") {
       return err(Object.freeze({
         code: "invalid-cleanup",
-        message: "Carapace cleanup must be a function"
+        message: "Direct cleanup must be a function"
       }));
     }
     if (disposed) {
       return err(Object.freeze({
         code: "session-disposed",
-        message: "Cannot register cleanup on a disposed Carapace session"
+        message: "Cannot register cleanup on a disposed Direct session"
       }));
     }
     cleanups.push(cleanup);
@@ -1036,15 +1036,15 @@ function parseCoverageCatalogSnapshot2(input) {
 }
 export {
   parseExpectedCoverageCatalogSnapshot,
+  parseDirectProbeSnapshot,
   parseDefinitionCoverageSnapshot,
   parseCoverageCatalogSnapshot2 as parseCoverageCatalogSnapshot,
-  parseCarapaceProbeSnapshot,
   createExactScriptedTransport,
-  createCarapaceSession,
-  createCarapaceProbe,
-  createCarapaceActivityScope,
+  createDirectSession,
+  createDirectProbe,
+  createDirectActivityScope,
   classifyCoverageEvidence,
-  MAX_CARAPACE_PROBE_COUNTERS,
-  DEFAULT_SCRIPTED_TRANSPORT_LIMITS,
-  CARAPACE_PROBE_SCHEMA
+  MAX_DIRECT_PROBE_COUNTERS,
+  DIRECT_PROBE_SCHEMA,
+  DEFAULT_SCRIPTED_TRANSPORT_LIMITS
 };

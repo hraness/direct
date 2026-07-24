@@ -11,19 +11,19 @@
     "moduleResolution": "Bundler",
     "moduleDetection": "force",
     "paths": {
-      "@cclrte/carapace": [
+      "@cclrte/direct": [
         "./src/index.ts"
       ],
-      "@cclrte/carapace/core": [
+      "@cclrte/direct/core": [
         "./src/core/index.ts"
       ],
-      "@cclrte/carapace/react": [
+      "@cclrte/direct/react": [
         "./src/react.ts"
       ],
-      "@cclrte/carapace/testing": [
+      "@cclrte/direct/testing": [
         "./src/testing/index.ts"
       ],
-      "@cclrte/carapace/web": [
+      "@cclrte/direct/web": [
         "./src/web.ts"
       ]
     },

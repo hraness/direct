@@ -1,20 +1,20 @@
 import {
   DEFAULT_MAX_FIXTURE_BYTES,
   DEFAULT_MAX_QUERY_BYTES,
-  activateCarapaceScenario,
+  activateDirectScenario,
   createFixtureEnvelope,
   createScenarioCatalog,
   maximumFixtureQueryBytes,
-  parseCarapaceQuery,
+  parseDirectQuery,
   parseFixtureEnvelope,
   parseFixtureJson,
   serializeFixtureJson
-} from "./index-tvvxm1nf.js";
+} from "./index-zg34h2bx.js";
 import {
   parseLogicalRuntimeSnapshot
-} from "./index-2mb8zsze.js";
+} from "./index-wqwbtetw.js";
 import {
-  CARAPACE_COVERAGE_SCHEMA,
+  DIRECT_COVERAGE_SCHEMA,
   createCoverageCatalog,
   err,
   isRecord,
@@ -22,7 +22,7 @@ import {
   parseCoverageCatalogSnapshot,
   parseJsonValue,
   renderUnknownReason
-} from "./index-xpkabpf3.js";
+} from "./index-541zzq54.js";
 
 // src/core/definition.ts
 function definitionError(code, message, causes = {}) {
@@ -48,9 +48,9 @@ function activeFromParsed(parsed) {
     return parsed;
   if (parsed.value.kind === "active")
     return ok(parsed.value);
-  return err({ code: "invalid-scenario", message: "Carapace activation did not select a scenario" });
+  return err({ code: "invalid-scenario", message: "Direct activation did not select a scenario" });
 }
-function tryDefineCarapaceUnchecked(input) {
+function tryDefineDirectUnchecked(input) {
   const parseWorld = input.parseWorld;
   const defaultScenarioInput = input.defaultScenario;
   const scenarioInputs = input.scenarios;
@@ -58,11 +58,11 @@ function tryDefineCarapaceUnchecked(input) {
   const maxFixtureBytes = input.maxFixtureBytes ?? DEFAULT_MAX_FIXTURE_BYTES;
   const maxQueryBytes = input.maxQueryBytes ?? DEFAULT_MAX_QUERY_BYTES;
   if (!validPositiveLimit(maxFixtureBytes) || !validPositiveLimit(maxQueryBytes)) {
-    return err(definitionError("invalid-limits", "Carapace query and fixture limits must be positive safe integers"));
+    return err(definitionError("invalid-limits", "Direct query and fixture limits must be positive safe integers"));
   }
   const requiredQueryBytes = maximumFixtureQueryBytes(maxFixtureBytes);
   if (!Number.isSafeInteger(requiredQueryBytes) || maxQueryBytes < requiredQueryBytes) {
-    return err(definitionError("invalid-limits", `Carapace maxQueryBytes must be at least ${String(requiredQueryBytes)} to carry every bounded fixture`));
+    return err(definitionError("invalid-limits", `Direct maxQueryBytes must be at least ${String(requiredQueryBytes)} to carry every bounded fixture`));
   }
   const scenarios = createScenarioCatalog(scenarioInputs, parseWorld);
   if (!scenarios.ok) {
@@ -92,9 +92,9 @@ function tryDefineCarapaceUnchecked(input) {
     ...fixtureOptions,
     maxQueryBytes
   });
-  const activateScenario = (scenario) => activateCarapaceScenario(scenario, scenarios.value);
+  const activateScenario = (scenario) => activateDirectScenario(scenario, scenarios.value);
   const activate = (source) => {
-    const parsed = parseCarapaceQuery(source, queryOptions);
+    const parsed = parseDirectQuery(source, queryOptions);
     if (!parsed.ok || parsed.value.kind === "active")
       return activeFromParsed(parsed);
     return activateScenario(defaultScenario.value.id);
@@ -113,11 +113,11 @@ function tryDefineCarapaceUnchecked(input) {
     serializeFixture: (fixture) => serializeFixtureJson(fixture, fixtureOptions)
   }));
 }
-function tryDefineCarapace(input) {
+function tryDefineDirect(input) {
   try {
-    return tryDefineCarapaceUnchecked(input);
+    return tryDefineDirectUnchecked(input);
   } catch (reason) {
-    return err(definitionError("invalid-options", renderUnknownReason(reason, "Carapace definition options could not be inspected")));
+    return err(definitionError("invalid-options", renderUnknownReason(reason, "Direct definition options could not be inspected")));
   }
 }
 var DEFINITION_INPUT_KEYS = new Set([
@@ -136,17 +136,17 @@ var SCENARIO_INPUT_KEYS = new Set([
   "title",
   "world"
 ]);
-function parseCarapaceDefinition(input) {
+function parseDirectDefinition(input) {
   try {
     if (!isRecord(input))
-      throw new Error("Carapace definition must be an object");
+      throw new Error("Direct definition must be an object");
     for (const key of Object.keys(input)) {
       if (!DEFINITION_INPUT_KEYS.has(key))
-        throw new Error(`Unknown Carapace definition key: ${key}`);
+        throw new Error(`Unknown Direct definition key: ${key}`);
     }
     const rawParser = input.parseWorld;
     if (typeof rawParser !== "function")
-      throw new Error("Carapace parseWorld must be a function");
+      throw new Error("Direct parseWorld must be a function");
     const parseWorld = (candidate) => {
       const parsedCandidate = Reflect.apply(rawParser, undefined, [candidate]);
       const parsedJson = parseJsonValue(parsedCandidate);
@@ -155,28 +155,28 @@ function parseCarapaceDefinition(input) {
       return parsedJson.value;
     };
     if (typeof input.defaultScenario !== "string") {
-      throw new Error("Carapace defaultScenario must be a string");
+      throw new Error("Direct defaultScenario must be a string");
     }
     if (!Array.isArray(input.scenarios))
-      throw new Error("Carapace scenarios must be an array");
+      throw new Error("Direct scenarios must be an array");
     const scenarios = [];
     for (const [index, candidate] of input.scenarios.entries()) {
       if (!isRecord(candidate))
-        throw new Error(`Carapace scenario ${String(index)} must be an object`);
+        throw new Error(`Direct scenario ${String(index)} must be an object`);
       for (const key of Object.keys(candidate)) {
         if (!SCENARIO_INPUT_KEYS.has(key)) {
-          throw new Error(`Unknown Carapace scenario key at ${String(index)}: ${key}`);
+          throw new Error(`Unknown Direct scenario key at ${String(index)}: ${key}`);
         }
       }
       if (typeof candidate.id !== "string" || typeof candidate.title !== "string" || typeof candidate.route !== "string" || candidate.description !== undefined && typeof candidate.description !== "string") {
-        throw new Error(`Carapace scenario ${String(index)} has an invalid shape`);
+        throw new Error(`Direct scenario ${String(index)} has an invalid shape`);
       }
       const world = parseJsonValue(candidate.world);
       if (!world.ok)
-        throw new Error(`Carapace scenario ${String(index)} world is invalid: ${world.error.message}`);
+        throw new Error(`Direct scenario ${String(index)} world is invalid: ${world.error.message}`);
       const runtime = candidate.runtime === undefined ? undefined : parseLogicalRuntimeSnapshot(candidate.runtime);
       if (runtime !== undefined && !runtime.ok) {
-        throw new Error(`Carapace scenario ${String(index)} runtime is invalid: ${runtime.error.message}`);
+        throw new Error(`Direct scenario ${String(index)} runtime is invalid: ${runtime.error.message}`);
       }
       scenarios.push({
         id: candidate.id,
@@ -188,7 +188,7 @@ function parseCarapaceDefinition(input) {
       });
     }
     const coverage = parseCoverageCatalogSnapshot({
-      schema: CARAPACE_COVERAGE_SCHEMA,
+      schema: DIRECT_COVERAGE_SCHEMA,
       entries: input.coverage
     });
     if (!coverage.ok) {
@@ -199,12 +199,12 @@ function parseCarapaceDefinition(input) {
     const maxFixtureBytes = input.maxFixtureBytes;
     const maxQueryBytes = input.maxQueryBytes;
     if (maxFixtureBytes !== undefined && typeof maxFixtureBytes !== "number") {
-      throw new Error("Carapace maxFixtureBytes must be a number");
+      throw new Error("Direct maxFixtureBytes must be a number");
     }
     if (maxQueryBytes !== undefined && typeof maxQueryBytes !== "number") {
-      throw new Error("Carapace maxQueryBytes must be a number");
+      throw new Error("Direct maxQueryBytes must be a number");
     }
-    return tryDefineCarapaceUnchecked({
+    return tryDefineDirectUnchecked({
       parseWorld,
       defaultScenario: input.defaultScenario,
       scenarios,
@@ -213,11 +213,11 @@ function parseCarapaceDefinition(input) {
       ...maxQueryBytes === undefined ? {} : { maxQueryBytes }
     });
   } catch (reason) {
-    return err(definitionError("invalid-options", renderUnknownReason(reason, "Carapace definition options could not be inspected")));
+    return err(definitionError("invalid-options", renderUnknownReason(reason, "Direct definition options could not be inspected")));
   }
 }
-function defineCarapace(input) {
-  const defined = tryDefineCarapace(input);
+function defineDirect(input) {
+  const defined = tryDefineDirect(input);
   if (!defined.ok) {
     throw new Error(defined.error.message, { cause: defined.error });
   }
@@ -225,12 +225,12 @@ function defineCarapace(input) {
 }
 
 // src/index.ts
-var FIXTURE_QUERY_KEY = "__carapace_fixture";
-var SCENARIO_QUERY_KEY = "__carapace_scenario";
+var FIXTURE_QUERY_KEY = "__direct_fixture";
+var SCENARIO_QUERY_KEY = "__direct_scenario";
 export {
-  tryDefineCarapace,
-  parseCarapaceDefinition,
-  defineCarapace,
+  tryDefineDirect,
+  parseDirectDefinition,
+  defineDirect,
   SCENARIO_QUERY_KEY,
   FIXTURE_QUERY_KEY
 };

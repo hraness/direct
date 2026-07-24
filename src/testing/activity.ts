@@ -1,7 +1,7 @@
 import type { JsonValue } from "../core/json-value.js";
 import type { LogicalRuntime } from "../core/runtime.js";
 import type {
-  CarapaceStore,
+  DirectStore,
   StoreError,
   StoreGeneration,
 } from "../core/store.js";
@@ -9,7 +9,7 @@ import type { OperationId } from "../core/ids.js";
 import { renderUnknownReason } from "../core/reason.js";
 import { err, ok, type Result } from "../core/result.js";
 
-export type CarapaceActivityScopeError =
+export type DirectActivityScopeError =
   | {
     readonly code: "scope-closed";
     readonly message: string;
@@ -32,13 +32,13 @@ export type CarapaceActivityScopeError =
     readonly reason: null;
   };
 
-export type CarapaceActivityRunError =
+export type DirectActivityRunError =
   | {
     readonly code: "begin-failed";
     readonly message: string;
     readonly operation: null;
     readonly workError: null;
-    readonly activityError: CarapaceActivityScopeError;
+    readonly activityError: DirectActivityScopeError;
   }
   | {
     readonly code: "work-failed";
@@ -52,42 +52,42 @@ export type CarapaceActivityRunError =
     readonly message: string;
     readonly operation: OperationId;
     readonly workError: null;
-    readonly activityError: CarapaceActivityScopeError;
+    readonly activityError: DirectActivityScopeError;
   }
   | {
     readonly code: "work-and-settlement-failed";
     readonly message: string;
     readonly operation: OperationId;
     readonly workError: unknown;
-    readonly activityError: CarapaceActivityScopeError;
+    readonly activityError: DirectActivityScopeError;
   };
 
-export interface CarapaceActivityLease {
+export interface DirectActivityLease {
   readonly generation: StoreGeneration;
   readonly operation: OperationId;
   /** Settle once. Later calls return the first settlement result unchanged. */
-  readonly release: () => Result<true, CarapaceActivityScopeError>;
+  readonly release: () => Result<true, DirectActivityScopeError>;
   readonly isReleased: () => boolean;
 }
 
-export interface CarapaceActivityScope {
-  readonly begin: (namespace?: string) => Result<CarapaceActivityLease, CarapaceActivityScopeError>;
+export interface DirectActivityScope {
+  readonly begin: (namespace?: string) => Result<DirectActivityLease, DirectActivityScopeError>;
   readonly run: <Value>(
     namespace: string,
     work: () => Value | PromiseLike<Value>,
-  ) => Promise<Result<Value, CarapaceActivityRunError>>;
+  ) => Promise<Result<Value, DirectActivityRunError>>;
 }
 
-export interface CarapaceActivityScopeOptions {
+export interface DirectActivityScopeOptions {
   /** Fence new activity once the owning composition has been aborted. */
   readonly signal?: AbortSignal;
 }
 
 function storeErrorMessage(cause: StoreError): string {
-  return renderUnknownReason(cause, "Carapace store operation failed");
+  return renderUnknownReason(cause, "Direct store operation failed");
 }
 
-function operationError(reason: unknown): CarapaceActivityScopeError {
+function operationError(reason: unknown): DirectActivityScopeError {
   return Object.freeze({
     code: "operation-id-failed",
     message: renderUnknownReason(reason),
@@ -97,10 +97,10 @@ function operationError(reason: unknown): CarapaceActivityScopeError {
   });
 }
 
-function closedScopeError(): CarapaceActivityScopeError {
+function closedScopeError(): DirectActivityScopeError {
   return Object.freeze({
     code: "scope-closed",
-    message: "The Carapace activity scope is closed",
+    message: "The Direct activity scope is closed",
     operation: null,
     storeError: null,
     reason: null,
@@ -111,7 +111,7 @@ function storeError(
   code: "store-begin-failed" | "store-settle-failed",
   operation: OperationId,
   cause: StoreError,
-): CarapaceActivityScopeError {
+): DirectActivityScopeError {
   return Object.freeze({
     code,
     message: storeErrorMessage(cause),
@@ -125,14 +125,14 @@ function storeError(
  * Couple deterministic operation IDs to the store's generation-fenced activity
  * ledger. A lease owns exactly one settlement attempt, including a failed one.
  */
-export function createCarapaceActivityScope<World extends JsonValue>(
-  store: CarapaceStore<World>,
+export function createDirectActivityScope<World extends JsonValue>(
+  store: DirectStore<World>,
   runtime: LogicalRuntime,
-  options: CarapaceActivityScopeOptions = {},
-): CarapaceActivityScope {
+  options: DirectActivityScopeOptions = {},
+): DirectActivityScope {
   const signal = options.signal;
   const isClosed = (): boolean => signal?.aborted === true;
-  const begin = (namespace = "activity"): Result<CarapaceActivityLease, CarapaceActivityScopeError> => {
+  const begin = (namespace = "activity"): Result<DirectActivityLease, DirectActivityScopeError> => {
     if (isClosed()) return err(closedScopeError());
     let operation: OperationId;
     try {
@@ -155,8 +155,8 @@ export function createCarapaceActivityScope<World extends JsonValue>(
     }
 
     let released = false;
-    let releaseResult: Result<true, CarapaceActivityScopeError> | null = null;
-    const lease: CarapaceActivityLease = Object.freeze({
+    let releaseResult: Result<true, DirectActivityScopeError> | null = null;
+    const lease: DirectActivityLease = Object.freeze({
       generation: currentGeneration,
       operation,
       isReleased: () => released,
@@ -173,7 +173,7 @@ export function createCarapaceActivityScope<World extends JsonValue>(
     return ok(lease);
   };
 
-  const run: CarapaceActivityScope["run"] = async (namespace, work) => {
+  const run: DirectActivityScope["run"] = async (namespace, work) => {
     const started = begin(namespace);
     if (!started.ok) {
       return err(Object.freeze({
