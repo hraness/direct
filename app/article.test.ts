@@ -9,7 +9,7 @@ import {
 
 const validArticle = [
   ARTICLE_START_MARKER,
-  "## [Direct title](<https://prmte.com/articles/direct-title>)",
+  "## [Direct title](<https://hraness.pub/articles/direct-title>)",
   "",
   "> A precise dek.",
   "",
@@ -26,7 +26,7 @@ describe("Direct site article source", () => {
     expect(parseDirectArticleSource(validArticle)).toEqual({
       ok: true,
       value: {
-        canonicalUrl: "https://prmte.com/articles/direct-title",
+        canonicalUrl: "https://hraness.pub/articles/direct-title",
         dek: "A precise dek.",
         markdown: [
           "## First section",
@@ -71,10 +71,10 @@ describe("Direct site article source", () => {
     const article = await loadDirectArticle();
     expect(article).toMatchObject({
       canonicalUrl: "https://hraness.pub/articles/direct-a-harness-for-your-frontend",
-      title: "Hraness Direct makes frontend loops faster",
+      title: "Direct gives browser agents deterministic app states",
     });
-    expect(article.markdown).toContain("## Change the composition below the behavior");
-    expect(article.markdown).toContain("defineDirect");
+    expect(article.markdown).toContain("## Browser control and app state are different jobs");
+    expect(article.markdown).toContain("agent-browser");
     expect(article.markdown).toContain("direct-setup");
   });
 });

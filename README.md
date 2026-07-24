@@ -1,8 +1,8 @@
 # Direct
 
-Hraness Direct makes frontend loops faster by running a product's real interface and state machinery against deterministic implementations of product-owned ports—without pretending to prove the systems it replaces.
+Direct gives browser agents named, repeatable app states while keeping a product's real interface and feature logic in place. It speeds up states that would otherwise depend on accounts, cloud data, devices, permissions, or models without pretending to prove the systems it replaces.
 
-Read the full article at [hraness.direct](https://hraness.direct), or inspect the package and examples below.
+Read the [Direct overview](https://hraness.direct/docs/overview), or inspect the package and examples below.
 
 ```text
 real interface and feature state
@@ -148,152 +148,114 @@ Malformed encoding, duplicate activation, unknown reserved keys, unknown scenari
 This repository contains the deterministic kernel, browser bridge, production-exclusion pattern, agent skills, a small React example, and an Expo/React Native reference app. It does not contain a browser driver, browser-worker pool, screenshot deduplication, video recording, PySceneDetect integration, or storyboard generation. Use the browser tooling that fits your product and treat recorded media as evidence, not as the definition of correctness.
 
 <!-- article:direct-a-harness-for-your-frontend:start -->
-## [Hraness Direct makes frontend loops faster](<https://hraness.pub/articles/direct-a-harness-for-your-frontend>)
+## [Direct gives browser agents deterministic app states](<https://hraness.pub/articles/direct-a-harness-for-your-frontend>)
 
-> Run the real interface against named deterministic worlds, reset it quickly, and keep direct tests for every system the development harness replaces.
+> Browser tools can control a page. Direct makes the state behind that page quick to reach and repeatable, while live-system tests keep responsibility for what Direct replaces.
 
-Frontend checks slow down when the state worth reviewing sits behind a login, a cloud service, a native module, a model process, or a device permission. The interface may need only seconds of attention after minutes of setup.
+A browser agent can open a page, click a control, and inspect the result. It cannot make the state behind that page quick to reach. A signed-in account, a particular database record, a device permission, a model response, or a failure at the right moment may still take longer to arrange than the interface takes to review.
 
-[Hraness Direct](<https://hraness.direct>) makes frontend loops faster with a deterministic product harness. The product keeps its real interface and feature state while deterministic adapters replace slow external systems. A Direct definition names the available worlds and evidence claims, a session owns one activated world's lifecycle, and one browser installation exposes its probe while denying unmapped application requests. The product's verifier still chooses the actions, assertions, browser driver, and evidence.
+[Hraness Direct](<https://hraness.direct>) separates those two jobs. A browser tool controls the page. Direct supplies named, repeatable app states to the product's real interface and feature logic. It does this by replacing selected external systems below a small product-owned boundary. Direct speeds up development and review; it does not prove that the replaced systems work.
 
 ![The same interface cycles through named scenes, instant resets, and repeatable checks.](<https://hraness.pub/article-diagrams/direct-a-harness-for-your-frontend.light.webp>)
 
 *Hraness Direct keeps the interface while making scenes quick to reset and check.*
 
-### Change the composition below the behavior
+### Browser control and app state are different jobs
 
-A product-owned port is a small interface between product behavior and an external system. Production supplies the live implementation. The Direct composition supplies a deterministic implementation of the same contract. Components, reducers, parsing, and navigation above that seam stay on their ordinary code paths.
+[agent-browser](<https://agent-browser.dev/>) gives coding agents a compact command-line interface for opening pages, reading accessibility snapshots, and interacting with elements. Playwright and other browser drivers solve the same broad problem with different APIs. If the state you need is already fast and reliable to reach, a browser tool by itself is the smaller and better choice.
 
-A minimal product-specific layout makes that boundary visible:
+Direct becomes useful when setup dominates the loop: repeated sign-in, slow seed requests, hard-to-create empty or error states, unavailable native modules, paid model calls, or device permissions that automation cannot reset cleanly. Direct does not click the page. It gives the browser tool a stable page state to act on.
 
-**Conceptual Direct layout**
+### Replace setup below the behavior
+
+A product-owned port is a small interface between product behavior and an external system. A task view might ask a task repository to read and update tasks. Production connects that port to a live service. A Direct composition connects the same port to a deterministic implementation. The interface, reducers, parsing, navigation, and feature decisions above the port stay on their normal code paths.
+
+The boundary can be pictured without knowing the package API:
+
+**Conceptual Direct boundary**
 
 ```text
-product/
-├── src/
-│   ├── TodoApp.tsx                  # real interface and feature state
-│   ├── todo-port.ts                 # product-owned semantic boundary
-│   └── production.ts                # live adapter and entry
-└── direct/
-    ├── definition.ts                # worlds, routes, and evidence claims
-    ├── deterministic-port.ts        # deterministic implementation
-    ├── entry.tsx                    # development composition
-    └── verify.ts                    # actions, assertions, and evidence
+agent-browser or Playwright
+            │
+   real interface + feature state
+            │
+     product-owned port
+        ┌───┴────┐
+  live system   Direct world
 ```
 
-The filenames are illustrative. The ownership rule is fixed: production and deterministic adapters implement the same product-owned port, the real interface stays above both, and the Direct definition, workbench, and verifier stay outside the production graph. A scenario is named initial state, route, and logical-runtime state. It is not a script of browser actions.
+A Direct world is validated JSON that describes one starting state. A scenario gives that world a name and route. It does not contain browser actions. The browser check still decides what to click and what outcome to assert.
 
-The [public Todo example](<https://github.com/hraness/direct/tree/main/examples/todos>) shows that boundary in code. The real `TodoApp` knows only the product's `TodoPort`. The production entry supplies browser storage. The Direct session supplies a deterministic port:
+The [public Todo example](<https://github.com/hraness/direct/tree/main/examples/todos>) uses one `TodoPort` in both compositions. The component receives whichever implementation the entry point owns:
 
-**todo-port.ts composition (illustrative excerpt)**
+**One product port, two compositions**
 
 ```typescript
-export interface TodoItem {
-  readonly id: string;
-  readonly title: string;
-  readonly completed: boolean;
-}
-
 export interface TodoPort {
-  readonly readTodos: () => Promise<readonly TodoItem[]>;
-  readonly setCompleted: (
-    id: string,
-    completed: boolean,
-  ) => Promise<readonly TodoItem[]>;
+  readTodos(): Promise<readonly TodoItem[]>;
+  setCompleted(id: string, completed: boolean):
+    Promise<readonly TodoItem[]>;
 }
 
-// Production entry
-<TodoApp port={createLocalStorageTodoPort(globalThis.localStorage)} />
+const port = isDirect
+  ? createDeterministicTodoPort(world)
+  : createLiveTodoPort();
 
-// Direct workbench
-<TodoApp port={props.harness.port} />
+<TodoApp port={port} />
 ```
 
-The interface speaks in product terms: todos and completion. It contains no storage calls or Direct types. Behind the port, the deterministic runtime can use a world and a logical clock without changing the component under review.
+The interface speaks in product terms: todos and completion. It contains no Direct types and does not know whether storage is live or deterministic. Use the lowest port that preserves the behavior under review. If the Direct adapter must copy the logic named by the claim, the boundary is too high and the fixture would imitate its subject instead of testing it.
 
-The deterministic side starts with one strict, versioned JSON world parsed from an unknown value. The session gives the validated, immutable seed to the product adapter, which can initialize its own mutable repository or event stream. Above the port, the frontend handles each response through its normal state-update path. Unknown requests fail instead of falling through to a live service. The world becomes a bounded executable model of the state needed by the interface.
+### Direct owns one deterministic session
 
-Use the lowest port that preserves the behavior under review. A task interface should depend on a task repository rather than a simulated database client. A desktop renderer should depend on a renderer-safe transport rather than a simulated native protocol. If the deterministic adapter must copy the behavior named by the claim, the seam is too high and the fixture would imitate its subject instead of testing it.
+Direct gives the development composition one lifecycle instead of a collection of unrelated fixture helpers:
 
-### Own the lifecycle once
+- A definition validates the named worlds, routes, and evidence claims.
+- A session activates one world and owns its state, logical time, tracked work, reset generation, and cleanup.
+- A browser installation exposes the session probe and reset action while blocking unmapped application requests by default.
 
-The public API follows the same ownership model. `defineDirect` from the framework-free package root validates authored scenarios and coverage claims once. `createDirectSession` from the testing entry activates one scenario and owns its world, logical clock, activity, deterministic harness, cancellation signal, probe, and reverse-order cleanup. `installDirectBrowser` from the web entry publishes that session through the canonical browser bridge and installs a fail-closed application-fetch boundary as one disposable operation.
+That default network policy matters. A deterministic page should not silently call a live service when a fixture misses a case. The product can allow exact URLs when needed, but unknown application calls fail visibly. Direct and its fixture worlds also stay outside the production dependency graph.
 
-The authored definition type keeps the default and coverage citations inside the same scenario tuple. Typed configuration assembled dynamically uses `tryDefineDirect`. A genuinely unknown value uses `parseDirectDefinition`, preserving structured failure without asserting foreign data into narrow owned types.
+### Wait for the app, not a guess
 
-The extracted scenario, coverage, and harness values in this entry are ordinary product-owned data and code. Direct owns their lifecycle and browser boundary:
+A fixed delay says, “wait 500 milliseconds and hope.” Direct instead exposes quiescence: no tracked operation is active, each product-named pending counter is zero, and those values remain stable for a short bounded interval. The browser helper waits for that state before checking the interface.
 
-**direct/entry.ts (abridged)**
+**Browser check using a named Direct scenario**
 
 ```typescript
-const definition = defineDirect({
-  parseWorld: parseTodoWorld,
-  defaultScenario: "todos.populated",
-  scenarios: todoScenarios,
-  coverage: todoCoverage,
-});
+await page.goto(
+  "/direct/?__direct_scenario=todos.populated",
+);
+await waitForQuiescence(page);
 
-const opened = createDirectSession({
-  definition,
-  activation: { kind: "query", source: location.search },
-  create: createTodoHarness,
-});
-if (!opened.ok) throw new Error(opened.error.message);
+await page.getByRole("checkbox", {
+  name: "Write the public guide",
+}).check();
 
-const session = opened.value;
-const installed = installDirectBrowser({ session });
-if (!installed.ok) {
-  session.dispose();
-  throw new Error(installed.error.message);
-}
+await waitForQuiescence(page);
+await expect(page.getByRole("checkbox", {
+  name: "Write the public guide",
+})).toBeChecked();
 ```
 
-The default browser policy denies application calls through `fetch`. A product may allow exact URLs, record blocked calls, or disable the firewall when another checked boundary owns containment. The installation derives the probe and coverage snapshot from the session, tracks allowed and blocked fetch work in the same activity scope, and rolls back its own changes if setup fails. It registers cleanup with the session; its returned handle can remove the browser hooks earlier.
+Quiescence proves only that the work Direct knows about has settled. It does not prove that the screen is correct. The verifier must still reject relevant console, runtime, and unhandled-request errors, then make product-specific assertions or visual checks.
 
-Each store reset advances the session generation. Transactions and tracked operations from an earlier generation cannot update or settle the new world. The browser reset action is a synchronous handoff, normally to a reload; it cannot return a Promise that automation could mistake for completed work. Logical time can accelerate product delays without changing browser motion. A product runner may reuse a compatible browser process or application bundle, but reuse is not a package guarantee.
+### Choose the smallest tool that covers the risk
 
-### Quiescence replaces sleeps
+- Use browser automation alone when the required state is already quick to reach, or when the live backend and browser assembly are part of the check.
+- Pair Direct with agent-browser or Playwright when setup and reset dominate the loop and the substituted systems can sit behind a small product-owned port.
+- Use unit or component tests when the subject is isolated logic or rendering that does not need the full application composition.
+- Keep live integration and end-to-end tests when the backend, native host, browser assembly, filesystem, operating system, or device is the subject.
 
-A fixed delay waits for a duration. Quiescence means that the active scenario has reached its declared readiness conditions. The session probe requires no active operations and all product-named pending counters at zero. The product verifier then checks that the generation, revision, activity totals, and counters remain unchanged for a short, bounded interval. It may separately wait for fonts, nearby images, or document stability when a claim needs visual evidence.
-
-The probe reports violation counters and remaining scripted work outside the quiescence gate. A verifier must separately reject an unhandled request, unused required script step, console error, runtime error, leaked work token, or malformed transport value when that signal matters to the claim. [Types and property tests in an agent-operated codebase](<https://hraness.pub/articles/the-ai-codebase-types-and-property-tests>) help at this boundary. Strict parsers reject malformed worlds, while generated tests challenge reset, cancellation, serialization, and ordering laws across many inputs.
-
-The browser-driver helper remains product-owned. In this illustrative Playwright check, `waitForQuiescence` reads the probe until those readiness conditions remain stable. It then rejects relevant violations and required remaining work:
-
-**todo.browser.test.ts (illustrative)**
-
-```typescript
-test("completes a populated todo", async ({ page }) => {
-  await page.goto(
-    "/direct/?__direct_scenario=todos.populated",
-  );
-  await waitForQuiescence(page);
-
-  const todo = page.getByRole("checkbox", {
-    name: "Write the public guide",
-  });
-  await todo.check();
-  await waitForQuiescence(page);
-
-  await expect(todo).toBeChecked();
-});
-```
-
-The check needs no login, seed request, CSS selector, or fixed sleep. The named scenario supplies only the starting world and route. The product verifier supplies the checkbox action and assertion, while the port carries the interaction through real frontend state. The second `waitForQuiescence` call waits for that state to settle.
-
-Quiescence does not prove that the rendered result is correct. It proves only that the readiness conditions held. The verifier must reject relevant violations and remaining work separately; semantic assertions, visual review, and direct integration tests still decide whether the result supports the claim.
-
-### Stop the claim at the substituted port
-
-Every coverage claim names one proof mode and cites the scenarios that supply its deterministic evidence. Routes stay on scenarios, where they are executable facts, instead of being repeated as one potentially misleading representative route on a claim. A fixture claim covers real interface and product behavior through deterministic ports. A mixed claim combines that fixture evidence with a named direct adapter or service check. A direct claim requires the real host, service, browser assembly, filesystem, operating system, or device. A completed run is verified only when every kind of evidence required by its declared mode has passed.
+Direct records the same distinction in coverage claims. A fixture claim stops at deterministic ports. A mixed claim combines fixture evidence with a named live check. A direct claim requires the real system. The labels do not create evidence; they keep a fast development check from being reported as proof of a system it never touched.
 
 ### Carry the workflow with the package
 
-An Agent Skill is a directory of task instructions and display metadata that a compatible coding-agent runner can load. Beginning with the v0.4.0 release, an installed `@cclrte/direct` package carries `direct-setup` for adoption and `direct-verify` for evidence review under its `skills/` directory. A repository can copy or link either directory into its runner's discovery location, so the workflow stays versioned with the API and examples it describes.
+The v0.4.0 package includes two Agent Skills under `skills/`. `direct-setup` guides the product-port boundary, deterministic composition, and production-exclusion check. `direct-verify` guides scenario review, quiescence, cleanup, and evidence classification. The skills carry the technical detail an agent needs without forcing every human reader through an API manual.
 
-Installation leaves both skills inert because agent runners do not share one discovery path. The setup skill encodes the product-port and production-exclusion sequence; the verification skill encodes quiescence, semantic assertions, coverage classification, and direct-evidence limits. They organize the work, but they do not supply evidence or promote a fixture claim.
+Package installation leaves the skills inactive because coding-agent runners use different discovery directories. Copy or link the desired skill into the runner's configured location, then invoke it by name. The package does not run a postinstall script or edit agent configuration.
 
-Use Hraness Direct when external setup hides frontend state and a small product-owned port can replace that setup without copying the behavior under review. Keep direct integration and end-to-end tests when the backend, native host, browser assembly, or operating system is the subject. Direct makes the composition deterministic; the product verifier still decides whether the resulting interface supports the claim.
+Use Direct when the state behind the interface is the bottleneck and a small product-owned port can replace that setup without copying the behavior under review. Use the browser tool alone when it can already reach the state cheaply. In either case, the browser driver supplies the actions and assertions, and live-system tests remain responsible for the systems Direct replaces.
 <!-- article:direct-a-harness-for-your-frontend:end -->
 
 ## Develop

@@ -4,12 +4,12 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 const description =
-  "Direct runs real interfaces against deterministic product-owned ports, with explicit proof boundaries.";
+  "Direct gives browser agents named, repeatable app states while keeping the real interface and feature logic in place.";
 const siteUrl = new URL("https://hraness.direct");
 
 export const metadata: Metadata = {
   metadataBase: siteUrl,
-  title: "Direct — deterministic interfaces",
+  title: "Direct — deterministic app states for browser agents",
   description,
   alternates: { canonical: "/" },
   applicationName: "Direct",
@@ -17,15 +17,15 @@ export const metadata: Metadata = {
     type: "website",
     url: "/",
     siteName: "Direct",
-    title: "Direct — deterministic interfaces",
+    title: "Direct — deterministic app states for browser agents",
     description,
-    images: [{ url: "/opengraph-image", width: 1200, height: 630 }],
+    images: [{ url: "/og.png", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Direct — deterministic interfaces",
+    title: "Direct — deterministic app states for browser agents",
     description,
-    images: ["/opengraph-image"],
+    images: ["/og.png"],
   },
 };
 

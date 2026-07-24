@@ -7,6 +7,7 @@
   --muted: #62675d;
   --line: #d7dacd;
   --surface: #eceee5;
+  --surface-strong: #e2e5d8;
   --accent: #9bd43f;
   --accent-ink: #24300e;
   --shell: 68rem;
@@ -23,6 +24,7 @@
     --muted: #a6aa9d;
     --line: #34382f;
     --surface: #1c2018;
+    --surface-strong: #252a20;
     --accent: #a9df51;
     --accent-ink: #18200b;
   }
@@ -39,7 +41,7 @@ html {
 
 body {
   background:
-    linear-gradient(to right, color-mix(in srgb, var(--line) 35%, transparent) 1px, transparent 1px)
+    linear-gradient(to right, color-mix(in srgb, var(--line) 28%, transparent) 1px, transparent 1px)
       0 0 / 4rem 4rem,
     var(--background);
   color: var(--foreground);
@@ -101,7 +103,7 @@ a:hover {
   align-items: center;
   display: flex;
   justify-content: space-between;
-  min-height: 4.75rem;
+  min-height: 4.25rem;
 }
 
 .direct-wordmark {
@@ -131,19 +133,304 @@ a:hover {
 .direct-site-header nav {
   align-items: center;
   display: flex;
-  gap: clamp(1rem, 3vw, 2rem);
+  gap: clamp(0.8rem, 3vw, 1.75rem);
 }
 
 .direct-site-header nav a {
   align-items: center;
   display: inline-flex;
-  font-size: 0.9rem;
+  font-size: 0.88rem;
   min-height: 2.75rem;
   text-decoration: none;
 }
 
-.direct-site-header nav a:hover {
+.direct-site-header nav a:hover,
+.direct-site-header nav a[aria-current="page"] {
   text-decoration: underline;
+}
+
+.direct-kicker,
+.direct-section__label,
+.direct-install__label,
+.direct-choice-grid__label {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 760;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.direct-hero {
+  padding-block: clamp(4rem, 9vw, 7.5rem);
+}
+
+.direct-hero .direct-kicker {
+  margin: 0 0 1.3rem;
+}
+
+.direct-hero h1 {
+  font-size: clamp(3.1rem, 8vw, 6.35rem);
+  font-weight: 560;
+  letter-spacing: -0.068em;
+  line-height: 0.94;
+  margin: 0;
+  max-width: 12ch;
+  text-wrap: balance;
+}
+
+.direct-hero__dek {
+  color: var(--muted);
+  font-size: clamp(1.08rem, 2.5vw, 1.38rem);
+  line-height: 1.55;
+  margin: 1.65rem 0 0;
+  max-width: 43rem;
+}
+
+.direct-hero__actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.75rem;
+}
+
+.direct-primary-link,
+.direct-secondary-link {
+  align-items: center;
+  border: 1px solid var(--foreground);
+  display: inline-flex;
+  font-size: 0.9rem;
+  font-weight: 700;
+  justify-content: center;
+  min-height: 2.9rem;
+  padding: 0.7rem 1rem;
+  text-decoration: none;
+}
+
+.direct-primary-link {
+  background: var(--foreground);
+  color: var(--background);
+}
+
+.direct-secondary-link {
+  background: var(--background);
+}
+
+.direct-install {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: minmax(8rem, 0.36fr) minmax(0, 1fr);
+  margin-top: clamp(2.5rem, 7vw, 4.75rem);
+  padding: clamp(1rem, 2.5vw, 1.4rem);
+}
+
+.direct-install__label,
+.direct-install__note,
+.direct-install__skills {
+  margin: 0;
+}
+
+.direct-install__note {
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.5;
+  margin-top: 0.4rem;
+}
+
+.direct-install pre {
+  background: var(--background);
+  border: 1px solid var(--line);
+  font: 0.85rem/1.5 var(--font-mono);
+  margin: 0;
+  overflow-x: auto;
+  padding: 0.85rem 1rem;
+}
+
+.direct-install__skills {
+  color: var(--muted);
+  font-size: 0.84rem;
+  grid-column: 2;
+  line-height: 1.5;
+}
+
+.direct-install__skills code {
+  color: var(--foreground);
+  font-family: var(--font-mono);
+}
+
+.direct-section {
+  border-top: 1px solid var(--line);
+  padding-block: clamp(4rem, 8vw, 6.5rem);
+}
+
+.direct-section h2 {
+  font-size: clamp(2.2rem, 5vw, 3.8rem);
+  font-weight: 560;
+  letter-spacing: -0.055em;
+  line-height: 1;
+  margin: 0;
+  max-width: 15ch;
+  text-wrap: balance;
+}
+
+.direct-section__label {
+  margin: 0 0 1rem;
+}
+
+.direct-two-column {
+  display: grid;
+  gap: clamp(2rem, 7vw, 6rem);
+  grid-template-columns: minmax(0, 0.9fr) minmax(18rem, 0.7fr);
+}
+
+.direct-problem {
+  background: color-mix(in srgb, var(--surface) 76%, transparent);
+}
+
+.direct-prose {
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1.65;
+}
+
+.direct-prose p {
+  margin: 0;
+}
+
+.direct-prose p + p {
+  margin-top: 1.3rem;
+}
+
+.direct-section-heading > p:last-child {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 1.15rem 0 0;
+  max-width: 42rem;
+}
+
+.direct-capability-grid {
+  border-block: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: clamp(2.5rem, 6vw, 4rem);
+}
+
+.direct-capability-grid article {
+  min-height: 10rem;
+  padding: clamp(1.25rem, 4vw, 2rem);
+}
+
+.direct-capability-grid article:nth-child(odd) {
+  border-right: 1px solid var(--line);
+}
+
+.direct-capability-grid article:nth-child(-n + 2) {
+  border-bottom: 1px solid var(--line);
+}
+
+.direct-capability-grid h3,
+.direct-choice-grid h3,
+.direct-steps h3 {
+  font-size: 1.1rem;
+  margin: 0;
+}
+
+.direct-capability-grid p,
+.direct-choice-grid article > p:last-child,
+.direct-steps p {
+  color: var(--muted);
+  line-height: 1.55;
+  margin: 0.65rem 0 0;
+}
+
+.direct-decision {
+  background: var(--foreground);
+  color: var(--background);
+}
+
+.direct-decision .direct-section__label,
+.direct-decision .direct-section-heading > p:last-child,
+.direct-decision .direct-choice-grid__label,
+.direct-decision .direct-choice-grid article > p:last-child,
+.direct-decision__boundary {
+  color: color-mix(in srgb, var(--background) 68%, var(--foreground));
+}
+
+.direct-choice-grid {
+  display: grid;
+  gap: 1px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: clamp(2.5rem, 6vw, 4rem);
+}
+
+.direct-choice-grid article {
+  border: 1px solid color-mix(in srgb, var(--background) 28%, transparent);
+  padding: clamp(1.35rem, 4vw, 2rem);
+}
+
+.direct-choice-grid__label {
+  margin: 0 0 1.5rem;
+}
+
+.direct-choice-grid h3 {
+  font-size: clamp(1.35rem, 3vw, 1.8rem);
+}
+
+.direct-decision__boundary {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  margin: 1.5rem 0 0;
+  max-width: 50rem;
+}
+
+.direct-steps {
+  border-top: 1px solid var(--line);
+  list-style: none;
+  margin: clamp(2.5rem, 6vw, 4rem) 0 0;
+  padding: 0;
+}
+
+.direct-steps li {
+  align-items: start;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 1.25rem;
+  grid-template-columns: 2.5rem minmax(0, 1fr);
+  padding-block: 1.4rem;
+}
+
+.direct-steps li > span {
+  align-items: center;
+  background: var(--accent);
+  border-radius: 50%;
+  color: var(--accent-ink);
+  display: inline-flex;
+  font: 700 0.8rem var(--font-mono);
+  height: 2rem;
+  justify-content: center;
+  width: 2rem;
+}
+
+.direct-next {
+  align-items: center;
+  display: flex;
+  gap: 1.25rem;
+  justify-content: space-between;
+  margin-top: 2rem;
+}
+
+.direct-next p {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0;
+  max-width: 38rem;
+}
+
+.direct-next a {
+  flex: 0 0 auto;
+  font-weight: 700;
 }
 
 .direct-article-header {
@@ -151,13 +438,8 @@ a:hover {
   padding-block: clamp(4.5rem, 10vw, 8rem) clamp(3.5rem, 7vw, 5.5rem);
 }
 
-.direct-kicker {
-  color: var(--muted);
-  font-size: 0.82rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
+.direct-article-header .direct-kicker {
   margin: 0 0 1.4rem;
-  text-transform: uppercase;
 }
 
 .direct-article-header h1 {
@@ -175,7 +457,7 @@ a:hover {
   font-size: clamp(1.15rem, 2.5vw, 1.45rem);
   line-height: 1.55;
   margin: 1.75rem 0 0;
-  max-width: 42rem;
+  max-width: 44rem;
 }
 
 .direct-article-meta {
@@ -193,14 +475,6 @@ a:hover {
   line-height: 1.72;
   max-width: var(--measure);
   padding-bottom: clamp(5rem, 10vw, 8rem);
-}
-
-.direct-article-body > p,
-.direct-article-body > ul > li,
-.direct-article-body > ol > li {
-  hyphens: auto;
-  text-align: justify;
-  text-justify: inter-word;
 }
 
 .direct-article-body p,
@@ -318,18 +592,54 @@ a:hover {
   margin: 0;
 }
 
+@media (max-width: 44rem) {
+  .direct-install,
+  .direct-two-column {
+    grid-template-columns: 1fr;
+  }
+
+  .direct-install__skills {
+    grid-column: 1;
+  }
+
+  .direct-capability-grid,
+  .direct-choice-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .direct-capability-grid article:nth-child(odd) {
+    border-right: 0;
+  }
+
+  .direct-capability-grid article:not(:last-child) {
+    border-bottom: 1px solid var(--line);
+  }
+
+  .direct-next {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 @media (max-width: 38rem) {
   .direct-site-header__inner,
   .direct-site-footer__inner {
     align-items: flex-start;
     flex-direction: column;
-    gap: 0.35rem;
+    gap: 0.15rem;
   }
 
   .direct-site-header__inner {
-    padding-block: 0.65rem;
+    padding-block: 0.45rem;
   }
 
+  .direct-site-header nav {
+    gap: 1.25rem;
+    overflow-x: auto;
+    width: 100%;
+  }
+
+  .direct-hero h1,
   .direct-article-header h1 {
     font-size: clamp(2.75rem, 14vw, 4rem);
   }

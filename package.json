@@ -1,7 +1,7 @@
 {
   "name": "@cclrte/direct",
   "version": "0.4.0",
-  "description": "Deterministic scenarios and verification for real application interfaces.",
+  "description": "Named, repeatable app states for browser agents working on real interfaces.",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,

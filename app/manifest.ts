@@ -5,7 +5,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: "Direct",
     short_name: "Direct",
     description:
-      "Deterministic scenarios and verification for real application interfaces.",
+      "Named, repeatable app states for browser agents working on real interfaces.",
     start_url: "/",
     display: "standalone",
     background_color: "#f6f6f1",

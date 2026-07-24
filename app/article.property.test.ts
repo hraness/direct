@@ -32,7 +32,7 @@ test("property: unrelated README text cannot perturb one exact marked article", 
     const parsed = parseDirectArticleSource([
       prefix,
       ARTICLE_START_MARKER,
-      "## [Direct title](<https://prmte.com/articles/direct-title>)",
+      "## [Direct title](<https://hraness.pub/articles/direct-title>)",
       "",
       "> A precise dek.",
       "",
@@ -43,7 +43,7 @@ test("property: unrelated README text cannot perturb one exact marked article", 
     expect(parsed).toMatchObject({
       ok: true,
       value: {
-        canonicalUrl: "https://prmte.com/articles/direct-title",
+        canonicalUrl: "https://hraness.pub/articles/direct-title",
         dek: "A precise dek.",
         markdown: "## Body",
         title: "Direct title",

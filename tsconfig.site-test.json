@@ -17,8 +17,12 @@
     "app/article.ts",
     "app/article.test.ts",
     "app/article.property.test.ts",
+    "app/docs/overview/page.test.tsx",
+    "app/docs/overview/page.tsx",
+    "app/markdown.ts",
     "app/page.tsx",
-    "app/page.test.tsx"
+    "app/page.test.tsx",
+    "app/site-shell.tsx"
   ],
   "exclude": ["node_modules"]
 }
