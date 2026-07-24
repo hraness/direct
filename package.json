@@ -131,6 +131,7 @@
     "react-dom": "19.2.3",
     "react-native": "0.86.0",
     "react-native-web": "~0.21.2",
+    "sugar-high": "^1.2.1",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.53.0",
     "vite": "^8.1.5"
