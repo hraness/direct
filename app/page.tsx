@@ -13,7 +13,7 @@ export default function HomePage() {
     <>
       <main className="plain-page direct-page" id="main">
         <h1>direct</h1>
-        <p>deterministic app states for browser agents.</p>
+        <p>named, repeatable app states for browser agents.</p>
 
         <section aria-labelledby="install">
           <h2 id="install">install</h2>
@@ -24,13 +24,14 @@ export default function HomePage() {
         <section aria-labelledby="about">
           <h2 id="about">about</h2>
           <p>
-            direct gives a real frontend named, repeatable states without
-            rebuilding accounts, cloud data, devices, permissions, or failures
-            by hand.
+            define signed-in, empty, error, and other hard-to-reach states once,
+            then open them by url in a development build.
           </p>
           <p>
-            your browser tool still drives the page. live tests still prove the
-            systems that direct replaces.
+            your interface and feature code stay on their normal paths. the
+            development composition replaces selected external systems with
+            deterministic adapters. direct does not drive the browser or test
+            those systems.
           </p>
         </section>
 

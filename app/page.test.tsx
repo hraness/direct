@@ -8,9 +8,17 @@ describe("Direct home page", () => {
     const html = renderToStaticMarkup(<HomePage />);
 
     expect(html).toContain("<h1>direct</h1>");
-    expect(html).toContain("deterministic app states for browser agents.");
+    expect(html).toContain("named, repeatable app states for browser agents.");
     expect(html).toContain("bun add --dev github:hraness/direct#v0.4.0");
     expect(html).toContain("development only.");
+    expect(html).toContain(
+      "define signed-in, empty, error, and other hard-to-reach states once",
+    );
+    expect(html).toContain(
+      "direct does not drive the browser or test those systems.",
+    );
+    expect(html).not.toContain("direct gives a real frontend");
+    expect(html).not.toContain("live tests still prove");
     expect(html).not.toContain("direct-capability-grid");
     expect(html).toContain('href="/docs/overview"');
   });

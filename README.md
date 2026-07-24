@@ -1,10 +1,12 @@
 # direct
 
-deterministic app states for browser agents.
+named, repeatable app states for browser agents.
 
-direct gives a real frontend named, repeatable states without rebuilding
-accounts, cloud data, devices, permissions, or failures by hand. your browser
-tool still drives the page. live tests still prove the systems direct replaces.
+define signed-in, empty, error, and other hard-to-reach states once, then open
+them by url in a development build. your interface and feature code stay on
+their normal paths. the development composition replaces selected external
+systems with deterministic adapters. direct does not drive the browser or test
+those systems.
 
 ```sh
 bun add --dev github:hraness/direct#v0.4.0
@@ -157,11 +159,11 @@ This repository contains the deterministic kernel, browser bridge, production-ex
 <!-- article:direct-a-harness-for-your-frontend:start -->
 ## [Direct gives browser agents deterministic app states](<https://hraness.pub/articles/direct-a-harness-for-your-frontend>)
 
-> Browser tools can control a page. Direct makes the state behind that page quick to reach and repeatable, while live-system tests keep responsibility for what Direct replaces.
+> Browser tools control a page. Direct makes the state behind it quick to reach and repeatable without claiming to test the external systems it replaces.
 
 A browser agent can open a page, click a control, and inspect the result. It cannot make the state behind that page quick to reach. A signed-in account, a particular database record, a device permission, a model response, or a failure at the right moment may still take longer to arrange than the interface takes to review.
 
-[Hraness Direct](<https://hraness.direct>) separates those two jobs. A browser tool controls the page. Direct supplies named, repeatable app states to the product's real interface and feature logic. It does this by replacing selected external systems below a small product-owned boundary. Direct speeds up development and review; it does not prove that the replaced systems work.
+[Hraness Direct](<https://hraness.direct>) separates those two jobs. A browser tool controls the page. The product connects Direct's named, repeatable states to its existing interface and feature logic through deterministic adapters below a small product-owned boundary. Direct speeds up development and review; it does not drive the browser or prove that replaced systems work.
 
 ![The same interface cycles through named scenes, instant resets, and repeatable checks.](<https://hraness.pub/article-diagrams/direct-a-harness-for-your-frontend.light.webp>)
 
@@ -225,7 +227,7 @@ That default network policy matters. A deterministic page should not silently ca
 
 ### Wait for the app, not a guess
 
-A fixed delay says, “wait 500 milliseconds and hope.” Direct instead exposes quiescence: no tracked operation is active, each product-named pending counter is zero, and those values remain stable for a short bounded interval. The browser helper waits for that state before checking the interface.
+A fixed delay says, “wait 500 milliseconds and hope.” Direct exposes a quiescence snapshot: no tracked operation is active, and each product-named pending counter is zero. The product's browser verifier must poll that snapshot until its generation, revision, and counters remain stable for a bounded interval before checking the interface.
 
 **Browser check using a named Direct scenario**
 
@@ -245,7 +247,7 @@ await expect(page.getByRole("checkbox", {
 })).toBeChecked();
 ```
 
-Quiescence proves only that the work Direct knows about has settled. It does not prove that the screen is correct. The verifier must still reject relevant console, runtime, and unhandled-request errors, then make product-specific assertions or visual checks.
+Here, `waitForQuiescence` is product-owned verifier code around Direct's snapshot, not a Direct browser driver. Quiescence proves only that the work Direct knows about has settled. It does not prove that the screen is correct. The verifier must still reject relevant console, runtime, and unhandled-request errors, then make product-specific assertions or visual checks.
 
 ### Choose the smallest tool that covers the risk
 
@@ -262,7 +264,7 @@ The v0.4.0 package includes two Agent Skills under `skills/`. `direct-setup` gui
 
 Package installation leaves the skills inactive because coding-agent runners use different discovery directories. Copy or link the desired skill into the runner's configured location, then invoke it by name. The package does not run a postinstall script or edit agent configuration.
 
-Use Direct when the state behind the interface is the bottleneck and a small product-owned port can replace that setup without copying the behavior under review. Use the browser tool alone when it can already reach the state cheaply. In either case, the browser driver supplies the actions and assertions, and live-system tests remain responsible for the systems Direct replaces.
+Use Direct when the state behind the interface is the bottleneck and a small product-owned port can replace that setup without copying the behavior under review. Use the browser tool alone when it can already reach the state cheaply. In either case, the browser driver supplies the actions and assertions. Direct never exercises the systems behind replaced ports; cover those boundaries separately with live integration or end-to-end tests when their risk requires it.
 <!-- article:direct-a-harness-for-your-frontend:end -->
 
 ## Develop

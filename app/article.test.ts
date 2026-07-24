@@ -76,5 +76,16 @@ describe("Direct site article source", () => {
     expect(article.markdown).toContain("## Browser control and app state are different jobs");
     expect(article.markdown).toContain("agent-browser");
     expect(article.markdown).toContain("direct-setup");
+    expect(article.dek).toContain(
+      "without claiming to test the external systems it replaces",
+    );
+    expect(article.markdown).toContain("Direct exposes a quiescence snapshot");
+    expect(article.markdown).toContain(
+      "`waitForQuiescence` is product-owned verifier code",
+    );
+    expect(article.markdown).not.toContain("The browser helper waits");
+    expect(article.markdown).not.toContain(
+      "live-system tests remain responsible",
+    );
   });
 });

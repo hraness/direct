@@ -11,6 +11,10 @@ describe("Direct Overview page", () => {
     expect(html).toContain("Browser control and app state are different jobs");
     expect(html).toContain('href="https://agent-browser.dev/"');
     expect(html).toContain("Use browser automation alone");
+    expect(html).toContain("Direct exposes a quiescence snapshot");
+    expect(html).toContain("product-owned verifier code");
+    expect(html).not.toContain("The browser helper waits");
+    expect(html).not.toContain("live-system tests remain responsible");
   });
 
   test("server-renders highlighted fenced examples", async () => {
