@@ -9,7 +9,7 @@ systems with deterministic adapters. direct does not drive the browser or test
 those systems.
 
 ```sh
-bun add --dev github:hraness/direct#v0.5.0
+bun add --dev github:hraness/direct#v0.5.1
 ```
 
 [overview](https://hraness.direct/docs/overview) ·
@@ -32,7 +32,7 @@ Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
 Install hraness/direct and its bundled Agent Skills from
-https://github.com/hraness/direct at the immutable v0.5.0 tag. Follow the
+https://github.com/hraness/direct at the immutable v0.5.1 tag. Follow the
 repository README, add `@cclrte/direct` to devDependencies only, copy or link
 `direct-setup` and `direct-verify` into this agent runner's configured
 skills directory, and verify that the production dependency graph excludes
@@ -48,7 +48,7 @@ Pin the public repository to an immutable version tag:
 ```json
 {
   "devDependencies": {
-    "@cclrte/direct": "github:hraness/direct#v0.5.0"
+    "@cclrte/direct": "github:hraness/direct#v0.5.1"
   }
 }
 ```

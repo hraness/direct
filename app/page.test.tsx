@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import HomePage from "./page";
+import { DIRECT_PACKAGE_VERSION } from "./version";
 
 describe("Direct home page", () => {
   test("is a compact project page with the package-versioned install command", async () => {
@@ -15,8 +16,12 @@ describe("Direct home page", () => {
     expect(html).toContain("<h1>direct</h1>");
     expect(html).toContain("named, repeatable app states for browser agents.");
     expect(typeof manifest.version).toBe("string");
+    if (typeof manifest.version !== "string") {
+      throw new Error("Direct package manifest has no string version");
+    }
+    expect(manifest.version).toBe(DIRECT_PACKAGE_VERSION);
     expect(html).toContain(
-      `bun add --dev github:hraness/direct#v${String(manifest.version)}`,
+      `bun add --dev github:hraness/direct#v${manifest.version}`,
     );
     expect(html).toContain("development only.");
     expect(html).toContain(

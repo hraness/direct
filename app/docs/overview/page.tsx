@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { loadDirectArticle } from "../../article";
 import { renderTrustedMarkdown } from "../../markdown";
 import { SiteFooter, SiteHeader } from "../../site-shell";
+import { DIRECT_PACKAGE_VERSION } from "../../version";
 
 export const dynamic = "force-static";
 
@@ -38,7 +39,7 @@ export default async function OverviewPage() {
             <h1>{article.title}</h1>
             <p className="direct-dek">{article.dek}</p>
             <div className="direct-article-meta">
-              <span>Direct 0.5.0</span>
+              <span>Direct {DIRECT_PACKAGE_VERSION}</span>
               <span aria-hidden="true">·</span>
               <a href={article.canonicalUrl}>Read on Hraness</a>
             </div>

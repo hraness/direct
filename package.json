@@ -1,6 +1,6 @@
 {
   "name": "@cclrte/direct",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Named, repeatable app states for browser agents working on real interfaces.",
   "license": "MIT",
   "type": "module",

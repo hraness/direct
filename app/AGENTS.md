@@ -6,6 +6,7 @@
 - `docs/overview/` – the synchronized long-form Overview and its server-markup regressions.
 - `markdown.ts` – trusted repository-Markdown rendering with the vendored server syntax highlighter.
 - `site-shell.tsx` – minimal Overview navigation and project footer.
+- `version.ts` – the typed package version, immutable tag, and install-command identity shared by public site surfaces.
 - `plain-site.css` – the vendored, framework-neutral shared document theme.
 - `syntax-highlighting.ts` and `syntax-highlighting.css` – the vendored typed server highlighter and semantic syntax-color recipe used by fenced code.
 - `layout.tsx` and `globals.css` – site metadata plus the neutral product and reading surfaces.

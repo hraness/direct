@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { DIRECT_PACKAGE_VERSION } from "../../version";
 import OverviewPage from "./page";
 
 describe("Direct Overview page", () => {
@@ -8,6 +9,7 @@ describe("Direct Overview page", () => {
     const html = renderToStaticMarkup(await OverviewPage());
 
     expect(html).toContain("<h1>Direct gives browser agents deterministic app states</h1>");
+    expect(html).toContain(`Direct ${DIRECT_PACKAGE_VERSION}`);
     expect(html).toContain("Browser control and app state are different jobs");
     expect(html).toContain('href="https://agent-browser.dev/"');
     expect(html).toContain("Use browser automation alone");

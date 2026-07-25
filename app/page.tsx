@@ -3,10 +3,9 @@ import {
   DIRECT_GITHUB_URL,
   SiteFooter,
 } from "./site-shell";
+import { DIRECT_INSTALL_COMMAND } from "./version";
 
 export const dynamic = "force-static";
-
-const installCommand = "bun add --dev github:hraness/direct#v0.5.0";
 
 export default function HomePage() {
   return (
@@ -17,7 +16,7 @@ export default function HomePage() {
 
         <section aria-labelledby="install">
           <h2 id="install">install</h2>
-          <pre className="plain-code"><code>{installCommand}</code></pre>
+          <pre className="plain-code"><code>{DIRECT_INSTALL_COMMAND}</code></pre>
           <p className="plain-muted">development only.</p>
         </section>
 

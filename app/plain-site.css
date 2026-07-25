@@ -19,6 +19,10 @@
   --plain-line: #d8d8d8;
   --plain-muted: #666666;
   --plain-surface: #f4f4f4;
+  --plain-syntax-keyword: #785f28;
+  --plain-syntax-string: #2d6a42;
+  --plain-syntax-number: #9f3631;
+  --plain-syntax-name: #0d61ac;
 
   background: var(--plain-background);
   color: var(--plain-foreground);
@@ -43,6 +47,10 @@
   --plain-line: #484848;
   --plain-muted: #b6b6b6;
   --plain-surface: #222222;
+  --plain-syntax-keyword: #c9ad74;
+  --plain-syntax-string: #76b38e;
+  --plain-syntax-number: #e18982;
+  --plain-syntax-name: #6aa9ed;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -57,7 +65,20 @@
     --plain-line: #484848;
     --plain-muted: #b6b6b6;
     --plain-surface: #222222;
+    --plain-syntax-keyword: #c9ad74;
+    --plain-syntax-string: #76b38e;
+    --plain-syntax-number: #e18982;
+    --plain-syntax-name: #6aa9ed;
   }
+}
+
+.plain-site .syntax-code {
+  --syntax-comment: var(--plain-muted);
+  --syntax-keyword: var(--plain-syntax-keyword);
+  --syntax-string: var(--plain-syntax-string);
+  --syntax-number: var(--plain-syntax-number);
+  --syntax-name: var(--plain-syntax-name);
+  --syntax-sign: var(--plain-muted);
 }
 
 .plain-site *,
