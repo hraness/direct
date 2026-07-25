@@ -57,7 +57,7 @@ async function exportPlatform(
 }
 
 async function verifyReactNativeExample(): Promise<void> {
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "cclrte-direct-react-native-"));
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "hraness-direct-react-native-"));
   const iosOutput = join(temporaryRoot, "ios");
   const androidOutput = join(temporaryRoot, "android");
   const webOutput = join(temporaryRoot, "web");

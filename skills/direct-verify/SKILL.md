@@ -108,7 +108,7 @@ Report every coverage entry as one of:
 
 A browser-only run keeps a direct claim `direct-required` and can report at most `fixture-verified` for a mixed claim. A wider run may report a mixed or direct claim as `verified` after every named direct behavior is exercised. Note supporting unit or structural evidence separately when it does not close the direct gate.
 
-Use `classifyCoverageEvidence` from `@cclrte/direct/testing`. Pass only scenario IDs whose claim-specific assertions succeeded, and set direct evidence to verified only for a current passing direct gate. Do not hand-roll a looser status promotion.
+Use `classifyCoverageEvidence` from `@hraness/direct/testing`. Pass only scenario IDs whose claim-specific assertions succeeded, and set direct evidence to verified only for a current passing direct gate. Do not hand-roll a looser status promotion.
 
 Include `HEAD` plus dirty or clean working-tree status, commands, scenario
 results, catalog hash, activation hashes, final probes, production surfaces

@@ -1,4 +1,4 @@
-import { defineDirect } from "@cclrte/direct";
+import { defineDirect } from "@hraness/direct";
 
 import {
   createDeviceStatusDirectWorld,

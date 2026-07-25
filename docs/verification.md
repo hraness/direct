@@ -107,7 +107,7 @@ Report each catalog entry against the scenarios and direct gates actually exerci
 
 A browser-only run therefore reports a completed fixture claim as `verified`, a completed fixture half of a mixed claim as `fixture-verified`, and a direct claim as `direct-required`. A wider verification run may report a mixed or direct claim as `verified` after its named direct evidence passes.
 
-Use `classifyCoverageEvidence` from `@cclrte/direct/testing` after the product-owned assertions finish. Pass only scenario IDs whose claim-specific assertions passed, plus `directEvidence: "verified"` only when the named direct gate is current and green. The mode-specific return type prevents a fixture claim from becoming `fixture-verified` or `direct-required`.
+Use `classifyCoverageEvidence` from `@hraness/direct/testing` after the product-owned assertions finish. Pass only scenario IDs whose claim-specific assertions passed, plus `directEvidence: "verified"` only when the named direct gate is current and green. The mode-specific return type prevents a fixture claim from becoming `fixture-verified` or `direct-required`.
 
 Never report a fixture scenario as proof of the adapter, service, host, browser assembly, operating system, or device it replaced.
 

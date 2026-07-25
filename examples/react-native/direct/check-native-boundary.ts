@@ -2,7 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
 
 const FORBIDDEN_MARKERS = [
-  "@cclrte/direct",
+  "@hraness/direct",
   "__direct_scenario",
   "__direct_fixture",
   "direct.browser-bridge/v",

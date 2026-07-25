@@ -1,4 +1,4 @@
-import { createDirectSession } from "@cclrte/direct/testing";
+import { createDirectSession } from "@hraness/direct/testing";
 
 import type { TodoPort } from "../src/todo-port";
 import {

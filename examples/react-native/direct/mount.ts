@@ -1,5 +1,5 @@
-import type { DirectSession } from "@cclrte/direct/testing";
-import { installDirectBrowser } from "@cclrte/direct/web";
+import type { DirectSession } from "@hraness/direct/testing";
+import { installDirectBrowser } from "@hraness/direct/web";
 
 import {
   type DeviceStatusDirectRoute,

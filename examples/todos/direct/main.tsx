@@ -1,4 +1,4 @@
-import { installDirectBrowser } from "@cclrte/direct/web";
+import { installDirectBrowser } from "@hraness/direct/web";
 import { createRoot } from "react-dom/client";
 
 import "../src/styles.css";

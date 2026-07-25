@@ -54,7 +54,7 @@ production entry                 Direct entry
       |                                |
 production adapters + UI      deterministic adapters + UI
       |                                |
-browser/service/platform       @cclrte/direct
+browser/service/platform       @hraness/direct
 ```
 
 Do not conditionally import fixtures from a query string, build flag, or runtime environment variable inside the production entry. Put Direct in `devDependencies`, compile it from a separate entry, and scan emitted production assets for package, wire, query, fixture, and workbench markers.
@@ -63,7 +63,7 @@ A clean marker scan is narrow evidence: the scanned files did not contain the co
 
 ## Keep optional surfaces isolated
 
-The default `@cclrte/direct` export is the curated definition and activation path. Advanced JSON, fixture, catalog, store, runtime, effect, and resource mechanics live under `@cclrte/direct/core`. React bindings live under `@cclrte/direct/react`, sessions and scripted test utilities under `@cclrte/direct/testing`, and browser installation under `@cclrte/direct/web`. None of the default, core, or testing surfaces imports React or browser globals. The package runtime does not import React Native or Expo; the React Native example composes these surfaces from a platform-resolved web entry.
+The default `@hraness/direct` export is the curated definition and activation path. Advanced JSON, fixture, catalog, store, runtime, effect, and resource mechanics live under `@hraness/direct/core`. React bindings live under `@hraness/direct/react`, sessions and scripted test utilities under `@hraness/direct/testing`, and browser installation under `@hraness/direct/web`. None of the default, core, or testing surfaces imports React or browser globals. The package runtime does not import React Native or Expo; the React Native example composes these surfaces from a platform-resolved web entry.
 
 `installDirectBrowser` enables the fetch firewall by default. It intercepts application calls to `fetch` in its JavaScript realm and denies a request unless the product's allow predicate accepts its parsed URL. It does not intercept WebSockets, EventSource, navigation, asset loading, native calls, or traffic in another realm. Use it only in a Direct browser entry. Pass `firewall: false` only when another checked boundary owns network containment.
 

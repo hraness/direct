@@ -5,7 +5,7 @@ import {
   type TodoPort,
 } from "./todo-port";
 
-export const TODO_STORAGE_KEY = "cclrte.todo-example/v1";
+export const TODO_STORAGE_KEY = "hraness.todo-example/v1";
 
 const TODO_KEYS = new Set(["id", "title", "completed"]);
 const TODO_ID = /^[a-z][a-z0-9-]{0,47}$/u;

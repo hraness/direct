@@ -1,4 +1,4 @@
-import type { ActiveDirect } from "@cclrte/direct";
+import type { ActiveDirect } from "@hraness/direct";
 import { useMemo, useState, type ReactNode } from "react";
 import {
   Pressable,

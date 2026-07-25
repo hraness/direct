@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { SCENARIO_QUERY_KEY } from "@cclrte/direct";
+import { SCENARIO_QUERY_KEY } from "@hraness/direct";
 
 import { todoDirectDefinition } from "./definition";
 import { createTodoDirectSession } from "./session";

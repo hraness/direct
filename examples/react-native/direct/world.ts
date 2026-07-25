@@ -1,4 +1,4 @@
-import type { JsonValue } from "@cclrte/direct";
+import type { JsonValue } from "@hraness/direct";
 
 import {
   type DeviceColorScheme,

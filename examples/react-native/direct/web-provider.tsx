@@ -1,4 +1,4 @@
-import { createDirectReactBindings } from "@cclrte/direct/react";
+import { createDirectReactBindings } from "@hraness/direct/react";
 import { useLayoutEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 

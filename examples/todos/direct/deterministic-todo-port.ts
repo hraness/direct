@@ -1,5 +1,5 @@
-import type { LogicalRuntime } from "@cclrte/direct";
-import type { DirectActivityScope } from "@cclrte/direct/testing";
+import type { LogicalRuntime } from "@hraness/direct";
+import type { DirectActivityScope } from "@hraness/direct/testing";
 
 import {
   cloneTodos,

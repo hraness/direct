@@ -1,6 +1,6 @@
 {
-  "name": "@cclrte/direct",
-  "version": "0.5.1",
+  "name": "@hraness/direct",
+  "version": "0.6.0",
   "description": "Named, repeatable app states for browser agents working on real interfaces.",
   "license": "MIT",
   "type": "module",

@@ -1,4 +1,4 @@
-import { createDirectSession } from "@cclrte/direct/testing";
+import { createDirectSession } from "@hraness/direct/testing";
 
 import type { DeviceStatusPort } from "../src/device-status-port";
 import {

@@ -44,7 +44,7 @@ Unknown requests and unmapped operations must fail. Keep remaining scripted work
 
 ## 5. Create one session
 
-Use `createDirectSession` from `@cclrte/direct/testing` to activate the query, create the store, clock, activity scope, product adapters, observation counters, cancellation signal, and cleanup stack.
+Use `createDirectSession` from `@hraness/direct/testing` to activate the query, create the store, clock, activity scope, product adapters, observation counters, cancellation signal, and cleanup stack.
 
 Return the product-owned ports and diagnostics as the session's `harness`.
 Register cleanup while constructing it. Dispose subscriptions, timers,

@@ -9,7 +9,7 @@ systems with deterministic adapters. direct does not drive the browser or test
 those systems.
 
 ```sh
-bun add --dev github:hraness/direct#v0.5.1
+bun add --dev github:hraness/direct#v0.6.0
 ```
 
 [overview](https://hraness.direct/docs/overview) ·
@@ -32,8 +32,8 @@ Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
 Install hraness/direct and its bundled Agent Skills from
-https://github.com/hraness/direct at the immutable v0.5.1 tag. Follow the
-repository README, add `@cclrte/direct` to devDependencies only, copy or link
+https://github.com/hraness/direct at the immutable v0.6.0 tag. Follow the
+repository README, add `@hraness/direct` to devDependencies only, copy or link
 `direct-setup` and `direct-verify` into this agent runner's configured
 skills directory, and verify that the production dependency graph excludes
 Direct. Do not add a fixture composition until I ask.
@@ -48,7 +48,7 @@ Pin the public repository to an immutable version tag:
 ```json
 {
   "devDependencies": {
-    "@cclrte/direct": "github:hraness/direct#v0.5.1"
+    "@hraness/direct": "github:hraness/direct#v0.6.0"
   }
 }
 ```
@@ -63,7 +63,7 @@ Keep Direct in `devDependencies`. A production entry must not import Direct, its
 
 ## Agent skills
 
-The packed package includes two Agent Skills under `node_modules/@cclrte/direct/skills/`. `direct-setup` guides a product-owned port, deterministic composition, and production-exclusion proof. `direct-verify` audits scenario behavior, quiescence, coverage claims, cleanup, and emitted production boundaries.
+The packed package includes two Agent Skills under `node_modules/@hraness/direct/skills/`. `direct-setup` guides a product-owned port, deterministic composition, and production-exclusion proof. `direct-verify` audits scenario behavior, quiescence, coverage claims, cleanup, and emitted production boundaries.
 
 Agent runners do not share one discovery directory. Copy or link the desired skill directory into the location configured by your runner, then invoke `$direct-setup` or `$direct-verify`. Package installation leaves the skills inert: it does not run a `postinstall` hook or edit repository or user configuration.
 
@@ -72,9 +72,9 @@ Agent runners do not share one discovery directory. Copy or link the desired ski
 Extract a strict world parser and product harness into product-owned files, then compose the lifecycle in one entry:
 
 ```ts
-import { defineDirect } from "@cclrte/direct";
-import { createDirectSession } from "@cclrte/direct/testing";
-import { installDirectBrowser } from "@cclrte/direct/web";
+import { defineDirect } from "@hraness/direct";
+import { createDirectSession } from "@hraness/direct/testing";
+import { installDirectBrowser } from "@hraness/direct/web";
 
 import { parseGreetingWorld } from "./world.js";
 
@@ -153,11 +153,11 @@ A quiet probe means the declared deterministic work settled. It does not prove t
 
 | Import | Purpose | Runtime boundary |
 | --- | --- | --- |
-| `@cclrte/direct` | Authored definitions plus the scenario, coverage, fixture, JSON, activation, and logical-time types needed to describe them | Framework-free |
-| `@cclrte/direct/core` | Advanced catalog, parser, store, runtime, effect, resource, ID, and `Result` mechanics | Framework-free |
-| `@cclrte/direct/react` | Typed context, provider, and external-store hooks for React DOM or React Native | Optional React peer |
-| `@cclrte/direct/testing` | Sessions, manifest and probe parsers, evidence classification, activity scopes, and exact scripted transports | Development and verification |
-| `@cclrte/direct/web` | Atomic browser installation, with low-level bridge and firewall escape hatches | Browser only |
+| `@hraness/direct` | Authored definitions plus the scenario, coverage, fixture, JSON, activation, and logical-time types needed to describe them | Framework-free |
+| `@hraness/direct/core` | Advanced catalog, parser, store, runtime, effect, resource, ID, and `Result` mechanics | Framework-free |
+| `@hraness/direct/react` | Typed context, provider, and external-store hooks for React DOM or React Native | Optional React peer |
+| `@hraness/direct/testing` | Sessions, manifest and probe parsers, evidence classification, activity scopes, and exact scripted transports | Development and verification |
+| `@hraness/direct/web` | Atomic browser installation, with low-level bridge and firewall escape hatches | Browser only |
 
 ## Activate scenarios
 

@@ -1,4 +1,4 @@
-import { SCENARIO_QUERY_KEY } from "@cclrte/direct";
+import { SCENARIO_QUERY_KEY } from "@hraness/direct";
 
 import { TodoApp } from "../src/TodoApp";
 import { todoDirectDefinition } from "./definition";

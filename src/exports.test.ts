@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import * as root from "@cclrte/direct";
-import * as core from "@cclrte/direct/core";
-import { createDirectReactBindings } from "@cclrte/direct/react";
-import * as testing from "@cclrte/direct/testing";
-import * as web from "@cclrte/direct/web";
+import * as root from "@hraness/direct";
+import * as core from "@hraness/direct/core";
+import { createDirectReactBindings } from "@hraness/direct/react";
+import * as testing from "@hraness/direct/testing";
+import * as web from "@hraness/direct/web";
 
 describe("public package exports", () => {
   test("the default entry is the curated definition and activation surface", () => {

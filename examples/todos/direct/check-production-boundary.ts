@@ -19,7 +19,7 @@ export const TODO_DIRECT_EXECUTABLE_MARKERS = Object.freeze([
 ]);
 
 export const TODO_PRODUCTION_MARKERS = Object.freeze([
-  "@cclrte/direct",
+  "@hraness/direct",
   "direct.browser-bridge/v",
   "direct.coverage/v",
   "direct.fixture/v",

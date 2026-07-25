@@ -69,7 +69,7 @@ describe("React Native production boundary", () => {
       [
         "device-status-example/screen/v1",
         "device-status-example/native-port/v1",
-        "@cclrte/direct",
+        "@hraness/direct",
         "__direct_scenario",
         "direct.browser-bridge/v99",
         "direct.coverage/v99",
@@ -87,7 +87,7 @@ describe("React Native production boundary", () => {
     expect(result.violations).toEqual([{
       file: "entry.js",
       markers: [
-        "@cclrte/direct",
+        "@hraness/direct",
         "__direct_scenario",
         "direct.browser-bridge/v",
         "direct.coverage/v",

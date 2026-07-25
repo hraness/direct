@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { SCENARIO_QUERY_KEY } from "@cclrte/direct";
+import { SCENARIO_QUERY_KEY } from "@hraness/direct";
 
 import { deviceStatusDirectDefinition } from "./definition";
 import { createDeviceStatusDirectSession } from "./session";

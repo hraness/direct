@@ -11,19 +11,19 @@
     "moduleResolution": "Bundler",
     "moduleDetection": "force",
     "paths": {
-      "@cclrte/direct": [
+      "@hraness/direct": [
         "./src/index.ts"
       ],
-      "@cclrte/direct/core": [
+      "@hraness/direct/core": [
         "./src/core/index.ts"
       ],
-      "@cclrte/direct/react": [
+      "@hraness/direct/react": [
         "./src/react.ts"
       ],
-      "@cclrte/direct/testing": [
+      "@hraness/direct/testing": [
         "./src/testing/index.ts"
       ],
-      "@cclrte/direct/web": [
+      "@hraness/direct/web": [
         "./src/web.ts"
       ]
     },

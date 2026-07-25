@@ -17,7 +17,7 @@
 
 - Use Bun 1.3.14 for repository commands. Keep the published ESM runtime portable to modern Node.js and browsers according to each export's documented boundary.
 - Keep core code product-, platform-, and framework-neutral. Put React, browser globals, and Node-only tooling behind explicit subpaths.
-- Keep React Native and Expo imports in the reference example; `@cclrte/direct/react` remains the platform-neutral React binding.
+- Keep React Native and Expo imports in the reference example; `@hraness/direct/react` remains the platform-neutral React binding.
 - Keep `.js` extensions on relative TypeScript import and export specifiers; the published source type surface must compile under both Bundler and NodeNext resolution.
 - Treat this repository as the complete project. Files and Git prose may use only its public names, paths, commands, and examples; do not refer to or infer any non-public source, system, product, package, path, or implementation detail.
 - Let each product own its semantic ports, strict versioned JSON world, deterministic adapters, scenarios, coverage claims, and workbench.

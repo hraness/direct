@@ -12,7 +12,7 @@ import {
 const exampleRoot = dirname(fileURLToPath(import.meta.url));
 
 async function verifyTodoExample(): Promise<void> {
-  const temporaryRoot = await mkdtemp(join(tmpdir(), "cclrte-direct-todos-"));
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "hraness-direct-todos-"));
   const productionOutput = join(temporaryRoot, "production");
   const directOutput = join(temporaryRoot, "direct");
 

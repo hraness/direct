@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@cclrte/direct",
+      "name": "@hraness/direct",
       "devDependencies": {
         "@eslint/js": "^9.39.2",
         "@expo/metro-runtime": "~57.0.6",
