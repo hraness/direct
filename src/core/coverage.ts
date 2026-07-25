@@ -1,8 +1,18 @@
 import { parseCoverageKey, parseScenarioId, type CoverageKey, type ScenarioId } from "./ids.js";
-import { parseJsonValue } from "./json.js";
+import {
+  DEFAULT_JSON_LIMITS,
+  parseJsonValue,
+  type JsonLimits,
+} from "./json.js";
 import { err, isRecord, ok, type Result } from "./result.js";
 
 export const DIRECT_COVERAGE_SCHEMA = "direct.coverage/v2" as const;
+/** Maximum proof claims retained by one definition and discovery manifest. */
+export const MAX_DIRECT_COVERAGE_ENTRIES = 256 as const;
+const DIRECT_COVERAGE_JSON_LIMITS = Object.freeze({
+  ...DEFAULT_JSON_LIMITS,
+  maxStringBytes: 16_777_216,
+}) satisfies JsonLimits;
 
 export type CoverageMode = "fixture" | "mixed" | "direct";
 
@@ -46,6 +56,7 @@ export type CoverageErrorCode =
   | "invalid-mode"
   | "invalid-scenario"
   | "missing-coverage"
+  | "too-many-coverage-entries"
   | "unexpected-coverage"
   | "unknown-coverage"
   | "unknown-scenario";
@@ -109,8 +120,9 @@ export function createCoverageCatalogSnapshot(
 /** Parse an exact versioned coverage snapshot read from verification tooling. */
 export function parseCoverageCatalogSnapshot(
   input: unknown,
+  limits: JsonLimits = DIRECT_COVERAGE_JSON_LIMITS,
 ): Result<CoverageCatalogSnapshot, CoverageError> {
-  const parsed = parseJsonValue(input);
+  const parsed = parseJsonValue(input, limits);
   if (!parsed.ok || !isRecord(parsed.value)) {
     return err(coverageError(
       "invalid-coverage",
@@ -194,6 +206,12 @@ export function createCoverageCatalog<Scenario extends string = string>(
   inputs: readonly CoverageEntryInput<Scenario>[],
   scenarios?: { readonly get: (id: ScenarioId) => unknown },
 ): Result<CoverageCatalog, CoverageError> {
+  if (inputs.length > MAX_DIRECT_COVERAGE_ENTRIES) {
+    return err(coverageError(
+      "too-many-coverage-entries",
+      `Direct definitions support at most ${String(MAX_DIRECT_COVERAGE_ENTRIES)} coverage entries`,
+    ));
+  }
   const entries: CoverageEntry[] = [];
   const byKey = new Map<CoverageKey, CoverageEntry>();
 

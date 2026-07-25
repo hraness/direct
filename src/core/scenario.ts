@@ -8,6 +8,9 @@ import {
   type LogicalRuntimeSnapshot,
 } from "./runtime.js";
 
+/** Maximum scenarios retained by one definition and discovery manifest. */
+export const MAX_DIRECT_SCENARIOS = 256 as const;
+
 export interface ScenarioDefinitionInput<World extends JsonValue, Route extends string> {
   readonly id: string;
   readonly title: string;
@@ -34,6 +37,7 @@ export type ScenarioCatalogErrorCode =
   | "invalid-scenario"
   | "invalid-title"
   | "invalid-world"
+  | "too-many-scenarios"
   | "unknown-scenario";
 
 export interface ScenarioCatalogError {
@@ -79,6 +83,13 @@ export function createScenarioCatalog<World extends JsonValue, Route extends str
   inputs: readonly ScenarioDefinitionInput<World, Route>[],
   parseWorld: WorldParser<World>,
 ): Result<ScenarioCatalog<World, Route>, ScenarioCatalogError> {
+  if (inputs.length > MAX_DIRECT_SCENARIOS) {
+    return err(scenarioError(
+      "too-many-scenarios",
+      inputs.length,
+      `Direct definitions support at most ${String(MAX_DIRECT_SCENARIOS)} scenarios`,
+    ));
+  }
   const definitions: ScenarioDefinition<World, Route>[] = [];
   const byId = new Map<ScenarioId, ScenarioDefinition<World, Route>>();
 

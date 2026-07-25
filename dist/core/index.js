@@ -1,54 +1,55 @@
 import {
-  DEFAULT_MAX_FIXTURE_BYTES,
-  DEFAULT_MAX_QUERY_BYTES,
-  FIXTURE_QUERY_KEY,
-  FIXTURE_SCHEMA,
-  SCENARIO_QUERY_KEY,
-  activateDirectScenario,
-  createFixtureEnvelope,
-  createScenarioCatalog,
-  maximumFixtureQueryBytes,
-  parseDirectQuery,
-  parseFixtureEnvelope,
-  parseFixtureJson,
-  serializeFixtureJson
-} from "../index-zg34h2bx.js";
-import {
   createDirectStore
-} from "../index-x5hgch7b.js";
-import {
-  DEFAULT_LOGICAL_RUNTIME_SNAPSHOT,
-  LOGICAL_RUNTIME_SCHEMA,
-  MAX_HOST_TIMER_MILLISECONDS,
-  createLogicalRuntime,
-  parseLogicalRuntimeSnapshot
-} from "../index-wqwbtetw.js";
+} from "../index-6pv1bpkp.js";
 import {
   DEFAULT_JSON_LIMITS,
+  DEFAULT_LOGICAL_RUNTIME_SNAPSHOT,
+  DEFAULT_MAX_FIXTURE_BYTES,
+  DEFAULT_MAX_QUERY_BYTES,
   DIRECT_COVERAGE_SCHEMA,
   EMPTY_COVERAGE_CATALOG_SNAPSHOT,
+  FIXTURE_QUERY_KEY,
+  FIXTURE_SCHEMA,
+  LOGICAL_RUNTIME_SCHEMA,
+  MAX_DIRECT_COVERAGE_ENTRIES,
+  MAX_DIRECT_SCENARIOS,
+  MAX_HOST_TIMER_MILLISECONDS,
+  SCENARIO_QUERY_KEY,
+  STABLE_HASH_ALGORITHM,
+  activateDirectScenario,
   canonicalJson,
   cloneJson,
   coverageKey,
   createCoverageCatalog,
   createCoverageCatalogSnapshot,
+  createFixtureEnvelope,
+  createLogicalRuntime,
+  createScenarioCatalog,
   err,
   freezeJson,
   isRecord,
+  maximumFixtureQueryBytes,
   ok,
   operationId,
   parseAndCloneWorld,
   parseCoverageCatalogSnapshot,
   parseCoverageKey,
+  parseDirectQuery,
   parseExactJsonSource,
+  parseFixtureEnvelope,
+  parseFixtureJson,
   parseJsonValue,
+  parseLogicalRuntimeSnapshot,
   parseOperationId,
   parseScenarioId,
+  parseTaggedStableHash,
   renderUnknownReason,
   scenarioId,
+  serializeFixtureJson,
   stableHash,
+  tagStableHash,
   utf8ByteLength
-} from "../index-541zzq54.js";
+} from "../index-s0h6zg88.js";
 // src/core/effects.ts
 function ownQueuedEffect(entry) {
   const id = parseOperationId(entry.id);
@@ -103,10 +104,12 @@ var enqueueFault = enqueueEffect;
 var consumeFault = consumeEffect;
 export {
   utf8ByteLength,
+  tagStableHash,
   stableHash,
   serializeFixtureJson,
   scenarioId,
   renderUnknownReason,
+  parseTaggedStableHash,
   parseScenarioId,
   parseOperationId,
   parseLogicalRuntimeSnapshot,
@@ -138,8 +141,11 @@ export {
   cloneJson,
   canonicalJson,
   activateDirectScenario,
+  STABLE_HASH_ALGORITHM,
   SCENARIO_QUERY_KEY,
   MAX_HOST_TIMER_MILLISECONDS,
+  MAX_DIRECT_SCENARIOS,
+  MAX_DIRECT_COVERAGE_ENTRIES,
   LOGICAL_RUNTIME_SCHEMA,
   FIXTURE_SCHEMA,
   FIXTURE_QUERY_KEY,

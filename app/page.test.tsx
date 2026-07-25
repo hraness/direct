@@ -1,15 +1,23 @@
+import { readFile } from "node:fs/promises";
+
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import HomePage from "./page";
 
 describe("Direct home page", () => {
-  test("is a compact project page with the exact install command", () => {
+  test("is a compact project page with the package-versioned install command", async () => {
     const html = renderToStaticMarkup(<HomePage />);
+    const manifest = JSON.parse(
+      await readFile(new URL("../package.json", import.meta.url), "utf8"),
+    ) as { readonly version?: unknown };
 
     expect(html).toContain("<h1>direct</h1>");
     expect(html).toContain("named, repeatable app states for browser agents.");
-    expect(html).toContain("bun add --dev github:hraness/direct#v0.4.0");
+    expect(typeof manifest.version).toBe("string");
+    expect(html).toContain(
+      `bun add --dev github:hraness/direct#v${String(manifest.version)}`,
+    );
     expect(html).toContain("development only.");
     expect(html).toContain(
       "define signed-in, empty, error, and other hard-to-reach states once",

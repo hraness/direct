@@ -7,6 +7,8 @@ import { parseTestWorld } from "../core/test-support.js";
 import { createDirectActivityScope } from "./activity.js";
 import { createDirectProbe, parseDirectProbeSnapshot } from "./probe.js";
 
+const ACTIVATION_HASH = "fnv1a-64:0123456789abcdef" as const;
+
 test("property: quiescence is exactly zero store activity and zero pending counters", () => {
   assertProperty(fc.property(
     fc.array(fc.integer({ min: 0, max: 10_000 }), { maxLength: 20 }),
@@ -26,7 +28,7 @@ test("property: quiescence is exactly zero store activity and zero pending count
       });
       const probe = createDirectProbe({
         store: store.value,
-        activationHash: "property-hash",
+        activationHash: ACTIVATION_HASH,
         pending: pending.map((value, index) => ({ name: `pending${String(index)}`, read: () => value })),
         violations: violations.map((value, index) => ({ name: `violation${String(index)}`, read: () => value })),
         readRemainingWork: () => ({ remaining: pending.length }),
@@ -68,7 +70,7 @@ test("property: genuine reset and activity traces always round-trip through the 
       );
       const probe = createDirectProbe({
         store: store.value,
-        activationHash: "reset-trace-hash",
+        activationHash: ACTIVATION_HASH,
       });
       if (!probe.ok) throw new Error(probe.error.message);
       const expectRoundTrip = (): void => {

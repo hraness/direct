@@ -355,11 +355,22 @@ function freezeJson(value) {
   }
   return value;
 }
+var STABLE_HASH_ALGORITHM = "fnv1a-64";
+var TAGGED_STABLE_HASH_PATTERN = /^fnv1a-64:[0-9a-f]{16}$/u;
+function tagStableHash(hash) {
+  return `${hash.algorithm}:${hash.value}`;
+}
+function parseTaggedStableHash(input) {
+  return typeof input === "string" && TAGGED_STABLE_HASH_PATTERN.test(input) ? ok(input) : err({
+    code: "invalid-stable-hash",
+    message: `Stable hashes must use ${STABLE_HASH_ALGORITHM} with 16 lowercase hexadecimal digits`
+  });
+}
 function updateFnvByte(hash, byte) {
   return BigInt.asUintN(64, (hash ^ BigInt(byte)) * 0x100000001b3n);
 }
-function stableHash(input) {
-  const serialized = canonicalJson(input);
+function stableHash(input, limits = DEFAULT_JSON_LIMITS) {
+  const serialized = canonicalJson(input, limits);
   if (!serialized.ok) {
     return serialized;
   }
@@ -391,7 +402,10 @@ function stableHash(input) {
       hash = updateFnvByte(hash, 128 | code & 63);
     }
   }
-  return ok({ algorithm: "fnv1a-64", value: hash.toString(16).padStart(16, "0") });
+  return ok({
+    algorithm: STABLE_HASH_ALGORITHM,
+    value: hash.toString(16).padStart(16, "0")
+  });
 }
 function parseAndCloneWorld(input, parseWorld) {
   const cloned = cloneJson(input);
@@ -412,6 +426,11 @@ function parseAndCloneWorld(input, parseWorld) {
 
 // src/core/coverage.ts
 var DIRECT_COVERAGE_SCHEMA = "direct.coverage/v2";
+var MAX_DIRECT_COVERAGE_ENTRIES = 256;
+var DIRECT_COVERAGE_JSON_LIMITS = Object.freeze({
+  ...DEFAULT_JSON_LIMITS,
+  maxStringBytes: 16777216
+});
 var EMPTY_COVERAGE_CATALOG_SNAPSHOT = Object.freeze({
   schema: DIRECT_COVERAGE_SCHEMA,
   entries: Object.freeze([])
@@ -439,8 +458,8 @@ function createCoverageCatalogSnapshot(catalog) {
     entries: catalog.list()
   });
 }
-function parseCoverageCatalogSnapshot(input) {
-  const parsed = parseJsonValue(input);
+function parseCoverageCatalogSnapshot(input, limits = DIRECT_COVERAGE_JSON_LIMITS) {
+  const parsed = parseJsonValue(input, limits);
   if (!parsed.ok || !isRecord(parsed.value)) {
     return err(coverageError("invalid-coverage", parsed.ok ? "Coverage snapshot must be an object" : parsed.error.message));
   }
@@ -495,6 +514,9 @@ function parseCoverageCatalogSnapshot(input) {
   return catalog.ok ? ok(createCoverageCatalogSnapshot(catalog.value)) : catalog;
 }
 function createCoverageCatalog(inputs, scenarios) {
+  if (inputs.length > MAX_DIRECT_COVERAGE_ENTRIES) {
+    return err(coverageError("too-many-coverage-entries", `Direct definitions support at most ${String(MAX_DIRECT_COVERAGE_ENTRIES)} coverage entries`));
+  }
   const entries = [];
   const byKey = new Map;
   for (const input of inputs) {
@@ -604,4 +626,509 @@ function createCoverageCatalog(inputs, scenarios) {
   return ok(Object.freeze(catalog));
 }
 
-export { ok, err, isRecord, parseScenarioId, parseOperationId, parseCoverageKey, scenarioId, operationId, coverageKey, renderUnknownReason, DEFAULT_JSON_LIMITS, utf8ByteLength, parseExactJsonSource, parseJsonValue, canonicalJson, cloneJson, freezeJson, stableHash, parseAndCloneWorld, DIRECT_COVERAGE_SCHEMA, EMPTY_COVERAGE_CATALOG_SNAPSHOT, createCoverageCatalogSnapshot, parseCoverageCatalogSnapshot, createCoverageCatalog };
+// src/core/runtime.ts
+var LOGICAL_RUNTIME_SCHEMA = "direct.runtime/v1";
+var MAX_HOST_TIMER_MILLISECONDS = 2147483647;
+var DEFAULT_LOGICAL_RUNTIME_SNAPSHOT = Object.freeze({
+  schema: LOGICAL_RUNTIME_SCHEMA,
+  nowMs: 0,
+  nextOperation: 1,
+  acceleration: 100
+});
+var RUNTIME_KEYS = new Set(["schema", "nowMs", "nextOperation", "acceleration"]);
+var NAMESPACE_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
+function parseLogicalRuntimeSnapshot(input) {
+  const parsedJson = parseJsonValue(input);
+  if (!parsedJson.ok || !isRecord(parsedJson.value)) {
+    return err({ code: "invalid-runtime", message: "Logical runtime must be an object" });
+  }
+  for (const key of Object.keys(parsedJson.value)) {
+    if (!RUNTIME_KEYS.has(key)) {
+      return err({ code: "invalid-runtime", message: `Unknown logical runtime key: ${key}` });
+    }
+  }
+  const record = parsedJson.value;
+  if (record.schema !== LOGICAL_RUNTIME_SCHEMA) {
+    return err({ code: "invalid-runtime", message: `Logical runtime schema must be ${LOGICAL_RUNTIME_SCHEMA}` });
+  }
+  if (typeof record.nowMs !== "number" || !Number.isSafeInteger(record.nowMs) || record.nowMs < 0) {
+    return err({ code: "invalid-runtime", message: "Logical nowMs must be a non-negative safe integer" });
+  }
+  if (typeof record.nextOperation !== "number" || !Number.isSafeInteger(record.nextOperation) || record.nextOperation < 1) {
+    return err({ code: "invalid-runtime", message: "Logical nextOperation must be a positive safe integer" });
+  }
+  if (typeof record.acceleration !== "number" || !Number.isFinite(record.acceleration) || record.acceleration < 1 || record.acceleration > 1e6) {
+    return err({ code: "invalid-runtime", message: "Logical acceleration must be in [1, 1000000]" });
+  }
+  return ok(Object.freeze({
+    schema: LOGICAL_RUNTIME_SCHEMA,
+    nowMs: record.nowMs,
+    nextOperation: record.nextOperation,
+    acceleration: record.acceleration
+  }));
+}
+function sleepTimerChunk(wallMilliseconds, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted === true) {
+      resolve();
+      return;
+    }
+    let timeout = null;
+    let settled = false;
+    const finish = () => {
+      if (settled)
+        return;
+      settled = true;
+      if (timeout !== null)
+        clearTimeout(timeout);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    signal?.addEventListener("abort", finish, { once: true });
+    timeout = setTimeout(finish, wallMilliseconds);
+  });
+}
+async function defaultSleep(wallMilliseconds, signal) {
+  let remaining = wallMilliseconds;
+  while (remaining > 0 && signal?.aborted !== true) {
+    const chunk = Math.min(remaining, MAX_HOST_TIMER_MILLISECONDS);
+    await sleepTimerChunk(chunk, signal);
+    remaining -= chunk;
+  }
+}
+function parseDuration(logicalMilliseconds) {
+  return Number.isSafeInteger(logicalMilliseconds) && logicalMilliseconds >= 0 ? ok(logicalMilliseconds) : err({ code: "invalid-duration", message: "Logical durations must be non-negative safe integers" });
+}
+function isWaitCancelled(signal) {
+  return signal?.aborted === true;
+}
+function waitCancelled() {
+  return err({
+    code: "wait-cancelled",
+    message: "Logical wait was cancelled"
+  });
+}
+function nextLogicalTime(nowMs, duration) {
+  const nextNow = nowMs + duration;
+  return Number.isSafeInteger(nextNow) ? ok(nextNow) : err({ code: "time-overflow", message: "Logical time exceeds the safe integer range" });
+}
+function createLogicalRuntime(initial = DEFAULT_LOGICAL_RUNTIME_SNAPSHOT, sleep = defaultSleep) {
+  const parsed = parseLogicalRuntimeSnapshot(initial);
+  if (!parsed.ok) {
+    throw new Error(parsed.error.message);
+  }
+  let nowMs = parsed.value.nowMs;
+  let nextOperation = parsed.value.nextOperation;
+  const acceleration = parsed.value.acceleration;
+  let waitTail = Promise.resolve();
+  const snapshot = () => Object.freeze({
+    schema: LOGICAL_RUNTIME_SCHEMA,
+    nowMs,
+    nextOperation,
+    acceleration
+  });
+  const advance = (logicalMilliseconds) => {
+    const duration = parseDuration(logicalMilliseconds);
+    if (!duration.ok) {
+      return duration;
+    }
+    const nextNow = nextLogicalTime(nowMs, duration.value);
+    if (!nextNow.ok) {
+      return nextNow;
+    }
+    nowMs = nextNow.value;
+    return ok(nowMs);
+  };
+  const wait = (logicalMilliseconds, signal) => {
+    const duration = parseDuration(logicalMilliseconds);
+    if (!duration.ok) {
+      return Promise.resolve(duration);
+    }
+    const run = waitTail.then(async () => {
+      if (isWaitCancelled(signal))
+        return waitCancelled();
+      const target = nextLogicalTime(nowMs, duration.value);
+      if (!target.ok)
+        return target;
+      const wallMilliseconds = Math.ceil(duration.value / acceleration);
+      try {
+        if (wallMilliseconds > 0) {
+          await sleep(wallMilliseconds, signal);
+        }
+      } catch (reason) {
+        if (isWaitCancelled(signal))
+          return waitCancelled();
+        return err({
+          code: "sleep-failed",
+          message: renderUnknownReason(reason, "Logical sleep failed")
+        });
+      }
+      if (isWaitCancelled(signal))
+        return waitCancelled();
+      return advance(duration.value);
+    });
+    waitTail = run.then(() => {
+      return;
+    }, () => {
+      return;
+    });
+    return run;
+  };
+  return Object.freeze({
+    now: () => nowMs,
+    snapshot,
+    nextOperationId: (namespace = "operation") => {
+      if (!NAMESPACE_PATTERN.test(namespace) || namespace.length > 48) {
+        throw new Error("Operation namespaces must be lowercase hyphen-separated ASCII identifiers");
+      }
+      if (!Number.isSafeInteger(nextOperation) || nextOperation >= Number.MAX_SAFE_INTEGER) {
+        throw new Error("Operation sequence exceeds the safe integer range");
+      }
+      const candidate = `${namespace}-${String(nextOperation).padStart(6, "0")}`;
+      nextOperation += 1;
+      const parsedOperation = parseOperationId(candidate);
+      if (!parsedOperation.ok) {
+        throw new Error(parsedOperation.error.message);
+      }
+      return parsedOperation.value;
+    },
+    advance,
+    wait
+  });
+}
+
+// src/core/fixture.ts
+var FIXTURE_SCHEMA = "direct.fixture/v1";
+var DEFAULT_MAX_FIXTURE_BYTES = 65536;
+var FIXTURE_KEYS = new Set(["schema", "scenario", "route", "world", "runtime"]);
+function fixtureError(code, message) {
+  return { code, message };
+}
+function maxFixtureBytes(value) {
+  const maximum = value ?? DEFAULT_MAX_FIXTURE_BYTES;
+  if (!Number.isSafeInteger(maximum) || maximum < 1) {
+    throw new Error("Fixture maxBytes must be a positive safe integer");
+  }
+  return maximum;
+}
+function parseFixtureEnvelope(input, options) {
+  const maximum = maxFixtureBytes(options.maxBytes);
+  const serialized = canonicalJson(input);
+  if (!serialized.ok) {
+    return err(fixtureError("invalid-fixture", serialized.error.message));
+  }
+  if (utf8ByteLength(serialized.value) > maximum) {
+    return err(fixtureError("oversized-fixture", "Fixture exceeds its byte limit"));
+  }
+  const foreign = JSON.parse(serialized.value);
+  if (!isRecord(foreign)) {
+    return err(fixtureError("invalid-fixture", "Fixture must be an object"));
+  }
+  for (const key of Object.keys(foreign)) {
+    if (!FIXTURE_KEYS.has(key)) {
+      return err(fixtureError("unknown-key", `Unknown fixture key: ${key}`));
+    }
+  }
+  if (foreign.schema !== FIXTURE_SCHEMA) {
+    return err(fixtureError("invalid-fixture", `Fixture schema must be ${FIXTURE_SCHEMA}`));
+  }
+  const id = parseScenarioId(foreign.scenario);
+  if (!id.ok) {
+    return err(fixtureError("invalid-scenario", id.error.message));
+  }
+  const scenario = options.scenarios.get(id.value);
+  if (scenario === undefined) {
+    return err(fixtureError("unknown-scenario", `Unknown fixture scenario: ${id.value}`));
+  }
+  if (typeof foreign.route !== "string" || foreign.route !== scenario.route) {
+    return err(fixtureError("mismatched-route", `Fixture route must match scenario ${id.value}`));
+  }
+  const runtime = foreign.runtime === undefined ? ok(scenario.runtime) : parseLogicalRuntimeSnapshot(foreign.runtime);
+  if (!runtime.ok) {
+    return err(fixtureError("invalid-runtime", runtime.error.message));
+  }
+  const world = parseAndCloneWorld(foreign.world, options.parseWorld);
+  if (!world.ok) {
+    return err(fixtureError("invalid-world", world.error.message));
+  }
+  const envelope = Object.freeze({
+    schema: FIXTURE_SCHEMA,
+    scenario: id.value,
+    route: scenario.route,
+    world: world.value,
+    runtime: runtime.value
+  });
+  const normalized = canonicalJson(envelope);
+  if (!normalized.ok) {
+    return err(fixtureError("invalid-fixture", normalized.error.message));
+  }
+  if (utf8ByteLength(normalized.value) > maximum) {
+    return err(fixtureError("oversized-fixture", "Normalized fixture exceeds its byte limit"));
+  }
+  return ok(envelope);
+}
+function parseFixtureJson(source, options) {
+  if (typeof source !== "string") {
+    return err(fixtureError("invalid-json", "Fixture JSON source must be a string"));
+  }
+  if (utf8ByteLength(source) > maxFixtureBytes(options.maxBytes)) {
+    return err(fixtureError("oversized-fixture", "Fixture exceeds its byte limit"));
+  }
+  const input = parseExactJsonSource(source);
+  if (!input.ok) {
+    return err(fixtureError(input.error.code === "duplicate-key" ? "duplicate-key" : "invalid-json", input.error.code === "duplicate-key" ? input.error.message : "Fixture is not valid JSON"));
+  }
+  return parseFixtureEnvelope(input.value, options);
+}
+function createFixtureEnvelope(input, options) {
+  const id = parseScenarioId(input.scenario);
+  if (!id.ok)
+    return err(fixtureError("invalid-scenario", id.error.message));
+  const scenario = options.scenarios.get(id.value);
+  if (scenario === undefined) {
+    return err(fixtureError("unknown-scenario", `Unknown fixture scenario: ${id.value}`));
+  }
+  return parseFixtureEnvelope({
+    schema: FIXTURE_SCHEMA,
+    scenario: id.value,
+    route: scenario.route,
+    world: input.world,
+    runtime: input.runtime ?? scenario.runtime
+  }, options);
+}
+function serializeFixtureJson(input, options) {
+  const fixture = createFixtureEnvelope(input, options);
+  if (!fixture.ok)
+    return fixture;
+  const serialized = canonicalJson(fixture.value);
+  if (!serialized.ok) {
+    return err(fixtureError("invalid-fixture", serialized.error.message));
+  }
+  if (utf8ByteLength(serialized.value) > maxFixtureBytes(options.maxBytes)) {
+    return err(fixtureError("oversized-fixture", "Normalized fixture exceeds its byte limit"));
+  }
+  return ok(serialized.value);
+}
+
+// src/core/query.ts
+var SCENARIO_QUERY_KEY = "__direct_scenario";
+var FIXTURE_QUERY_KEY = "__direct_fixture";
+var FIXTURE_QUERY_PREFIX_BYTES = utf8ByteLength(`?${FIXTURE_QUERY_KEY}=`);
+function maximumFixtureQueryBytes(maxFixtureBytes2) {
+  return maxFixtureBytes2 * 3 + FIXTURE_QUERY_PREFIX_BYTES;
+}
+var DEFAULT_MAX_QUERY_BYTES = maximumFixtureQueryBytes(DEFAULT_MAX_FIXTURE_BYTES);
+function queryError(code, message) {
+  return { code, message };
+}
+function decodeQueryPart(value) {
+  try {
+    return ok(decodeURIComponent(value.replaceAll("+", " ")));
+  } catch {
+    return err(queryError("invalid-encoding", "Direct query contains invalid percent encoding"));
+  }
+}
+function queryBody(source) {
+  const question = source.indexOf("?");
+  const candidate = question >= 0 ? source.slice(question + 1) : source.startsWith("?") ? source.slice(1) : source;
+  const fragment = candidate.indexOf("#");
+  return fragment >= 0 ? candidate.slice(0, fragment) : candidate;
+}
+function parseActivationParameters(source) {
+  let scenario = null;
+  let fixture = null;
+  const body = queryBody(source);
+  if (body.length === 0) {
+    return ok({ scenario, fixture });
+  }
+  for (const part of body.split("&")) {
+    if (part.length === 0) {
+      continue;
+    }
+    const equals = part.indexOf("=");
+    const encodedKey = equals < 0 ? part : part.slice(0, equals);
+    const encodedValue = equals < 0 ? "" : part.slice(equals + 1);
+    const key = decodeQueryPart(encodedKey);
+    if (!key.ok) {
+      return key;
+    }
+    const reserved = key.value.startsWith("__direct_");
+    if (key.value !== SCENARIO_QUERY_KEY && key.value !== FIXTURE_QUERY_KEY) {
+      if (reserved) {
+        return err(queryError("unknown-parameter", `Unknown Direct query parameter: ${key.value}`));
+      }
+      continue;
+    }
+    const value = decodeQueryPart(encodedValue);
+    if (!value.ok) {
+      return value;
+    }
+    if (key.value === SCENARIO_QUERY_KEY) {
+      if (scenario !== null) {
+        return err(queryError("duplicate-parameter", `Duplicate ${SCENARIO_QUERY_KEY} parameter`));
+      }
+      scenario = value.value;
+    } else {
+      if (fixture !== null) {
+        return err(queryError("duplicate-parameter", `Duplicate ${FIXTURE_QUERY_KEY} parameter`));
+      }
+      fixture = value.value;
+    }
+  }
+  return ok({ scenario, fixture });
+}
+function activationHash(source, scenario, route, world, runtime) {
+  const hashed = stableHash({ source, scenario, route, world, runtime });
+  if (!hashed.ok) {
+    throw new Error(hashed.error.message);
+  }
+  return tagStableHash(hashed.value);
+}
+function activateDirectScenario(id, scenarios) {
+  const parsed = parseScenarioId(id);
+  if (!parsed.ok) {
+    return err(queryError("invalid-scenario", parsed.error.message));
+  }
+  const scenario = scenarios.get(parsed.value);
+  if (scenario === undefined) {
+    return err(queryError("unknown-scenario", `Unknown scenario: ${parsed.value}`));
+  }
+  return ok(Object.freeze({
+    kind: "active",
+    source: "scenario",
+    scenario: scenario.id,
+    route: scenario.route,
+    world: scenario.world,
+    runtime: scenario.runtime,
+    activationHash: activationHash("scenario", scenario.id, scenario.route, scenario.world, scenario.runtime)
+  }));
+}
+function parseDirectQuery(source, options) {
+  const maxBytes = options.maxQueryBytes ?? DEFAULT_MAX_QUERY_BYTES;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+    throw new Error("Query maxQueryBytes must be a positive safe integer");
+  }
+  if (typeof source !== "string") {
+    return err(queryError("invalid-query", "Direct query source must be a string"));
+  }
+  if (utf8ByteLength(source) > maxBytes) {
+    return err(queryError("oversized-query", "Direct query exceeds its byte limit"));
+  }
+  const parameters = parseActivationParameters(source);
+  if (!parameters.ok) {
+    return parameters;
+  }
+  if (parameters.value.scenario === null && parameters.value.fixture === null) {
+    return ok(Object.freeze({ kind: "inactive" }));
+  }
+  const requestedScenario = parameters.value.scenario === null ? null : activateDirectScenario(parameters.value.scenario, options.scenarios);
+  if (requestedScenario !== null && !requestedScenario.ok) {
+    return requestedScenario;
+  }
+  if (parameters.value.fixture === null) {
+    return requestedScenario ?? err(queryError("invalid-scenario", "Missing scenario activation"));
+  }
+  const fixture = parseFixtureJson(parameters.value.fixture, options);
+  if (!fixture.ok) {
+    return err(queryError("invalid-fixture", fixture.error.message));
+  }
+  if (requestedScenario !== null && requestedScenario.value.scenario !== fixture.value.scenario) {
+    return err(queryError("mismatched-scenario", `${SCENARIO_QUERY_KEY} does not match the fixture scenario`));
+  }
+  return ok(Object.freeze({
+    kind: "active",
+    source: "fixture",
+    scenario: fixture.value.scenario,
+    route: fixture.value.route,
+    world: fixture.value.world,
+    runtime: fixture.value.runtime,
+    activationHash: activationHash("fixture", fixture.value.scenario, fixture.value.route, fixture.value.world, fixture.value.runtime)
+  }));
+}
+
+// src/core/scenario.ts
+var MAX_DIRECT_SCENARIOS = 256;
+function validText(value, maximum) {
+  if (value.trim().length === 0 || value.length > maximum) {
+    return false;
+  }
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code < 32 && code !== 9 && code !== 10 && code !== 13 || code === 127) {
+      return false;
+    }
+  }
+  return true;
+}
+function validRoute(value) {
+  if (value.trim().length === 0 || value.length > 256)
+    return false;
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code < 32 || code === 127)
+      return false;
+  }
+  return true;
+}
+function scenarioError(code, scenario, message) {
+  return { code, scenario, message };
+}
+function createScenarioCatalog(inputs, parseWorld) {
+  if (inputs.length > MAX_DIRECT_SCENARIOS) {
+    return err(scenarioError("too-many-scenarios", inputs.length, `Direct definitions support at most ${String(MAX_DIRECT_SCENARIOS)} scenarios`));
+  }
+  const definitions = [];
+  const byId = new Map;
+  for (const input of inputs) {
+    const id = parseScenarioId(input.id);
+    if (!id.ok) {
+      return err(scenarioError("invalid-scenario", input.id, id.error.message));
+    }
+    if (byId.has(id.value)) {
+      return err(scenarioError("duplicate-scenario", id.value, `Duplicate scenario: ${id.value}`));
+    }
+    if (!validText(input.title, 160)) {
+      return err(scenarioError("invalid-title", id.value, "Scenario titles must contain 1-160 visible characters"));
+    }
+    if (input.description !== undefined && !validText(input.description, 2000)) {
+      return err(scenarioError("invalid-description", id.value, "Scenario descriptions must contain 1-2000 visible characters"));
+    }
+    if (!validRoute(input.route)) {
+      return err(scenarioError("invalid-route", id.value, "Scenario routes must contain 1-256 visible characters"));
+    }
+    const runtime = parseLogicalRuntimeSnapshot(input.runtime ?? DEFAULT_LOGICAL_RUNTIME_SNAPSHOT);
+    if (!runtime.ok) {
+      return err(scenarioError("invalid-runtime", id.value, runtime.error.message));
+    }
+    const world = parseAndCloneWorld(input.world, parseWorld);
+    if (!world.ok) {
+      return err(scenarioError("invalid-world", id.value, world.error.message));
+    }
+    const definition = Object.freeze({
+      id: id.value,
+      title: input.title,
+      description: input.description ?? null,
+      route: input.route,
+      world: world.value,
+      runtime: runtime.value
+    });
+    definitions.push(definition);
+    byId.set(id.value, definition);
+  }
+  const frozenDefinitions = Object.freeze(definitions);
+  return ok(Object.freeze({
+    size: frozenDefinitions.length,
+    list: () => frozenDefinitions,
+    get: (id) => byId.get(id),
+    resolve: (input) => {
+      const id = parseScenarioId(input);
+      if (!id.ok) {
+        return err(scenarioError("invalid-scenario", input, id.error.message));
+      }
+      const definition = byId.get(id.value);
+      return definition === undefined ? err(scenarioError("unknown-scenario", id.value, `Unknown scenario: ${id.value}`)) : ok(definition);
+    }
+  }));
+}
+
+export { ok, err, isRecord, parseScenarioId, parseOperationId, parseCoverageKey, scenarioId, operationId, coverageKey, renderUnknownReason, DEFAULT_JSON_LIMITS, utf8ByteLength, parseExactJsonSource, parseJsonValue, canonicalJson, cloneJson, freezeJson, STABLE_HASH_ALGORITHM, tagStableHash, parseTaggedStableHash, stableHash, parseAndCloneWorld, DIRECT_COVERAGE_SCHEMA, MAX_DIRECT_COVERAGE_ENTRIES, EMPTY_COVERAGE_CATALOG_SNAPSHOT, createCoverageCatalogSnapshot, parseCoverageCatalogSnapshot, createCoverageCatalog, LOGICAL_RUNTIME_SCHEMA, MAX_HOST_TIMER_MILLISECONDS, DEFAULT_LOGICAL_RUNTIME_SNAPSHOT, parseLogicalRuntimeSnapshot, createLogicalRuntime, FIXTURE_SCHEMA, DEFAULT_MAX_FIXTURE_BYTES, parseFixtureEnvelope, parseFixtureJson, createFixtureEnvelope, serializeFixtureJson, SCENARIO_QUERY_KEY, FIXTURE_QUERY_KEY, maximumFixtureQueryBytes, DEFAULT_MAX_QUERY_BYTES, activateDirectScenario, parseDirectQuery, MAX_DIRECT_SCENARIOS, createScenarioCatalog };

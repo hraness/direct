@@ -89,6 +89,38 @@ describe("todo production boundary", () => {
     }
   });
 
+  test("rejects future Direct wire versions from production output", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "todo-production-wire-boundary-"));
+    try {
+      await emitMappedBrowserBuild(
+        directory,
+        productionSources,
+        [
+          "direct.browser-bridge/v99",
+          "direct.coverage/v99",
+          "direct.fixture/v99",
+          "direct.probe/v99",
+          "direct.runtime/v99",
+          "direct.session-manifest/v99",
+        ].join(" "),
+      );
+      const result = await scanTodoProductionOutput(directory);
+      expect(result.violations).toEqual([{
+        file: join(directory, "assets", "app.js"),
+        markers: [
+          "direct.browser-bridge/v",
+          "direct.coverage/v",
+          "direct.fixture/v",
+          "direct.probe/v",
+          "direct.runtime/v",
+          "direct.session-manifest/v",
+        ],
+      }]);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   test("rejects empty, executable-free, and unrelated clean output", async () => {
     const empty = await mkdtemp(join(tmpdir(), "todo-production-empty-"));
     const unrelated = await mkdtemp(join(tmpdir(), "todo-production-unrelated-"));
@@ -174,6 +206,45 @@ describe("todo Direct boundary", () => {
       await expectBoundaryFailure(
         scanTodoDirectOutput(directory),
         "missing required executable markers",
+      );
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("does not accept v20 or v10 as the current Direct wire versions", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "todo-direct-wire-version-"));
+    try {
+      const futureWireJavaScript = directJavaScript
+        .replace("direct.browser-bridge/v2", "direct.browser-bridge/v20")
+        .replace("direct.session-manifest/v1", "direct.session-manifest/v10")
+        .replace("direct.probe/v1", "direct.probe/v10");
+      await emitMappedBrowserBuild(directory, directSources, futureWireJavaScript);
+      await expectBoundaryFailure(
+        scanTodoDirectOutput(directory),
+        "missing required executable markers",
+      );
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("rejects stale or future wire versions beside the current contract", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "todo-direct-mixed-wire-version-"));
+    try {
+      await emitMappedBrowserBuild(
+        directory,
+        directSources,
+        [
+          directJavaScript,
+          "direct.browser-bridge/v1",
+          "direct.session-manifest/v2",
+          "direct.probe/v2",
+        ].join(" "),
+      );
+      await expectBoundaryFailure(
+        scanTodoDirectOutput(directory),
+        "unexpected executable marker versions",
       );
     } finally {
       await rm(directory, { force: true, recursive: true });

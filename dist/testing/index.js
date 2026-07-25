@@ -1,27 +1,30 @@
 import {
   createDirectStore
-} from "../index-x5hgch7b.js";
+} from "../index-6pv1bpkp.js";
 import {
-  createLogicalRuntime,
-  parseLogicalRuntimeSnapshot
-} from "../index-wqwbtetw.js";
-import {
+  DIRECT_CATALOG_HASH_ALGORITHM,
   DIRECT_PROBE_SCHEMA,
+  DIRECT_SESSION_MANIFEST_SCHEMA,
   MAX_DIRECT_PROBE_COUNTERS,
   createDirectProbe,
-  parseDirectProbeSnapshot
-} from "../index-s10kw9hv.js";
+  createDirectSessionManifest,
+  parseDirectProbeSnapshot,
+  parseDirectSessionManifest
+} from "../index-way196f7.js";
 import {
   canonicalJson,
   createCoverageCatalogSnapshot,
+  createLogicalRuntime,
   err,
   isRecord,
   ok,
   parseAndCloneWorld,
   parseCoverageCatalogSnapshot,
   parseJsonValue,
+  parseLogicalRuntimeSnapshot,
+  parseTaggedStableHash,
   renderUnknownReason
-} from "../index-541zzq54.js";
+} from "../index-s0h6zg88.js";
 
 // src/testing/activity.ts
 function storeErrorMessage(cause) {
@@ -298,13 +301,11 @@ function createDirectSession(options) {
   let createHarness;
   let observeHarness;
   let parseWorld;
-  let coverage;
   let sleep;
   let storeOptions;
   try {
     definition = options.definition;
     parseWorld = definition.parseWorld;
-    coverage = createCoverageCatalogSnapshot(definition.coverage);
     const activationInput = options.activation;
     if (activationInput.kind === "query") {
       requestedActivation = Object.freeze({ kind: "query", source: activationInput.source });
@@ -367,9 +368,9 @@ function createDirectSession(options) {
     if (typeof candidate.route !== "string") {
       throw new Error("Direct activation route must be a string");
     }
-    if (typeof candidate.activationHash !== "string" || candidate.activationHash.length === 0) {
-      throw new Error("Direct activation hash must be a non-empty string");
-    }
+    const parsedActivationHash = parseTaggedStableHash(candidate.activationHash);
+    if (!parsedActivationHash.ok)
+      throw new Error(parsedActivationHash.error.message);
     const parsedRuntime = parseLogicalRuntimeSnapshot(candidate.runtime);
     if (!parsedRuntime.ok)
       throw new Error(parsedRuntime.error.message);
@@ -378,7 +379,7 @@ function createDirectSession(options) {
     activationRoute = candidate.route;
     activationWorld = candidate.world;
     activationRuntime = parsedRuntime.value;
-    activationHash = candidate.activationHash;
+    activationHash = parsedActivationHash.value;
   } catch (reason) {
     return err(sessionError({
       code: "invalid-options",
@@ -408,6 +409,17 @@ function createDirectSession(options) {
     runtime: clock.snapshot(),
     activationHash
   });
+  const createdManifest = createDirectSessionManifest(definition, activation);
+  if (!createdManifest.ok) {
+    return err(sessionError({
+      code: "invalid-options",
+      message: createdManifest.error.message,
+      queryError: null,
+      storeError: null,
+      probeError: null
+    }));
+  }
+  const manifest = createdManifest.value;
   const controller = new AbortController;
   const activity = createDirectActivityScope(store.value, clock, { signal: controller.signal });
   const cleanups = [];
@@ -519,7 +531,8 @@ function createDirectSession(options) {
     activity,
     harness,
     probe: probe.value,
-    coverage,
+    manifest,
+    coverage: manifest.coverage,
     signal: controller.signal,
     onDispose,
     dispose,
@@ -1036,15 +1049,19 @@ function parseCoverageCatalogSnapshot2(input) {
 }
 export {
   parseExpectedCoverageCatalogSnapshot,
+  parseDirectSessionManifest,
   parseDirectProbeSnapshot,
   parseDefinitionCoverageSnapshot,
   parseCoverageCatalogSnapshot2 as parseCoverageCatalogSnapshot,
   createExactScriptedTransport,
+  createDirectSessionManifest,
   createDirectSession,
   createDirectProbe,
   createDirectActivityScope,
   classifyCoverageEvidence,
   MAX_DIRECT_PROBE_COUNTERS,
+  DIRECT_SESSION_MANIFEST_SCHEMA,
   DIRECT_PROBE_SCHEMA,
+  DIRECT_CATALOG_HASH_ALGORITHM,
   DEFAULT_SCRIPTED_TRANSPORT_LIMITS
 };

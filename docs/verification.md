@@ -1,18 +1,85 @@
 # Verification
 
-Direct reports deterministic activity and proof boundaries. The definition owns the declared scenarios and coverage claims. A session owns one activation, harness, probe, and validated coverage snapshot. The product verifier decides which scenarios to run, which interactions to perform, and which evidence closes each claim. Parse browser coverage with `parseDefinitionCoverageSnapshot(value, definition)` so a valid but stale catalog cannot be mistaken for the catalog under review.
+Direct reports deterministic activity and proof boundaries. The definition owns
+the declared scenarios and coverage claims. A session owns one activation,
+harness, probe, and validated manifest. The product verifier decides which
+scenarios to run, which interactions to perform, and which evidence closes
+each claim. Parse `window.__direct.manifest` with
+`parseDirectSessionManifest`, then bind `manifest.coverage` to the owned
+definition with `parseDefinitionCoverageSnapshot` so a valid but stale catalog
+cannot be mistaken for the catalog under review.
 
-Beginning with v0.4.0, the installed package carries the `direct-verify` Agent Skill under `skills/direct-verify`. Copy or link that directory into your agent runner's discovery location and invoke `$direct-verify` for the workflow below. The skill structures the audit; it does not turn deterministic evidence into proof of a substituted live system.
+The installed package carries the `direct-verify` Agent Skill under
+`skills/direct-verify`. Copy or link that directory into your agent runner's
+discovery location and invoke `$direct-verify` for the workflow below. The
+skill structures the audit; it does not turn deterministic evidence into
+proof of a substituted live system.
+
+## Discover the running contract
+
+Read the bridge schema, manifest, and probe in one synchronous evaluation
+through whichever browser driver already owns the page. For example,
+agent-browser can return the atomic sample with:
+
+```sh
+agent-browser --json eval "(() => { const bridge = window.__direct; return { bridgeSchema: bridge?.schema, manifest: bridge?.manifest, probe: typeof bridge?.snapshot === 'function' ? bridge.snapshot() : undefined }; })()"
+```
+
+The command's JSON envelope carries the sample at `data.result`; the envelope
+itself is not the manifest. With Playwright MCP, call `browser_evaluate` with a
+function:
+
+```json
+{
+  "function": "() => { const bridge = window.__direct; return { bridgeSchema: bridge?.schema, manifest: bridge?.manifest, probe: typeof bridge?.snapshot === 'function' ? bridge.snapshot() : undefined }; }"
+}
+```
+
+Both calls project the same page contract. No driver-specific Direct plugin is
+required.
+
+Require `bridgeSchema` to equal `direct.browser-bridge/v2`, then parse both
+`manifest` and `probe` from `unknown`. Select only a declared scenario. Add
+`manifest.queries.scenario` to the product's known Direct entry URL, navigate,
+then reacquire the entire atomic sample because navigation replaced the
+document. Require:
+
+- `manifest.active.source` to equal the requested `scenario` or `fixture`
+  activation source;
+- `manifest.active.scenario` to equal the requested scenario;
+- `manifest.active.route` to equal the product route under review; and
+- the parsed manifest's `selectionHash` to bind that complete public active
+  identity to its activation hash; and
+- `manifest.active.activationHash` to equal the parsed probe's
+  `activationHash`.
+
+Retain the complete initial manifest and probe identity with each scenario
+result. After product interactions, atomically re-read the bridge and require
+the same public catalog metadata, coverage, catalog hash, full active
+selection, and probe activation identity. Parse `manifest.coverage` against the
+authored definition rather than re-reading an unbound coverage value from
+whichever page happened to load last.
+
+The scenario route is a semantic product route, not a universal workbench
+entry path. A wrapper may mount every Direct scenario at one shell URL. Entry
+URL policy remains with the product verifier.
 
 ## Wait for quiescence
 
-Install the browser boundary with `installDirectBrowser({ session })`, then read `window.__direct.snapshot()` through its canonical bridge. A snapshot is quiet when:
+Install the browser boundary with `installDirectBrowser({ session })`, then
+read `window.__direct.snapshot()` through its canonical bridge. A snapshot is
+quiet when:
 
 - the current store generation has zero active operations;
 - every product-named pending counter is zero; and
 - the same generation, revision, and counter state remains stable for the verifier's bounded settle interval.
 
-Do not replace this join with a fixed sleep. Logical fixture duration does not determine when the browser, product state, or adapter work is ready.
+A single `wait --fn` result for `snapshot().isQuiescent` proves only one quiet
+sample. Re-read the parsed probe after the bounded settle interval and require
+the generation, revision, activity totals, and pending counters to be
+unchanged. Do not replace this join with a fixed sleep. Logical fixture
+duration does not determine when the browser, product state, or adapter work
+is ready.
 
 Quiescence excludes violation counters by design. A verifier must separately reject every violation relevant to its claim, including blocked network calls, unexpected requests, unused required script steps, malformed transport values, leaked subscriptions, page errors, and console errors.
 
@@ -52,9 +119,14 @@ Fail when no expected executable and source-map files were scanned, and positive
 
 ## Preserve bounded evidence
 
-Record the scenario identifier, activation hash, route, final probe, semantic assertions, violations, console and page errors, and artifact paths. Keep generated evidence out of source control unless the repository explicitly treats a fixture or baseline as reviewed source.
+Record the scenario identifier, catalog hash, activation hash, route, final
+probe, semantic assertions, violations, console and page errors, and artifact
+paths. The catalog hash is a deterministic drift fingerprint, not a security
+digest or a deployed-bundle identity. Keep generated evidence out of source
+control unless the repository explicitly treats a fixture or baseline as
+reviewed source.
 
-Direct does not include browser-worker reuse, screenshot deduplication, video capture, scene detection, or storyboard generation. A product may add those mechanisms without changing the probe and coverage contracts.
+Direct does not include browser-worker reuse, screenshot deduplication, video capture, scene detection, or storyboard generation. A product may add those mechanisms without changing the manifest, probe, and coverage contracts.
 
 ## Verify React Native exclusion
 

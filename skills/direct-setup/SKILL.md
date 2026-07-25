@@ -28,9 +28,13 @@ Reject a design that conditionally imports fixtures from a query string, build f
 1. Define one bounded JSON world with a literal version.
 2. Parse it from `unknown`; reject unknown keys, unsupported versions, duplicate identifiers, inconsistent states, and exceeded bounds.
 3. Call `defineDirect` with a validated default, stable scenario IDs, and exact `fixture`, `mixed`, or `direct` coverage entries. Authored invalid configuration should fail during startup. Use `tryDefineDirect` for typed configuration assembled dynamically and `parseDirectDefinition` for genuinely unknown configuration.
+   Keep each definition within the public discovery bounds of 256 scenarios
+   and 256 coverage entries.
 4. Implement deterministic adapters for the same product ports. Use logical time for product delays and activity scopes for asynchronous work.
 5. Use exact scripts only when request or event order is part of the claim. Keep arbitrary valid interactive behavior stateful in the product adapter.
-6. Call `createDirectSession` to own activation, store, clock, activity, harness construction, probe observation, the validated coverage snapshot, cancellation, and reverse-order cleanup.
+6. Call `createDirectSession` to own activation, store, clock, activity,
+   harness construction, the world-free session manifest, probe observation,
+   cancellation, and reverse-order cleanup.
 
 Treat the shared world store as a scenario seed and activity ledger. Let product adapters own mutable repositories or event streams after construction.
 
@@ -38,7 +42,22 @@ A scenario contains initial world, route, and optional logical-runtime state. Pr
 
 ## Add the development entry
 
-Render the real product interface with deterministic adapters from `session.harness`. Call `installDirectBrowser({ session })` only in a browser Direct entry. It atomically publishes the canonical bridge and session coverage snapshot, installs the fail-closed application-fetch firewall by default, tracks fetch work in the session activity scope, and registers cleanup with the session. Configure blocked-request and activity-error observers as named violations. Pass `firewall: false` only when another checked boundary owns network containment.
+Render the real product interface with deterministic adapters from
+`session.harness`. Call `installDirectBrowser({ session })` only in a browser
+Direct entry. It atomically publishes the exact session manifest, live probe,
+and reset action, installs the fail-closed application-fetch firewall by
+default, tracks fetch work in the session activity scope, and registers
+cleanup with the session. Configure blocked-request and activity-error
+observers as named violations. Pass `firewall: false` only when another
+checked boundary owns network containment.
+
+Do not create a product-specific scenario-discovery global. The manifest
+already publishes the query keys, default scenario, ordered scenario metadata,
+active identity, and coverage contract without exposing worlds, scripts, or
+product assertions. Its catalog drift fingerprint covers the query keys,
+default scenario, ordered metadata, and exact coverage snapshot. The scenario
+route is the expected product route; the product still owns whether its Direct
+entry lives at that route or inside one wrapper URL.
 
 Display activation failures. Never fall back from malformed explicit activation to a nearby valid scenario.
 
@@ -48,6 +67,7 @@ Add focused tests for:
 
 - accepted and rejected worlds;
 - scenario and coverage drift;
+- session-manifest round trips, active identity, and catalog drift;
 - deterministic adapter success, declared failure, cancellation, and cleanup;
 - exact-script consumption and remaining work when scripts are used; and
 - emitted production output containing a forbidden marker.

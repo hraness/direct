@@ -1,9 +1,9 @@
 # Contents
 
 - `src/core/` – product-neutral scenario, fixture, logical-time, store, effect, resource, and coverage contracts.
-- `src/testing/` – deterministic session, evidence, activity, probe, and exact scripted-transport utilities.
+- `src/testing/` – deterministic session, world-free manifest, evidence, activity, probe, and exact scripted-transport utilities.
 - `src/react.ts` – opt-in React bindings for a Direct store.
-- `src/web/` – atomic browser-session installation plus low-level bridge and fail-closed application-fetch firewall.
+- `src/web/` – atomic exact browser-session bridge installation plus low-level bridge and fail-closed application-fetch firewall.
 - `docs/` – architecture, adoption, verification, and wire-format reference.
 - `examples/todos/` – runnable React example with separate production and Direct entries.
 - `examples/react-native/` – runnable Expo example with platform-resolved native production and React Native Web Direct entries.
@@ -21,10 +21,14 @@
 - Keep `.js` extensions on relative TypeScript import and export specifiers; the published source type surface must compile under both Bundler and NodeNext resolution.
 - Treat this repository as the complete project. Files and Git prose may use only its public names, paths, commands, and examples; do not refer to or infer any non-public source, system, product, package, path, or implementation detail.
 - Let each product own its semantic ports, strict versioned JSON world, deterministic adapters, scenarios, coverage claims, and workbench.
-- Prefer one validated definition, one owned session, and one atomic browser installation over assembling raw catalogs, stores, probes, and globals in each product.
+- Prefer one validated definition, one owned session, and one atomic browser installation over assembling raw catalogs, stores, manifests, probes, and globals in each product.
 - Keep Direct development-only. Production entries and emitted production assets must not import the package, fixture worlds, scenario catalogs, workbench code, or browser bridge.
 - Keep the public site server-rendered and static. Put installation and the browser-tool decision on the concise landing page, parse the Overview from the repository-controlled README’s exact marker boundary, and keep the site outside the packed runtime allowlist.
 - Parse foreign input from `unknown`, reject unknown reserved keys and object fields, and preserve atomic store, generation-fencing, cancellation, and exact-script invariants.
+- Publish one exact driver-neutral session manifest from the browser bridge. Parse
+  the exact v2 schema, manifest, and probe from one synchronous page sample.
+  Require the expected source, scenario, route, and matching activation hashes
+  before treating browser output as evidence.
 - Pair concrete behavior tests with property tests for parsers, round trips, ordering, resets, and cancellation.
 - State proof limits precisely. Fixture evidence does not prove the live adapter, service, host, operating system, or device behavior that the composition replaces.
 - Run `bun run check` before handing off a change. Run the todo example's production build and marker scan when changing the example or package boundaries.

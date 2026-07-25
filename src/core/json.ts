@@ -404,17 +404,50 @@ export function freezeJson<Value extends JsonValue>(value: Value): Value {
   return value;
 }
 
+export const STABLE_HASH_ALGORITHM = "fnv1a-64" as const;
+const TAGGED_STABLE_HASH_PATTERN = /^fnv1a-64:[0-9a-f]{16}$/u;
+declare const stableHashValueBrand: unique symbol;
+
+type StableHashValue = string & {
+  readonly [stableHashValueBrand]: "StableHashValue";
+};
+
 export interface StableHash {
-  readonly algorithm: "fnv1a-64";
-  readonly value: string;
+  readonly algorithm: typeof STABLE_HASH_ALGORITHM;
+  readonly value: StableHashValue;
+}
+
+export type TaggedStableHash = `${typeof STABLE_HASH_ALGORITHM}:${string}`;
+
+export interface TaggedStableHashError {
+  readonly code: "invalid-stable-hash";
+  readonly message: string;
+}
+
+export function tagStableHash(hash: StableHash): TaggedStableHash {
+  return `${hash.algorithm}:${hash.value}`;
+}
+
+export function parseTaggedStableHash(
+  input: unknown,
+): Result<TaggedStableHash, TaggedStableHashError> {
+  return typeof input === "string" && TAGGED_STABLE_HASH_PATTERN.test(input)
+    ? ok(input as TaggedStableHash)
+    : err({
+      code: "invalid-stable-hash",
+      message: `Stable hashes must use ${STABLE_HASH_ALGORITHM} with 16 lowercase hexadecimal digits`,
+    });
 }
 
 function updateFnvByte(hash: bigint, byte: number): bigint {
   return BigInt.asUintN(64, (hash ^ BigInt(byte)) * 0x100000001b3n);
 }
 
-export function stableHash(input: unknown): Result<StableHash, JsonBoundaryError> {
-  const serialized = canonicalJson(input);
+export function stableHash(
+  input: unknown,
+  limits: JsonLimits = DEFAULT_JSON_LIMITS,
+): Result<StableHash, JsonBoundaryError> {
+  const serialized = canonicalJson(input, limits);
   if (!serialized.ok) {
     return serialized;
   }
@@ -446,7 +479,10 @@ export function stableHash(input: unknown): Result<StableHash, JsonBoundaryError
       hash = updateFnvByte(hash, 0x80 | (code & 0x3f));
     }
   }
-  return ok({ algorithm: "fnv1a-64", value: hash.toString(16).padStart(16, "0") });
+  return ok({
+    algorithm: STABLE_HASH_ALGORITHM,
+    value: hash.toString(16).padStart(16, "0") as StableHashValue,
+  });
 }
 
 export type WorldParser<World extends JsonValue> = (input: unknown) => World;

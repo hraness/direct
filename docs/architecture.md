@@ -20,10 +20,24 @@ Use the lowest port that preserves the behavior under review. A task interface s
 Direct presents three public abstractions:
 
 - A **definition** validates the product's world parser, named scenarios, default activation, and `fixture`, `mixed`, or `direct` coverage claims. Use `defineDirect` for authored configuration, `tryDefineDirect` for typed configuration assembled dynamically, and `parseDirectDefinition` for a genuinely unknown value.
-- A **session** activates one scenario and owns its immutable world seed, logical clock, generation-fenced store, activity scope, product harness, probe, cancellation signal, coverage snapshot, and reverse-order cleanup.
-- A **browser installation** publishes one session through `window.__direct` and optionally installs the fail-closed application-`fetch` firewall. Installation and rollback are atomic. The session registers its cleanup, and one disposable handle can remove both browser hooks earlier.
+- A **session** activates one scenario and owns its immutable world seed,
+  logical clock, generation-fenced store, activity scope, product harness,
+  world-free manifest, probe, cancellation signal, and reverse-order cleanup.
+- A **browser installation** publishes the exact `direct.browser-bridge/v2`
+  manifest, live probe, and reset surface through `window.__direct` and
+  optionally installs the fail-closed application-`fetch` firewall.
+  Installation and rollback are atomic. The session registers its cleanup, and
+  one disposable handle can remove both browser hooks earlier.
 
 React bindings and low-level deterministic mechanics remain available as escape hatches. They are not additional lifecycle owners.
+
+The manifest is the driver-neutral integration point. It contains the query
+keys, default scenario, ordered public scenario catalog, active identity, and
+coverage, but no worlds or product actions. Its catalog drift fingerprint
+covers the query keys, default scenario, ordered scenario metadata, and exact
+coverage snapshot. agent-browser, Playwright MCP, and other browser tools can
+read the same exact value through page evaluation. Direct does not own their
+browser sessions, selectors, navigation, screenshots, or action histories.
 
 ## Treat the world as a seed
 

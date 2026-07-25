@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { operationId } from "../core/ids.js";
+import type { TaggedStableHash } from "../core/json.js";
 import { createDirectStore } from "../core/store.js";
 import { parseTestWorld } from "../core/test-support.js";
 import {
@@ -9,6 +10,8 @@ import {
   createDirectProbe,
   parseDirectProbeSnapshot,
 } from "./probe.js";
+
+const ACTIVATION_HASH = "fnv1a-64:0123456789abcdef" as const;
 
 function storeFixture() {
   const store = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
@@ -31,7 +34,7 @@ describe("Direct probe", () => {
   test("parses the canonical wire snapshot and rejects inconsistent quiescence", () => {
     const probe = createDirectProbe({
       store: storeFixture(),
-      activationHash: "wire-hash",
+      activationHash: ACTIVATION_HASH,
       pending: [{ name: "requests", read: () => 0 }],
       violations: [{ name: "network", read: () => 1 }],
       readRemainingWork: () => ({ scripts: 2 }),
@@ -54,7 +57,7 @@ describe("Direct probe", () => {
   test("rejects snapshots impossible under store revision and generation conservation", () => {
     const base = {
       schema: DIRECT_PROBE_SCHEMA,
-      activationHash: "wire-hash",
+      activationHash: ACTIVATION_HASH,
       generation: 1,
       revision: 0,
       activity: { active: 0, started: 0, settled: 0 },
@@ -76,11 +79,11 @@ describe("Direct probe", () => {
 
   test("captures validated options instead of retaining mutable caller configuration", () => {
     const store = storeFixture();
-    const options = { store, activationHash: "captured-hash" };
+    const options = { store, activationHash: ACTIVATION_HASH };
     const probe = createDirectProbe(options);
     if (!probe.ok) throw new Error(probe.error.message);
 
-    options.activationHash = "";
+    Reflect.set(options, "activationHash", "");
     const otherStore = storeFixture();
     const started = otherStore.beginActivity(otherStore.getSnapshot().generation, operationId("other-000001"));
     if (!started.ok) throw new Error(started.error.message);
@@ -89,7 +92,7 @@ describe("Direct probe", () => {
     const snapshot = probe.value.snapshot();
     expect(snapshot).toMatchObject({
       ok: true,
-      value: { activationHash: "captured-hash", activity: { active: 0 } },
+      value: { activationHash: ACTIVATION_HASH, activity: { active: 0 } },
     });
     if (!snapshot.ok) throw new Error(snapshot.error.message);
     expect(parseDirectProbeSnapshot(snapshot.value)).toEqual(snapshot);
@@ -102,7 +105,7 @@ describe("Direct probe", () => {
     let blockedNetwork = 2;
     const probe = createDirectProbe({
       store,
-      activationHash: "fnv1a-64:0123456789abcdef",
+      activationHash: ACTIVATION_HASH,
       pending: [{ name: "scripts", read: () => pendingScripts }],
       violations: [{ name: "blockedNetwork", read: () => blockedNetwork }],
       readRemainingWork: () => ({ completions: 3 }),
@@ -139,13 +142,13 @@ describe("Direct probe", () => {
     const store = storeFixture();
     expect(createDirectProbe({
       store,
-      activationHash: "hash",
+      activationHash: ACTIVATION_HASH,
       pending: [{ name: "Bad name", read: () => 0 }],
     })).toMatchObject({ ok: false, error: { code: "invalid-counter-name" } });
 
     const negative = createDirectProbe({
       store,
-      activationHash: "hash",
+      activationHash: ACTIVATION_HASH,
       pending: [{ name: "requests", read: () => -1 }],
     });
     if (!negative.ok) throw new Error(negative.error.message);
@@ -156,7 +159,7 @@ describe("Direct probe", () => {
 
     const invalidDiagnostics = createDirectProbe({
       store,
-      activationHash: "hash",
+      activationHash: ACTIVATION_HASH,
       readRemainingWork: (() => ({ value: undefined })) as unknown as () => never,
     });
     if (!invalidDiagnostics.ok) throw new Error(invalidDiagnostics.error.message);
@@ -168,17 +171,20 @@ describe("Direct probe", () => {
 
   test("rejects duplicate category names and invalid activation hashes", () => {
     const store = storeFixture();
-    expect(createDirectProbe({ store, activationHash: "" })).toMatchObject({
+    expect(createDirectProbe({
+      store,
+      activationHash: "" as unknown as TaggedStableHash,
+    })).toMatchObject({
       ok: false,
       error: { code: "invalid-activation-hash" },
     });
     expect(createDirectProbe({
       store,
-      activationHash: null as unknown as string,
+      activationHash: null as unknown as TaggedStableHash,
     })).toMatchObject({ ok: false, error: { code: "invalid-activation-hash" } });
     expect(createDirectProbe({
       store,
-      activationHash: "hash",
+      activationHash: ACTIVATION_HASH,
       violations: [
         { name: "network", read: () => 0 },
         { name: "network", read: () => 1 },
@@ -191,7 +197,7 @@ describe("Direct probe", () => {
     const hostile = hostileThrownValue();
     const counterProbe = createDirectProbe({
       store,
-      activationHash: "hostile-counter",
+      activationHash: ACTIVATION_HASH,
       pending: [{
         name: "hostile",
         read: () => {
@@ -211,7 +217,7 @@ describe("Direct probe", () => {
 
     const remainingProbe = createDirectProbe({
       store,
-      activationHash: "hostile-remaining",
+      activationHash: ACTIVATION_HASH,
       readRemainingWork: () => {
         throw hostile;
       },
@@ -231,7 +237,7 @@ describe("Direct probe", () => {
     const store = storeFixture();
     const counterProbe = createDirectProbe({
       store,
-      activationHash: "async-counter",
+      activationHash: ACTIVATION_HASH,
       pending: [{
         name: "requests",
         read: (() => Promise.reject(new Error("counter rejected"))) as unknown as () => number,
@@ -245,7 +251,7 @@ describe("Direct probe", () => {
 
     const remainingProbe = createDirectProbe({
       store,
-      activationHash: "async-remaining",
+      activationHash: ACTIVATION_HASH,
       readRemainingWork: (() => Promise.reject(new Error("remaining rejected"))) as unknown as () => never,
     });
     if (!remainingProbe.ok) throw new Error(remainingProbe.error.message);
@@ -263,13 +269,13 @@ describe("Direct probe", () => {
     });
     expect(createDirectProbe({
       store,
-      activationHash: "hostile-source",
+      activationHash: ACTIVATION_HASH,
       pending: [hostile] as unknown as [],
     })).toMatchObject({ ok: false, error: { code: "invalid-counter-source" } });
 
     expect(createDirectProbe({
       store,
-      activationHash: "too-many",
+      activationHash: ACTIVATION_HASH,
       pending: Array.from({ length: MAX_DIRECT_PROBE_COUNTERS + 1 }, (_, index) => ({
         name: `counter${String(index)}`,
         read: () => 0,

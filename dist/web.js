@@ -1,16 +1,15 @@
 import {
-  parseDirectProbeSnapshot
-} from "./index-s10kw9hv.js";
+  parseDirectProbeSnapshot,
+  parseDirectSessionManifest
+} from "./index-way196f7.js";
 import {
-  EMPTY_COVERAGE_CATALOG_SNAPSHOT,
   err,
   ok,
-  parseCoverageCatalogSnapshot,
   renderUnknownReason
-} from "./index-541zzq54.js";
+} from "./index-s0h6zg88.js";
 
 // src/web/browser-bridge.ts
-var DIRECT_BROWSER_BRIDGE_SCHEMA = "direct.browser-bridge/v1";
+var DIRECT_BROWSER_BRIDGE_SCHEMA = "direct.browser-bridge/v2";
 var BRIDGE_KEYS = ["__direct"];
 var activeBridgeInstallation = null;
 function bridgeError(code, message) {
@@ -60,17 +59,17 @@ function restoreInstalledValue(target, key, installedValue, previous) {
   } catch {}
 }
 function prepareDirectBrowserBridgeInstallation(options) {
-  let coverageInput;
+  let manifestInput;
   try {
-    coverageInput = options.coverage === undefined ? EMPTY_COVERAGE_CATALOG_SNAPSHOT : options.coverage;
+    manifestInput = options.manifest;
   } catch (reason) {
-    return err(bridgeError("invalid-coverage", renderUnknownReason(reason, "Failed to read Direct coverage")));
+    return err(bridgeError("invalid-manifest", renderUnknownReason(reason, "Failed to read the Direct session manifest")));
   }
-  const parsedCoverage = parseCoverageCatalogSnapshot(coverageInput);
-  if (!parsedCoverage.ok) {
-    return err(bridgeError("invalid-coverage", parsedCoverage.error.message));
+  const parsedManifest = parseDirectSessionManifest(manifestInput);
+  if (!parsedManifest.ok) {
+    return err(bridgeError("invalid-manifest", parsedManifest.error.message));
   }
-  const coverage = parsedCoverage.value;
+  const manifest = parsedManifest.value;
   let target;
   let reset;
   let probe;
@@ -112,6 +111,9 @@ function prepareDirectBrowserBridgeInstallation(options) {
       const parsed = parseDirectProbeSnapshot(Reflect.get(snapshot, "value"));
       if (!parsed.ok)
         throw new Error(parsed.error.message);
+      if (parsed.value.activationHash !== manifest.active.activationHash) {
+        throw new Error("Direct probe activation hash does not match the installed session manifest");
+      }
       return parsed.value;
     } catch (reason) {
       throw new Error(`Direct probe failed: ${renderUnknownReason(reason)}`);
@@ -127,9 +129,9 @@ function prepareDirectBrowserBridgeInstallation(options) {
   };
   const bridge = Object.freeze({
     schema: DIRECT_BROWSER_BRIDGE_SCHEMA,
+    manifest,
     snapshot: readSnapshot,
-    reset: runReset,
-    coverage
+    reset: runReset
   });
   const installed = new Map([["__direct", bridge]]);
   try {
@@ -468,7 +470,7 @@ function runBrowserCleanup(bridge, firewall) {
 }
 function installDirectBrowser(options) {
   let activity;
-  let coverage;
+  let manifest;
   let onDispose;
   let probe;
   let reset;
@@ -477,7 +479,7 @@ function installDirectBrowser(options) {
   try {
     const session = options.session;
     activity = session.activity;
-    coverage = session.coverage;
+    manifest = session.manifest;
     onDispose = session.onDispose;
     probe = session.probe;
     reset = options.reset;
@@ -524,7 +526,7 @@ function installDirectBrowser(options) {
   }
   const preparedBridgeResult = prepareDirectBrowserBridgeInstallation({
     probe,
-    coverage,
+    manifest,
     ...reset === undefined ? {} : { reset },
     ...target === undefined ? {} : { target }
   });

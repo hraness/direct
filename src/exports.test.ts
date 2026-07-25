@@ -34,6 +34,11 @@ describe("public package exports", () => {
       "installDirectBrowserBridge",
       "installDirectFetchFirewall",
     ]);
+    expect(testing.DIRECT_SESSION_MANIFEST_SCHEMA).toBe(
+      "direct.session-manifest/v1",
+    );
+    expect(typeof testing.createDirectSessionManifest).toBe("function");
+    expect(typeof testing.parseDirectSessionManifest).toBe("function");
     expect(typeof testing.createDirectSession).toBe("function");
     expect(typeof testing.createExactScriptedTransport).toBe("function");
     expect(typeof web.installDirectBrowserBridge).toBe("function");

@@ -1,8 +1,8 @@
 import type { DirectDefinition } from "../core/definition.js";
 import {
-  createCoverageCatalogSnapshot,
-  type CoverageCatalogSnapshot,
-} from "../core/coverage.js";
+  parseTaggedStableHash,
+  type TaggedStableHash,
+} from "../core/json.js";
 import type { JsonValue } from "../core/json-value.js";
 import { renderUnknownReason } from "../core/reason.js";
 import { err, isRecord, ok, type Result } from "../core/result.js";
@@ -27,6 +27,10 @@ import {
   type DirectProbe,
   type DirectProbeError,
 } from "./probe.js";
+import {
+  createDirectSessionManifest,
+  type DirectSessionManifest,
+} from "./manifest.js";
 
 /** A synchronous cleanup callback. Promise-returning teardown is intentionally unsupported. */
 export type DirectSessionCleanup = () => undefined;
@@ -131,8 +135,10 @@ export interface DirectSession<
   /** The product-owned deterministic ports and controls created for this session. */
   readonly harness: Harness;
   readonly probe: DirectProbe;
+  /** Exact, versioned, driver-neutral discovery data for this session. */
+  readonly manifest: DirectSessionManifest;
   /** Exact, versioned proof catalog ready for the browser bridge. */
-  readonly coverage: CoverageCatalogSnapshot;
+  readonly coverage: DirectSessionManifest["coverage"];
   readonly signal: AbortSignal;
   /** Register additional synchronous teardown until the session is disposed. */
   readonly onDispose: (
@@ -264,13 +270,11 @@ export function createDirectSession<
   let createHarness: DirectSessionOptions<World, Route, Harness>["create"];
   let observeHarness: DirectSessionOptions<World, Route, Harness>["observe"];
   let parseWorld: DirectDefinition<World, Route>["parseWorld"];
-  let coverage: CoverageCatalogSnapshot;
   let sleep: LogicalSleep | undefined;
   let storeOptions: DirectStoreOptions | undefined;
   try {
     definition = options.definition;
     parseWorld = definition.parseWorld;
-    coverage = createCoverageCatalogSnapshot(definition.coverage);
     const activationInput = options.activation;
     if (activationInput.kind === "query") {
       requestedActivation = Object.freeze({ kind: "query", source: activationInput.source });
@@ -306,7 +310,7 @@ export function createDirectSession<
   let activationRoute: Route;
   let activationWorld: World;
   let activationRuntime: LogicalRuntimeSnapshot;
-  let activationHash: string;
+  let activationHash: TaggedStableHash;
   try {
     const activated = activateSession(definition, requestedActivation);
     if (!activated.ok) {
@@ -333,9 +337,8 @@ export function createDirectSession<
     if (typeof candidate.route !== "string") {
       throw new Error("Direct activation route must be a string");
     }
-    if (typeof candidate.activationHash !== "string" || candidate.activationHash.length === 0) {
-      throw new Error("Direct activation hash must be a non-empty string");
-    }
+    const parsedActivationHash = parseTaggedStableHash(candidate.activationHash);
+    if (!parsedActivationHash.ok) throw new Error(parsedActivationHash.error.message);
     const parsedRuntime = parseLogicalRuntimeSnapshot(candidate.runtime);
     if (!parsedRuntime.ok) throw new Error(parsedRuntime.error.message);
     activationSource = candidate.source;
@@ -343,7 +346,7 @@ export function createDirectSession<
     activationRoute = candidate.route;
     activationWorld = candidate.world;
     activationRuntime = parsedRuntime.value;
-    activationHash = candidate.activationHash;
+    activationHash = parsedActivationHash.value;
   } catch (reason) {
     return err(sessionError({
       code: "invalid-options",
@@ -379,6 +382,17 @@ export function createDirectSession<
     runtime: clock.snapshot(),
     activationHash,
   });
+  const createdManifest = createDirectSessionManifest(definition, activation);
+  if (!createdManifest.ok) {
+    return err(sessionError({
+      code: "invalid-options",
+      message: createdManifest.error.message,
+      queryError: null,
+      storeError: null,
+      probeError: null,
+    }));
+  }
+  const manifest = createdManifest.value;
   const controller = new AbortController();
   const activity = createDirectActivityScope(store.value, clock, { signal: controller.signal });
   const cleanups: DirectSessionCleanup[] = [];
@@ -496,7 +510,8 @@ export function createDirectSession<
     activity,
     harness,
     probe: probe.value,
-    coverage,
+    manifest,
+    coverage: manifest.coverage,
     signal: controller.signal,
     onDispose,
     dispose,

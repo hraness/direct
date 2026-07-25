@@ -50,34 +50,108 @@ Consumers must parse a snapshot before trusting it. The parser rejects unknown f
 
 ## Browser bridge
 
-Schema: `direct.browser-bridge/v1`
+Schema: `direct.browser-bridge/v2`
 
-`installDirectBrowser({ session })` installs the canonical bridge as `window.__direct`. It derives the validated probe and coverage snapshot from the session and exposes:
+`installDirectBrowser({ session })` installs the canonical bridge as
+`window.__direct`. It derives the validated session manifest and probe from
+the session. The exact v2 object exposes:
 
+- `schema` with the literal value `direct.browser-bridge/v2`;
+- `manifest` for runtime discovery and evidence identity;
 - `snapshot()` for the current validated probe value;
-- `reset()` for the synchronous product-owned reset action; and
-- `coverage` for the JSON-safe coverage catalog.
+- `reset()` for the synchronous product-owned reset action.
 
 The reset callback must complete synchronously and return `undefined`. If an asserted or hostile callback returns a thenable, the bridge contains its settlement and throws a controlled synchronous-completion error.
 
-The coverage value uses schema `direct.coverage/v2` and has the exact shape:
+Every successful probe read must have the same activation hash as the
+installed manifest. A mismatched probe fails closed rather than publishing
+evidence from a nearby session.
+
+## Session manifest
+
+Schema: `direct.session-manifest/v1`
+
+The manifest is a world-free runtime description of the deterministic
+composition:
 
 ```json
 {
-  "schema": "direct.coverage/v2",
-  "entries": [
+  "schema": "direct.session-manifest/v1",
+  "catalogHash": "fnv1a-64:9417ef4983bf35da",
+  "queries": {
+    "scenario": "__direct_scenario",
+    "fixture": "__direct_fixture"
+  },
+  "defaultScenario": "todos.populated",
+  "active": {
+    "source": "scenario",
+    "scenario": "todos.populated",
+    "route": "/",
+    "activationHash": "fnv1a-64:fedcba9876543210",
+    "selectionHash": "fnv1a-64:86d1632d6b418cd8"
+  },
+  "scenarios": [
     {
-      "key": "todos.completion",
-      "mode": "fixture",
-      "claim": "The real todo interface completes tasks through its product port.",
-      "scenarios": ["todos.populated"]
+      "id": "todos.populated",
+      "title": "Populated list",
+      "description": "Two open tasks.",
+      "route": "/"
     }
-  ]
+  ],
+  "coverage": {
+    "schema": "direct.coverage/v2",
+    "entries": [
+      {
+        "key": "todos.completion",
+        "mode": "fixture",
+        "claim": "The real todo interface completes tasks through its product port.",
+        "scenarios": ["todos.populated"]
+      }
+    ]
+  }
 }
 ```
 
-Coverage entries cite scenarios rather than duplicating a singular route. The scenario catalog owns each route, and one coverage claim may intentionally span scenarios on different routes.
+The active activation hash identifies the selected source, scenario, route,
+world, and logical runtime. The selection hash binds that opaque identity to
+the manifest's public source, scenario, and route, so changing any one field
+without replacing the complete selection fails closed. The catalog hash
+covers the two published query keys, default scenario, ordered public scenario
+metadata, and exact coverage snapshot. All three use deterministic FNV-1a-64
+only as consistency and drift fingerprints, not as security digests or hashes
+of parser, harness, or application code.
 
-Consumers must parse the coverage value before using it. Unknown fields, duplicate keys, invalid modes, and inconsistent scenario requirements are rejected.
+The manifest deliberately excludes scenario worlds, runtime scripts, product
+actions, semantic assertions, secrets, and source paths. Its scenario `route`
+is the product route expected after activation; a wrapper workbench may still
+use one separate Direct entry URL for every scenario.
+
+Coverage entries cite scenarios rather than duplicating a singular route. The
+scenario catalog owns each route, and one coverage claim may intentionally
+span scenarios on different routes.
+
+One definition and manifest may contain at most 256 scenarios and 256 coverage
+entries. The creator and foreign-value parser enforce the same limits.
+
+Consumers must parse the complete manifest before using it. Unknown fields,
+duplicate scenarios, missing default or active scenarios, route drift, unknown
+coverage citations, malformed coverage, selection-hash drift, and catalog-hash
+drift are rejected.
+
+## Migrate from v0.4.0
+
+Direct v0.5.0 replaces the exact `direct.browser-bridge/v1` shape with v2.
+Top-level `window.__direct.coverage` no longer exists; read
+`window.__direct.manifest.coverage`. Low-level bridge callers must pass
+`manifest` instead of `coverage`, and every probe activation hash must use the
+exact `fnv1a-64:<16 lowercase hexadecimal digits>` format. The v1 session
+manifest's active selection includes a `selectionHash` that its parser
+recomputes before any browser evidence is accepted.
+
+Sample `schema`, `manifest`, and `snapshot()` in one synchronous page
+evaluation. Require the v2 schema, parse the manifest and probe from `unknown`,
+confirm the expected activation source, scenario, and product route, and
+require both activation hashes to match. Keep v0.4.0 pinned until a consumer
+can move as one exact-shape migration; do not publish or accept a hybrid bridge.
 
 The bridge is a development automation seam. Do not install it from a production entry.

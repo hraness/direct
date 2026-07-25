@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   DIRECT_COVERAGE_SCHEMA,
+  MAX_DIRECT_COVERAGE_ENTRIES,
   createCoverageCatalog,
   createCoverageCatalogSnapshot,
   parseCoverageCatalogSnapshot,
@@ -112,5 +113,30 @@ describe("coverage wire snapshots", () => {
       claim: "The shared surface behaves across chat and settings",
       scenarios: ["chat.empty", "settings.ready"],
     }]);
+  });
+
+  test("parses the largest definition-bound coverage catalog with long scenario ids", () => {
+    const scenarioIds = Array.from(
+      { length: MAX_DIRECT_COVERAGE_ENTRIES },
+      (_, index) => `case.${String(index).padStart(3, "0")}.${"x".repeat(110)}`,
+    );
+    const catalog = createCoverageCatalog(Array.from(
+      { length: MAX_DIRECT_COVERAGE_ENTRIES },
+      (_, index) => ({
+        key: `claim.${String(index)}`,
+        mode: "fixture" as const,
+        claim: `Fixture claim ${String(index)}`,
+        scenarios: scenarioIds as [string, ...string[]],
+      }),
+    ));
+    if (!catalog.ok) throw new Error(catalog.error.message);
+    const snapshot = createCoverageCatalogSnapshot(catalog.value);
+    const encoded = JSON.stringify(snapshot);
+
+    expect(new TextEncoder().encode(encoded).byteLength).toBeGreaterThan(1_048_576);
+    expect(parseCoverageCatalogSnapshot(JSON.parse(encoded) as unknown)).toEqual({
+      ok: true,
+      value: snapshot,
+    });
   });
 });

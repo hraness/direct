@@ -2,19 +2,32 @@ import { readFile, readdir } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const TODO_DIRECT_EXECUTABLE_MARKERS = Object.freeze([
-  "direct.browser-bridge/v1",
+const TODO_DIRECT_VERSIONED_EXECUTABLE_MARKERS = Object.freeze([
+  "direct.browser-bridge/v2",
+  "direct.session-manifest/v1",
+  "direct.probe/v1",
+]);
+
+const TODO_DIRECT_LITERAL_EXECUTABLE_MARKERS = Object.freeze([
   "__direct",
   "Direct blocked an unmapped network request.",
 ]);
 
+export const TODO_DIRECT_EXECUTABLE_MARKERS = Object.freeze([
+  ...TODO_DIRECT_VERSIONED_EXECUTABLE_MARKERS,
+  ...TODO_DIRECT_LITERAL_EXECUTABLE_MARKERS,
+]);
+
 export const TODO_PRODUCTION_MARKERS = Object.freeze([
   "@cclrte/direct",
-  "direct.fixture/v1",
-  "direct.runtime/v1",
-  "direct.probe/v1",
-  "direct.coverage/v2",
-  ...TODO_DIRECT_EXECUTABLE_MARKERS,
+  "direct.browser-bridge/v",
+  "direct.coverage/v",
+  "direct.fixture/v",
+  "direct.probe/v",
+  "direct.runtime/v",
+  "direct.session-manifest/v",
+  "__direct",
+  "Direct blocked an unmapped network request.",
   "__direct_scenario",
   "__direct_fixture",
   "direct/main",
@@ -77,7 +90,8 @@ interface SourceMapDocument {
 interface BuildGraphPolicy {
   readonly forbiddenSources: readonly string[];
   readonly label: "Direct" | "production";
-  readonly requiredExecutableMarkers: readonly string[];
+  readonly requiredExecutableLiteralMarkers: readonly string[];
+  readonly requiredExecutableVersionedMarkers: readonly string[];
   readonly requiredSources: readonly string[];
   readonly requiredSourceVariants: readonly (readonly string[])[];
   readonly sourceAllowed: (source: string) => boolean;
@@ -141,6 +155,36 @@ function executableOutput(file: string): boolean {
   return file.endsWith(".js") || file.endsWith(".mjs") || file.endsWith(".cjs");
 }
 
+function exactVersionedMarkerEvidence(
+  contents: readonly string[],
+  expectedMarkers: readonly string[],
+): { readonly missing: readonly string[]; readonly unexpected: readonly string[] } {
+  const expected = new Set(expectedMarkers);
+  const observed = new Set<string>();
+  for (const marker of expectedMarkers) {
+    const family = marker.match(/^(?<family>.+\/v)[0-9]+$/u)?.groups?.["family"];
+    if (family === undefined) {
+      throw new Error(`Todo boundary has an invalid exact versioned-marker policy: ${marker}`);
+    }
+    const escapedFamily = family.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    const pattern = new RegExp(
+      `(?<![A-Za-z0-9._/-])${escapedFamily}[0-9]+(?![A-Za-z0-9._/-])`,
+      "gu",
+    );
+    for (const executable of contents) {
+      for (const match of executable.matchAll(pattern)) observed.add(match[0]);
+    }
+  }
+  return Object.freeze({
+    missing: Object.freeze(expectedMarkers.filter((marker) => !observed.has(marker))),
+    unexpected: Object.freeze(
+      [...observed]
+        .filter((marker) => !expected.has(marker))
+        .sort((left, right) => left.localeCompare(right)),
+    ),
+  });
+}
+
 async function inspectBuildGraph(
   scanned: readonly string[],
   policy: BuildGraphPolicy,
@@ -156,13 +200,15 @@ async function inspectBuildGraph(
   const sourceMaps: string[] = [];
   const observedSources = new Set<string>();
   const observedExecutableMarkers = new Set<string>();
+  const executableContents: string[] = [];
   for (const executable of executables) {
     const mapFile = `${executable}.map`;
     if (!scannedSet.has(mapFile)) {
       throw new Error(`Todo ${policy.label} JavaScript is missing its source map: ${executable}`);
     }
     const executableText = await readFile(executable, "utf8");
-    for (const marker of policy.requiredExecutableMarkers) {
+    executableContents.push(executableText);
+    for (const marker of policy.requiredExecutableLiteralMarkers) {
       if (executableText.includes(marker)) observedExecutableMarkers.add(marker);
     }
     if (!executableText.includes(`sourceMappingURL=${basename(mapFile)}`)) {
@@ -202,13 +248,32 @@ async function inspectBuildGraph(
       )),
     ].join("\n"));
   }
-  const missingExecutableMarkers = policy.requiredExecutableMarkers.filter((marker) => (
-    !observedExecutableMarkers.has(marker)
-  ));
-  if (missingExecutableMarkers.length > 0) {
+  const versionEvidence = policy.requiredExecutableVersionedMarkers.length === 0
+    ? { missing: [], unexpected: [] }
+    : exactVersionedMarkerEvidence(
+        executableContents,
+        policy.requiredExecutableVersionedMarkers,
+      );
+  const missingExecutableMarkers = [
+    ...versionEvidence.missing,
+    ...policy.requiredExecutableLiteralMarkers.filter((marker) => (
+      !observedExecutableMarkers.has(marker)
+    )),
+  ];
+  if (missingExecutableMarkers.length > 0 || versionEvidence.unexpected.length > 0) {
     throw new Error([
-      `Todo ${policy.label} build is missing required executable markers:`,
-      ...missingExecutableMarkers,
+      ...(missingExecutableMarkers.length === 0
+        ? []
+        : [
+            `Todo ${policy.label} build is missing required executable markers:`,
+            ...missingExecutableMarkers,
+          ]),
+      ...(versionEvidence.unexpected.length === 0
+        ? []
+        : [
+            `Todo ${policy.label} build contains unexpected executable marker versions:`,
+            ...versionEvidence.unexpected,
+          ]),
     ].join("\n"));
   }
   const forbidden = policy.forbiddenSources.filter((source) => observedSources.has(source));
@@ -267,7 +332,8 @@ export async function scanTodoProductionOutput(
   return scanOutput(directory, {
     forbiddenSources: [],
     label: "production",
-    requiredExecutableMarkers: [],
+    requiredExecutableLiteralMarkers: [],
+    requiredExecutableVersionedMarkers: [],
     requiredSources: REQUIRED_PRODUCTION_SOURCES,
     requiredSourceVariants: [],
     sourceAllowed: (source) => isWithin(productionSourceRoot, source),
@@ -278,7 +344,8 @@ export async function scanTodoDirectOutput(directory: string): Promise<TodoBound
   return scanOutput(directory, {
     forbiddenSources: FORBIDDEN_DIRECT_SOURCES,
     label: "Direct",
-    requiredExecutableMarkers: TODO_DIRECT_EXECUTABLE_MARKERS,
+    requiredExecutableLiteralMarkers: TODO_DIRECT_LITERAL_EXECUTABLE_MARKERS,
+    requiredExecutableVersionedMarkers: TODO_DIRECT_VERSIONED_EXECUTABLE_MARKERS,
     requiredSources: REQUIRED_DIRECT_SOURCES,
     requiredSourceVariants: REQUIRED_DIRECT_WEB_SOURCE_VARIANTS,
     sourceAllowed: (source) => isWithin(packageRoot, source),

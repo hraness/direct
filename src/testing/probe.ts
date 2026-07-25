@@ -1,4 +1,10 @@
-import { cloneJson, freezeJson, parseJsonValue } from "../core/json.js";
+import {
+  cloneJson,
+  freezeJson,
+  parseJsonValue,
+  parseTaggedStableHash,
+  type TaggedStableHash,
+} from "../core/json.js";
 import type { JsonValue } from "../core/json-value.js";
 import { renderUnknownReason } from "../core/reason.js";
 import { err, isRecord, ok, type Result } from "../core/result.js";
@@ -15,7 +21,7 @@ export interface DirectCounterSource {
 
 export interface DirectProbeSnapshot {
   readonly schema: typeof DIRECT_PROBE_SCHEMA;
-  readonly activationHash: string;
+  readonly activationHash: TaggedStableHash;
   readonly generation: number;
   readonly revision: number;
   readonly activity: ActivitySnapshot;
@@ -52,7 +58,7 @@ export interface DirectProbe {
 
 export interface DirectProbeOptions<World extends JsonValue> {
   readonly store: DirectStore<World>;
-  readonly activationHash: string;
+  readonly activationHash: TaggedStableHash;
   readonly pending?: readonly DirectCounterSource[];
   readonly violations?: readonly DirectCounterSource[];
   readonly readRemainingWork?: () => JsonValue;
@@ -88,15 +94,6 @@ function probeError(
   counter: string | null = null,
 ): DirectProbeError {
   return Object.freeze({ code, message, counter });
-}
-
-function validActivationHash(value: string): boolean {
-  if (value.length === 0 || value.length > 256) return false;
-  for (const character of value) {
-    const code = character.charCodeAt(0);
-    if (code < 32 || code === 127) return false;
-  }
-  return true;
 }
 
 function readNonNegativeInteger(input: unknown): number | null {
@@ -169,7 +166,8 @@ export function parseDirectProbeSnapshot(
       `Direct probe schema must be ${DIRECT_PROBE_SCHEMA}`,
     ));
   }
-  if (typeof record.activationHash !== "string" || !validActivationHash(record.activationHash)) {
+  const activationHash = parseTaggedStableHash(record.activationHash);
+  if (!activationHash.ok) {
     return err(probeError("invalid-activation-hash", "Direct probe activation hash is invalid"));
   }
   const generation = readNonNegativeInteger(record.generation);
@@ -241,7 +239,7 @@ export function parseDirectProbeSnapshot(
   }
   return ok(Object.freeze({
     schema: DIRECT_PROBE_SCHEMA,
-    activationHash: record.activationHash,
+    activationHash: activationHash.value,
     generation,
     revision,
     activity: Object.freeze({ active, started, settled }),
@@ -380,7 +378,7 @@ export function createDirectProbe<World extends JsonValue>(
   options: DirectProbeOptions<World>,
 ): Result<DirectProbe, DirectProbeError> {
   let store: DirectStore<World>;
-  let activationHash: string;
+  let activationHash: unknown;
   let pending: readonly DirectCounterSource[];
   let violations: readonly DirectCounterSource[];
   let readRemainingWork: () => JsonValue;
@@ -405,10 +403,11 @@ export function createDirectProbe<World extends JsonValue>(
     ));
   }
 
-  if (typeof activationHash !== "string" || !validActivationHash(activationHash)) {
+  const parsedActivationHash = parseTaggedStableHash(activationHash);
+  if (!parsedActivationHash.ok) {
     return err(probeError(
       "invalid-activation-hash",
-      "Activation hashes must be 1-256 characters without control characters",
+      parsedActivationHash.error.message,
     ));
   }
   const counters = prepareCounters(pending, violations);
@@ -424,7 +423,7 @@ export function createDirectProbe<World extends JsonValue>(
       && Object.values(read.value.pending).every((value) => value === 0);
     const value = {
       schema: DIRECT_PROBE_SCHEMA,
-      activationHash,
+      activationHash: parsedActivationHash.value,
       generation: Number(storeSnapshot.generation),
       revision: storeSnapshot.revision,
       activity: storeSnapshot.activity,

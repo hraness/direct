@@ -1,33 +1,32 @@
 import { renderUnknownReason } from "../core/reason.js";
 import { err, ok, type Result } from "../core/result.js";
 import {
-  EMPTY_COVERAGE_CATALOG_SNAPSHOT,
-  parseCoverageCatalogSnapshot,
-  type CoverageCatalogSnapshot,
-} from "../core/coverage.js";
-import {
   parseDirectProbeSnapshot,
   type DirectProbe,
   type DirectProbeSnapshot,
 } from "../testing/probe.js";
+import {
+  parseDirectSessionManifest,
+  type DirectSessionManifest,
+} from "../testing/manifest.js";
 
-export const DIRECT_BROWSER_BRIDGE_SCHEMA = "direct.browser-bridge/v1" as const;
+export const DIRECT_BROWSER_BRIDGE_SCHEMA = "direct.browser-bridge/v2" as const;
 
 export interface DirectBrowserBridge {
   readonly schema: typeof DIRECT_BROWSER_BRIDGE_SCHEMA;
+  readonly manifest: DirectSessionManifest;
   readonly snapshot: () => DirectProbeSnapshot;
   readonly reset: () => undefined;
-  readonly coverage: CoverageCatalogSnapshot;
 }
 
 export interface DirectBrowserBridgeOptions {
   readonly probe: Pick<DirectProbe, "snapshot">;
-  readonly coverage?: unknown;
+  readonly manifest: unknown;
   readonly reset?: () => undefined;
   readonly target?: object;
 }
 
-export type DirectBrowserBridgeErrorCode = "install-failed" | "invalid-coverage";
+export type DirectBrowserBridgeErrorCode = "install-failed" | "invalid-manifest";
 
 export interface DirectBrowserBridgeError {
   readonly code: DirectBrowserBridgeErrorCode;
@@ -123,19 +122,20 @@ function restoreInstalledValue(
 export function prepareDirectBrowserBridgeInstallation(
   options: DirectBrowserBridgeOptions,
 ): Result<PreparedDirectBrowserBridgeInstallation, DirectBrowserBridgeError> {
-  let coverageInput: unknown;
+  let manifestInput: unknown;
   try {
-    coverageInput = options.coverage === undefined
-      ? EMPTY_COVERAGE_CATALOG_SNAPSHOT
-      : options.coverage;
+    manifestInput = options.manifest;
   } catch (reason) {
-    return err(bridgeError("invalid-coverage", renderUnknownReason(reason, "Failed to read Direct coverage")));
+    return err(bridgeError(
+      "invalid-manifest",
+      renderUnknownReason(reason, "Failed to read the Direct session manifest"),
+    ));
   }
-  const parsedCoverage = parseCoverageCatalogSnapshot(coverageInput);
-  if (!parsedCoverage.ok) {
-    return err(bridgeError("invalid-coverage", parsedCoverage.error.message));
+  const parsedManifest = parseDirectSessionManifest(manifestInput);
+  if (!parsedManifest.ok) {
+    return err(bridgeError("invalid-manifest", parsedManifest.error.message));
   }
-  const coverage = parsedCoverage.value;
+  const manifest = parsedManifest.value;
 
   let target: object;
   let reset: () => undefined;
@@ -187,6 +187,11 @@ export function prepareDirectBrowserBridgeInstallation(
       }
       const parsed = parseDirectProbeSnapshot(Reflect.get(snapshot, "value"));
       if (!parsed.ok) throw new Error(parsed.error.message);
+      if (parsed.value.activationHash !== manifest.active.activationHash) {
+        throw new Error(
+          "Direct probe activation hash does not match the installed session manifest",
+        );
+      }
       return parsed.value;
     } catch (reason) {
       throw new Error(`Direct probe failed: ${renderUnknownReason(reason)}`);
@@ -202,9 +207,9 @@ export function prepareDirectBrowserBridgeInstallation(
   };
   const bridge: DirectBrowserBridge = Object.freeze({
     schema: DIRECT_BROWSER_BRIDGE_SCHEMA,
+    manifest,
     snapshot: readSnapshot,
     reset: runReset,
-    coverage,
   });
   const installed = new Map<string, unknown>([["__direct", bridge]]);
 

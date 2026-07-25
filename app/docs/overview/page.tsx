@@ -38,7 +38,7 @@ export default async function OverviewPage() {
             <h1>{article.title}</h1>
             <p className="direct-dek">{article.dek}</p>
             <div className="direct-article-meta">
-              <span>Direct 0.4.0</span>
+              <span>Direct 0.5.0</span>
               <span aria-hidden="true">·</span>
               <a href={article.canonicalUrl}>Read on Hraness</a>
             </div>

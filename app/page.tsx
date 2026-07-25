@@ -6,7 +6,7 @@ import {
 
 export const dynamic = "force-static";
 
-const installCommand = "bun add --dev github:hraness/direct#v0.4.0";
+const installCommand = "bun add --dev github:hraness/direct#v0.5.0";
 
 export default function HomePage() {
   return (

@@ -5,17 +5,33 @@ const FORBIDDEN_MARKERS = [
   "@cclrte/direct",
   "__direct_scenario",
   "__direct_fixture",
-  "direct.browser-bridge/v1",
-  "direct.react-native-example/v1",
+  "direct.browser-bridge/v",
+  "direct.coverage/v",
+  "direct.fixture/v",
+  "direct.probe/v",
+  "direct.runtime/v",
+  "direct.session-manifest/v",
+  "direct.react-native-example/v",
   "Direct activation failed",
   "Direct hooks require their matching Direct Provider",
   "The deterministic device status port is disposed",
 ] as const;
 
+const REQUIRED_WEB_VERSIONED_MARKERS = [
+  "direct.browser-bridge/v2",
+  "direct.session-manifest/v1",
+  "direct.probe/v1",
+  "direct.react-native-example/v1",
+] as const;
+
+const REQUIRED_WEB_LITERAL_MARKERS = [
+  "__direct_scenario",
+  "ios-ready",
+] as const;
+
 const REQUIRED_WEB_MARKERS = [
   "__direct_scenario",
-  "direct.browser-bridge/v1",
-  "direct.react-native-example/v1",
+  ...REQUIRED_WEB_VERSIONED_MARKERS,
   "ios-ready",
 ] as const;
 
@@ -84,6 +100,39 @@ function sourceMapSources(contents: Buffer, file: string): readonly string[] {
 function forbiddenSource(source: string): boolean {
   return source === "/src/root.web.tsx"
     || FORBIDDEN_SOURCE_PREFIXES.some((prefix) => source.startsWith(prefix));
+}
+
+function exactVersionedMarkerEvidence(
+  byteSequences: readonly Buffer[],
+  expectedMarkers: readonly string[],
+): { readonly missing: readonly string[]; readonly unexpected: readonly string[] } {
+  const expected = new Set(expectedMarkers);
+  const observed = new Set<string>();
+  const contents = byteSequences.map((bytes) => bytes.toString("latin1"));
+  for (const marker of expectedMarkers) {
+    const family = marker.match(/^(?<family>.+\/v)[0-9]+$/u)?.groups?.["family"];
+    if (family === undefined) {
+      throw new Error(
+        `React Native boundary has an invalid exact versioned-marker policy: ${marker}`,
+      );
+    }
+    const escapedFamily = family.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    const pattern = new RegExp(
+      `(?<![A-Za-z0-9._/-])${escapedFamily}[0-9]+(?![A-Za-z0-9._/-])`,
+      "gu",
+    );
+    for (const executable of contents) {
+      for (const match of executable.matchAll(pattern)) observed.add(match[0]);
+    }
+  }
+  return Object.freeze({
+    missing: Object.freeze(expectedMarkers.filter((marker) => !observed.has(marker))),
+    unexpected: Object.freeze(
+      [...observed]
+        .filter((marker) => !expected.has(marker))
+        .sort((left, right) => left.localeCompare(right)),
+    ),
+  });
 }
 
 async function* walk(root: string, directory = root): AsyncGenerator<string> {
@@ -184,6 +233,7 @@ export async function scanReactNativeDirectWebOutput(root: string): Promise<{
   let sourceMaps = 0;
   const executablePaths = new Set<string>();
   const mappedExecutablePaths = new Set<string>();
+  const executableContents: Buffer[] = [];
   for await (const path of walk(root)) {
     const file = relative(root, path);
     scanned.push(file);
@@ -192,7 +242,8 @@ export async function scanReactNativeDirectWebOutput(root: string): Promise<{
     if (EXECUTABLE_EXTENSIONS.has(extension)) {
       executableFiles += 1;
       executablePaths.add(file);
-      for (const marker of REQUIRED_WEB_MARKERS) {
+      executableContents.push(contents);
+      for (const marker of REQUIRED_WEB_LITERAL_MARKERS) {
         if (contents.includes(Buffer.from(marker))) observed.add(marker);
       }
     }
@@ -218,9 +269,25 @@ export async function scanReactNativeDirectWebOutput(root: string): Promise<{
       `React Native Direct web output has executables without paired source maps: ${unmappedExecutables.join(", ")}`,
     );
   }
-  const missing = REQUIRED_WEB_MARKERS.filter((marker) => !observed.has(marker));
-  if (missing.length > 0) {
-    throw new Error(`React Native Direct web output is missing markers: ${missing.join(", ")}`);
+  const versionEvidence = exactVersionedMarkerEvidence(
+    executableContents,
+    REQUIRED_WEB_VERSIONED_MARKERS,
+  );
+  const missing = [
+    ...versionEvidence.missing,
+    ...REQUIRED_WEB_LITERAL_MARKERS.filter((marker) => !observed.has(marker)),
+  ];
+  if (missing.length > 0 || versionEvidence.unexpected.length > 0) {
+    throw new Error([
+      ...(missing.length === 0
+        ? []
+        : [`React Native Direct web output is missing markers: ${missing.join(", ")}`]),
+      ...(versionEvidence.unexpected.length === 0
+        ? []
+        : [
+            `React Native Direct web output contains unexpected marker versions: ${versionEvidence.unexpected.join(", ")}`,
+          ]),
+    ].join("\n"));
   }
   const missingSources = REQUIRED_WEB_SOURCES.filter((source) => !observedSources.has(source));
   if (missingSources.length > 0) {
@@ -236,6 +303,6 @@ export async function scanReactNativeDirectWebOutput(root: string): Promise<{
   }
   return Object.freeze({
     scanned: Object.freeze(scanned),
-    observedMarkers: Object.freeze(REQUIRED_WEB_MARKERS.filter((marker) => observed.has(marker))),
+    observedMarkers: Object.freeze([...REQUIRED_WEB_MARKERS]),
   });
 }

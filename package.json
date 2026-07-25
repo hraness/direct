@@ -1,6 +1,6 @@
 {
   "name": "@cclrte/direct",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Named, repeatable app states for browser agents working on real interfaces.",
   "license": "MIT",
   "type": "module",
@@ -69,6 +69,7 @@
     "src/testing/coverage-binding.ts",
     "src/testing/evidence.ts",
     "src/testing/index.ts",
+    "src/testing/manifest.ts",
     "src/testing/probe.ts",
     "src/testing/scripted-transport.ts",
     "src/testing/session.ts",

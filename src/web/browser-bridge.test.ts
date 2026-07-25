@@ -2,11 +2,11 @@ import { describe, expect, test } from "bun:test";
 
 import {
   DIRECT_COVERAGE_SCHEMA,
-  createCoverageCatalog,
-  createCoverageCatalogSnapshot,
 } from "../core/coverage.js";
+import { defineDirect } from "../core/definition.js";
 import { createDirectStore } from "../core/store.js";
 import { parseTestWorld } from "../core/test-support.js";
+import { createDirectSessionManifest } from "../testing/manifest.js";
 import { createDirectProbe } from "../testing/probe.js";
 import {
   DIRECT_BROWSER_BRIDGE_SCHEMA,
@@ -14,27 +14,41 @@ import {
   type DirectBrowserBridge,
 } from "./browser-bridge.js";
 
-function probeFixture() {
-  const store = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
-  if (!store.ok) throw new Error(store.error.message);
-  const probe = createDirectProbe({
-    store: store.value,
-    activationHash: "bridge-hash",
-    pending: [{ name: "requests", read: () => 0 }],
-  });
-  if (!probe.ok) throw new Error(probe.error.message);
-  return probe.value;
-}
-
-function coverageFixture() {
-  const catalog = createCoverageCatalog([{
+const bridgeDefinition = defineDirect({
+  parseWorld: parseTestWorld,
+  defaultScenario: "surface.ready",
+  scenarios: [{
+    id: "surface.ready",
+    title: "Ready surface",
+    route: "/surface",
+    world: { count: 0, messages: [] },
+  }],
+  coverage: [{
     key: "surface.ready",
     mode: "fixture",
     claim: "The ready surface renders",
     scenarios: ["surface.ready"],
-  }]);
-  if (!catalog.ok) throw new Error(catalog.error.message);
-  return createCoverageCatalogSnapshot(catalog.value);
+  }],
+});
+const bridgeActivation = bridgeDefinition.activateScenario("surface.ready");
+if (!bridgeActivation.ok) throw new Error(bridgeActivation.error.message);
+const createdBridgeManifest = createDirectSessionManifest(
+  bridgeDefinition,
+  bridgeActivation.value,
+);
+if (!createdBridgeManifest.ok) throw new Error(createdBridgeManifest.error.message);
+const bridgeManifest = createdBridgeManifest.value;
+
+function probeFixture(activationHash = bridgeManifest.active.activationHash) {
+  const store = createDirectStore({ count: 0, messages: [] }, parseTestWorld);
+  if (!store.ok) throw new Error(store.error.message);
+  const probe = createDirectProbe({
+    store: store.value,
+    activationHash,
+    pending: [{ name: "requests", read: () => 0 }],
+  });
+  if (!probe.ok) throw new Error(probe.error.message);
+  return probe.value;
 }
 
 function hostileThrownValue(): Error {
@@ -58,7 +72,7 @@ describe("Direct browser bridge", () => {
     const installed = installDirectBrowserBridge({
       target,
       probe: probeFixture(),
-      coverage: coverageFixture(),
+      manifest: bridgeManifest,
       reset: () => {
         resets += 1;
         return undefined;
@@ -68,13 +82,20 @@ describe("Direct browser bridge", () => {
 
     const bridge = target.__direct as DirectBrowserBridge;
     expect(bridge.schema).toBe(DIRECT_BROWSER_BRIDGE_SCHEMA);
+    expect(Object.keys(bridge)).toEqual([
+      "schema",
+      "manifest",
+      "snapshot",
+      "reset",
+    ]);
+    expect(Object.hasOwn(bridge, "coverage")).toBeFalse();
     expect(bridge.snapshot()).toMatchObject({
       schema: "direct.probe/v1",
-      activationHash: "bridge-hash",
+      activationHash: bridgeManifest.active.activationHash,
       isQuiescent: true,
     });
-    expect(bridge.coverage).toEqual(coverageFixture());
-    expect(bridge.coverage).toEqual({
+    expect(bridge.manifest).toEqual(bridgeManifest);
+    expect(bridge.manifest.coverage).toEqual({
       schema: DIRECT_COVERAGE_SCHEMA,
       entries: [expect.objectContaining({ key: "surface.ready", mode: "fixture" })],
     });
@@ -89,10 +110,18 @@ describe("Direct browser bridge", () => {
   test("a later install safely replaces the earlier install across targets", () => {
     const firstTarget: Record<string, unknown> = {};
     const secondTarget: Record<string, unknown> = {};
-    const first = installDirectBrowserBridge({ target: firstTarget, probe: probeFixture() });
+    const first = installDirectBrowserBridge({
+      target: firstTarget,
+      probe: probeFixture(),
+      manifest: bridgeManifest,
+    });
     if (!first.ok) throw new Error(first.error.message);
     const firstBridge = firstTarget.__direct;
-    const second = installDirectBrowserBridge({ target: secondTarget, probe: probeFixture() });
+    const second = installDirectBrowserBridge({
+      target: secondTarget,
+      probe: probeFixture(),
+      manifest: bridgeManifest,
+    });
     if (!second.ok) throw new Error(second.error.message);
 
     expect("__direct" in firstTarget).toBe(false);
@@ -105,7 +134,11 @@ describe("Direct browser bridge", () => {
 
   test("uninstall does not overwrite a newer external owner", () => {
     const target: Record<string, unknown> = {};
-    const installed = installDirectBrowserBridge({ target, probe: probeFixture() });
+    const installed = installDirectBrowserBridge({
+      target,
+      probe: probeFixture(),
+      manifest: bridgeManifest,
+    });
     if (!installed.ok) throw new Error(installed.error.message);
     const external = { external: true };
     target.__direct = external;
@@ -113,21 +146,55 @@ describe("Direct browser bridge", () => {
     expect(target.__direct).toBe(external);
   });
 
-  test("rejects malformed or semantically invalid coverage without mutating the target", () => {
+  test("rejects malformed or semantically invalid manifests without mutating the target", () => {
     const target: Record<string, unknown> = {};
     expect(installDirectBrowserBridge({
       target,
       probe: probeFixture(),
-      coverage: { invalid: undefined },
-    })).toMatchObject({ ok: false, error: { code: "invalid-coverage" } });
+      manifest: { invalid: undefined },
+    })).toMatchObject({ ok: false, error: { code: "invalid-manifest" } });
     expect(installDirectBrowserBridge({
       target,
       probe: probeFixture(),
-      coverage: {
-        schema: DIRECT_COVERAGE_SCHEMA,
-        entries: [{ key: "surface.ready", mode: "fixture" }],
+      manifest: {
+        ...bridgeManifest,
+        coverage: {
+          schema: DIRECT_COVERAGE_SCHEMA,
+          entries: [{ key: "surface.ready", mode: "fixture" }],
+        },
       },
-    })).toMatchObject({ ok: false, error: { code: "invalid-coverage" } });
+    })).toMatchObject({ ok: false, error: { code: "invalid-manifest" } });
+    const driftedSelection = installDirectBrowserBridge({
+      target,
+      probe: probeFixture(),
+      manifest: {
+        ...bridgeManifest,
+        active: {
+          ...bridgeManifest.active,
+          source: "fixture",
+        },
+      },
+    });
+    expect(driftedSelection).toMatchObject({
+      ok: false,
+      error: { code: "invalid-manifest" },
+    });
+    if (driftedSelection.ok) throw new Error("Drifted Direct selection must fail");
+    expect(driftedSelection.error.message).toContain("selectionHash");
+    const hostileOptions = {
+      target,
+      probe: probeFixture(),
+      manifest: bridgeManifest,
+    };
+    Object.defineProperty(hostileOptions, "manifest", {
+      get: () => {
+        throw hostileThrownValue();
+      },
+    });
+    expect(installDirectBrowserBridge(hostileOptions)).toMatchObject({
+      ok: false,
+      error: { code: "invalid-manifest" },
+    });
     expect(target).toEqual({});
   });
 
@@ -144,7 +211,11 @@ describe("Direct browser bridge", () => {
         return Reflect.defineProperty(current, key, descriptor);
       },
     });
-    const first = installDirectBrowserBridge({ target, probe: probeFixture() });
+    const first = installDirectBrowserBridge({
+      target,
+      probe: probeFixture(),
+      manifest: bridgeManifest,
+    });
     if (!first.ok) throw new Error(first.error.message);
     const firstBridge = target.__direct;
     definitionsBeforeFailure = 0;
@@ -152,10 +223,11 @@ describe("Direct browser bridge", () => {
     expect(installDirectBrowserBridge({
       target,
       probe: probeFixture(),
+      manifest: bridgeManifest,
     })).toMatchObject({ ok: false, error: { code: "install-failed" } });
     expect(target.__direct).toBe(firstBridge);
     expect((target.__direct as DirectBrowserBridge).snapshot()).toMatchObject({
-      activationHash: "bridge-hash",
+      activationHash: bridgeManifest.active.activationHash,
     });
     first.value();
     expect(backing).toEqual({});
@@ -166,6 +238,7 @@ describe("Direct browser bridge", () => {
     const hostileProbeTarget: Record<string, unknown> = {};
     const hostileProbe = installDirectBrowserBridge({
       target: hostileProbeTarget,
+      manifest: bridgeManifest,
       probe: {
         snapshot: () => {
           throw hostile;
@@ -187,7 +260,7 @@ describe("Direct browser bridge", () => {
         ok: true,
         value: {
           schema: "direct.probe/v1",
-          activationHash: "forged",
+          activationHash: bridgeManifest.active.activationHash,
           generation: 1,
           revision: 0,
           activity: { active: 1, started: 0, settled: 0 },
@@ -201,6 +274,7 @@ describe("Direct browser bridge", () => {
     const installed = installDirectBrowserBridge({
       target,
       probe: forgedProbe,
+      manifest: bridgeManifest,
     });
     if (!installed.ok) throw new Error(installed.error.message);
 
@@ -215,6 +289,7 @@ describe("Direct browser bridge", () => {
     const resetOptions = {
       target: resetTarget,
       probe: probeFixture(),
+      manifest: bridgeManifest,
       reset: () => undefined,
     };
     Object.defineProperty(resetOptions, "reset", {
@@ -236,6 +311,7 @@ describe("Direct browser bridge", () => {
     const asynchronousProbe = installDirectBrowserBridge({
       target: probeTarget,
       probe,
+      manifest: bridgeManifest,
     });
     if (!asynchronousProbe.ok) throw new Error(asynchronousProbe.error.message);
     expect(() => (probeTarget.__direct as DirectBrowserBridge).snapshot()).toThrow(
@@ -252,9 +328,28 @@ describe("Direct browser bridge", () => {
         throw hostile;
       },
     });
-    expect(installDirectBrowserBridge({ target, probe: probeFixture() })).toEqual({
+    expect(installDirectBrowserBridge({
+      target,
+      probe: probeFixture(),
+      manifest: bridgeManifest,
+    })).toEqual({
       ok: false,
       error: { code: "install-failed", message: "Direct browser bridge installation failed" },
     });
+  });
+
+  test("rejects probe evidence from a different active session", () => {
+    const target: Record<string, unknown> = {};
+    const installed = installDirectBrowserBridge({
+      target,
+      probe: probeFixture("fnv1a-64:0000000000000000"),
+      manifest: bridgeManifest,
+    });
+    if (!installed.ok) throw new Error(installed.error.message);
+
+    expect(() => (target.__direct as DirectBrowserBridge).snapshot()).toThrow(
+      "Direct probe activation hash does not match the installed session manifest",
+    );
+    installed.value();
   });
 });

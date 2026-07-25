@@ -5,6 +5,7 @@ import {
   parseDirectDefinition,
   tryDefineDirect,
 } from "./definition.js";
+import { MAX_DIRECT_COVERAGE_ENTRIES } from "./coverage.js";
 import { DEFAULT_MAX_FIXTURE_BYTES } from "./fixture.js";
 import { utf8ByteLength } from "./json.js";
 import {
@@ -12,6 +13,7 @@ import {
   FIXTURE_QUERY_KEY,
   SCENARIO_QUERY_KEY,
 } from "./query.js";
+import { MAX_DIRECT_SCENARIOS } from "./scenario.js";
 import { parseTestWorld, type TestRoute, type TestWorld } from "./test-support.js";
 
 function definition() {
@@ -270,6 +272,57 @@ describe("Direct definition", () => {
       maxQueryBytes: 0,
     });
     expect(created).toMatchObject({ ok: false, error: { code: "invalid-limits" } });
+  });
+
+  test("rejects catalogs larger than the bounded discovery contract", () => {
+    const tooManyScenarios = tryDefineDirect<TestWorld, TestRoute>({
+      parseWorld: parseTestWorld,
+      defaultScenario: "case.0",
+      scenarios: Array.from(
+        { length: MAX_DIRECT_SCENARIOS + 1 },
+        (_, index) => ({
+          id: `case.${String(index)}`,
+          title: `Case ${String(index)}`,
+          route: "/chat" as const,
+          world: { count: index, messages: [] },
+        }),
+      ),
+      coverage: [],
+    });
+    expect(tooManyScenarios).toMatchObject({
+      ok: false,
+      error: {
+        code: "invalid-scenarios",
+        scenarioError: { code: "too-many-scenarios" },
+      },
+    });
+
+    const tooManyCoverageEntries = tryDefineDirect<TestWorld, TestRoute>({
+      parseWorld: parseTestWorld,
+      defaultScenario: "case.ready",
+      scenarios: [{
+        id: "case.ready",
+        title: "Ready case",
+        route: "/chat",
+        world: { count: 0, messages: [] },
+      }],
+      coverage: Array.from(
+        { length: MAX_DIRECT_COVERAGE_ENTRIES + 1 },
+        (_, index) => ({
+          key: `claim.${String(index)}`,
+          mode: "direct" as const,
+          claim: `Claim ${String(index)}`,
+          scenarios: [] as const,
+        }),
+      ),
+    });
+    expect(tooManyCoverageEntries).toMatchObject({
+      ok: false,
+      error: {
+        code: "invalid-coverage",
+        coverageError: { code: "too-many-coverage-entries" },
+      },
+    });
   });
 
   test("freezes limits and binds fixture parsing, creation, and serialization to them", () => {

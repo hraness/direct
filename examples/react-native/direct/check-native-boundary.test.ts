@@ -66,7 +66,21 @@ describe("React Native production boundary", () => {
     const root = await temporaryRoot();
     await writeFile(
       join(root, "entry.js"),
-      "device-status-example/screen/v1 device-status-example/native-port/v1 @cclrte/direct __direct_scenario Direct activation failed Direct hooks require their matching Direct Provider",
+      [
+        "device-status-example/screen/v1",
+        "device-status-example/native-port/v1",
+        "@cclrte/direct",
+        "__direct_scenario",
+        "direct.browser-bridge/v99",
+        "direct.coverage/v99",
+        "direct.fixture/v99",
+        "direct.probe/v99",
+        "direct.runtime/v99",
+        "direct.session-manifest/v99",
+        "direct.react-native-example/v99",
+        "Direct activation failed",
+        "Direct hooks require their matching Direct Provider",
+      ].join(" "),
     );
     await writeFile(join(root, "entry.js.map"), JSON.stringify({ sources: nativeSources }));
     const result = await scanReactNativeProductionOutput(root);
@@ -75,6 +89,13 @@ describe("React Native production boundary", () => {
       markers: [
         "@cclrte/direct",
         "__direct_scenario",
+        "direct.browser-bridge/v",
+        "direct.coverage/v",
+        "direct.fixture/v",
+        "direct.probe/v",
+        "direct.runtime/v",
+        "direct.session-manifest/v",
+        "direct.react-native-example/v",
         "Direct activation failed",
         "Direct hooks require their matching Direct Provider",
       ],
@@ -154,7 +175,9 @@ describe("React Native production boundary", () => {
     const root = await temporaryRoot();
     await writeFile(join(root, "entry.js"), [
       "__direct_scenario",
-      "direct.browser-bridge/v1",
+      "direct.browser-bridge/v2",
+      "direct.session-manifest/v1",
+      "direct.probe/v1",
       "direct.react-native-example/v1",
       "ios-ready",
     ].join(" "));
@@ -163,7 +186,9 @@ describe("React Native production boundary", () => {
       scanned: ["entry.js", "entry.js.map"],
       observedMarkers: [
         "__direct_scenario",
-        "direct.browser-bridge/v1",
+        "direct.browser-bridge/v2",
+        "direct.session-manifest/v1",
+        "direct.probe/v1",
         "direct.react-native-example/v1",
         "ios-ready",
       ],
@@ -178,11 +203,50 @@ describe("React Native production boundary", () => {
       .toContain("missing markers");
   });
 
+  test("does not accept v20 or v10 as the current web wire versions", async () => {
+    const root = await temporaryRoot();
+    await writeFile(join(root, "entry.js"), [
+      "__direct_scenario",
+      "direct.browser-bridge/v20",
+      "direct.session-manifest/v10",
+      "direct.probe/v10",
+      "direct.react-native-example/v1",
+      "ios-ready",
+    ].join(" "));
+    await writeFile(join(root, "entry.js.map"), JSON.stringify({ sources: webSources }));
+
+    const failure = await rejection(scanReactNativeDirectWebOutput(root));
+    expect(failure.message).toContain("direct.browser-bridge/v2");
+    expect(failure.message).toContain("direct.session-manifest/v1");
+  });
+
+  test("rejects stale or future versions beside the current web contract", async () => {
+    const root = await temporaryRoot();
+    await writeFile(join(root, "entry.js"), [
+      "__direct_scenario",
+      "direct.browser-bridge/v2",
+      "direct.session-manifest/v1",
+      "direct.probe/v1",
+      "direct.react-native-example/v1",
+      "ios-ready",
+      "direct.browser-bridge/v1",
+      "direct.session-manifest/v2",
+      "direct.probe/v2",
+      "direct.react-native-example/v2",
+    ].join(" "));
+    await writeFile(join(root, "entry.js.map"), JSON.stringify({ sources: webSources }));
+
+    expect((await rejection(scanReactNativeDirectWebOutput(root))).message)
+      .toContain("unexpected marker versions");
+  });
+
   test("rejects web output without paired source-map evidence", async () => {
     const root = await temporaryRoot();
     await writeFile(join(root, "entry.js"), [
       "__direct_scenario",
-      "direct.browser-bridge/v1",
+      "direct.browser-bridge/v2",
+      "direct.session-manifest/v1",
+      "direct.probe/v1",
       "direct.react-native-example/v1",
       "ios-ready",
     ].join(" "));
@@ -194,7 +258,9 @@ describe("React Native production boundary", () => {
     const missingRoot = await temporaryRoot();
     await writeFile(join(missingRoot, "entry.js"), [
       "__direct_scenario",
-      "direct.browser-bridge/v1",
+      "direct.browser-bridge/v2",
+      "direct.session-manifest/v1",
+      "direct.probe/v1",
       "direct.react-native-example/v1",
       "ios-ready",
     ].join(" "));
@@ -207,7 +273,9 @@ describe("React Native production boundary", () => {
     const nativeRoot = await temporaryRoot();
     await writeFile(join(nativeRoot, "entry.js"), [
       "__direct_scenario",
-      "direct.browser-bridge/v1",
+      "direct.browser-bridge/v2",
+      "direct.session-manifest/v1",
+      "direct.probe/v1",
       "direct.react-native-example/v1",
       "ios-ready",
     ].join(" "));
@@ -222,7 +290,9 @@ describe("React Native production boundary", () => {
     const root = await temporaryRoot();
     await writeFile(join(root, "metadata.json"), [
       "__direct_scenario",
-      "direct.browser-bridge/v1",
+      "direct.browser-bridge/v2",
+      "direct.session-manifest/v1",
+      "direct.probe/v1",
       "direct.react-native-example/v1",
       "ios-ready",
     ].join(" "));

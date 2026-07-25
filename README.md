@@ -9,7 +9,7 @@ systems with deterministic adapters. direct does not drive the browser or test
 those systems.
 
 ```sh
-bun add --dev github:hraness/direct#v0.4.0
+bun add --dev github:hraness/direct#v0.5.0
 ```
 
 [overview](https://hraness.direct/docs/overview) ·
@@ -32,7 +32,7 @@ Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
 Install hraness/direct and its bundled Agent Skills from
-https://github.com/hraness/direct at the immutable v0.4.0 tag. Follow the
+https://github.com/hraness/direct at the immutable v0.5.0 tag. Follow the
 repository README, add `@cclrte/direct` to devDependencies only, copy or link
 `direct-setup` and `direct-verify` into this agent runner's configured
 skills directory, and verify that the production dependency graph excludes
@@ -48,7 +48,7 @@ Pin the public repository to an immutable version tag:
 ```json
 {
   "devDependencies": {
-    "@cclrte/direct": "github:hraness/direct#v0.4.0"
+    "@cclrte/direct": "github:hraness/direct#v0.5.0"
   }
 }
 ```
@@ -63,7 +63,7 @@ Keep Direct in `devDependencies`. A production entry must not import Direct, its
 
 ## Agent skills
 
-Beginning with v0.4.0, the packed package includes two Agent Skills under `node_modules/@cclrte/direct/skills/`. `direct-setup` guides a product-owned port, deterministic composition, and production-exclusion proof. `direct-verify` audits scenario behavior, quiescence, coverage claims, cleanup, and emitted production boundaries.
+The packed package includes two Agent Skills under `node_modules/@cclrte/direct/skills/`. `direct-setup` guides a product-owned port, deterministic composition, and production-exclusion proof. `direct-verify` audits scenario behavior, quiescence, coverage claims, cleanup, and emitted production boundaries.
 
 Agent runners do not share one discovery directory. Copy or link the desired skill directory into the location configured by your runner, then invoke `$direct-setup` or `$direct-verify`. Package installation leaves the skills inert: it does not run a `postinstall` hook or edit repository or user configuration.
 
@@ -115,7 +115,23 @@ globalThis.addEventListener("pagehide", session.dispose, { once: true });
 
 `defineDirect` is the concise authored-config path; scenario defaults and coverage citations are checked against the same scenario tuple. Use `tryDefineDirect` for typed configuration assembled dynamically. Use `parseDirectDefinition` for a genuinely `unknown` value; it returns a `Result` with an intentionally broad JSON world and string route because foreign data cannot supply compile-time refinements.
 
-The session supplies the parsed world, generation-safe store, logical clock, activity scope, cancellation signal, probe, coverage value, and reverse-order cleanup. The browser installer derives its probe and coverage from that session, blocks unmapped `fetch` calls by default, rolls back partial installation, and registers teardown with `session.dispose()`.
+One definition may contain at most 256 scenarios and 256 coverage entries.
+
+The session supplies the parsed world, generation-safe store, logical clock,
+activity scope, cancellation signal, world-free manifest, probe, coverage
+value, and reverse-order cleanup. The browser installer publishes that
+manifest with the live probe and reset action, blocks unmapped `fetch` calls
+by default, rolls back partial installation, and registers teardown with
+`session.dispose()`.
+
+An external browser tool reads `window.__direct.schema`,
+`window.__direct.manifest`, and `window.__direct.snapshot()` in one synchronous
+evaluation. Require the exact `direct.browser-bridge/v2` schema, parse the
+manifest and probe from `unknown`, confirm the expected activation source,
+scenario, and product route, and require their activation hashes to match.
+Retain one catalog hash across the run. Direct does not need a driver-specific
+plugin: agent-browser, Playwright MCP, and other tools can read the same page
+contract.
 
 See the [Todo example](https://github.com/hraness/direct/tree/main/examples/todos) for a strict parser, product-owned port, React workbench, and emitted-graph boundary verifier. The [React Native example](https://github.com/hraness/direct/tree/main/examples/react-native) uses the same session model in a platform-resolved Expo composition while keeping native production graphs Direct-free.
 
@@ -140,7 +156,7 @@ A quiet probe means the declared deterministic work settled. It does not prove t
 | `@cclrte/direct` | Authored definitions plus the scenario, coverage, fixture, JSON, activation, and logical-time types needed to describe them | Framework-free |
 | `@cclrte/direct/core` | Advanced catalog, parser, store, runtime, effect, resource, ID, and `Result` mechanics | Framework-free |
 | `@cclrte/direct/react` | Typed context, provider, and external-store hooks for React DOM or React Native | Optional React peer |
-| `@cclrte/direct/testing` | Sessions, evidence classification, canonical wire parsers, activity scopes, probes, and exact scripted transports | Development and verification |
+| `@cclrte/direct/testing` | Sessions, manifest and probe parsers, evidence classification, activity scopes, and exact scripted transports | Development and verification |
 | `@cclrte/direct/web` | Atomic browser installation, with low-level bridge and firewall escape hatches | Browser only |
 
 ## Activate scenarios
@@ -151,6 +167,21 @@ The browser query boundary reserves:
 - `__direct_fixture=<encoded-json>` for a portable `direct.fixture/v1` envelope.
 
 Malformed encoding, duplicate activation, unknown reserved keys, unknown scenarios, route mismatches, invalid worlds, and oversized input fail closed. An empty activation selects the definition's validated default scenario.
+
+## Upgrade from v0.4.0
+
+v0.5.0 replaces `direct.browser-bridge/v1` with the exact v2 shape:
+`schema`, `manifest`, `snapshot()`, and `reset()`. Coverage moved from
+`window.__direct.coverage` to `window.__direct.manifest.coverage`. Low-level
+bridge callers now pass `manifest` instead of `coverage`, and probe activation
+hashes use `fnv1a-64:<16 lowercase hexadecimal digits>`. The manifest parser
+also recomputes `active.selectionHash`, which binds the public source,
+scenario, and route to that activation identity without exposing world or
+runtime data.
+
+Migrate the browser installation and each verifier together. Keep v0.4.0
+pinned until a consumer can accept the complete v2 contract; do not support a
+hybrid bridge shape.
 
 ## Repository scope
 
@@ -221,9 +252,11 @@ Direct gives the development composition one lifecycle instead of a collection o
 
 - A definition validates the named worlds, routes, and evidence claims.
 - A session activates one world and owns its state, logical time, tracked work, reset generation, and cleanup.
-- A browser installation exposes the session probe and reset action while blocking unmapped application requests by default.
+- A browser installation publishes the scenario catalog, active-state identity, coverage contract, probe, and reset action while blocking unmapped application requests by default.
 
 That default network policy matters. A deterministic page should not silently call a live service when a fixture misses a case. The product can allow exact URLs when needed, but unknown application calls fail visibly. Direct and its fixture worlds also stay outside the production dependency graph.
+
+The published manifest makes the page self-describing. An agent can discover valid scenario IDs and routes, confirm which activation the current probe belongs to, and check that it is the requested scenario and route without reading a product-specific source file. The browser tool still owns navigation and interaction; Direct does not turn scenarios into commands.
 
 ### Wait for the app, not a guess
 
@@ -260,7 +293,7 @@ Direct records the same distinction in coverage claims. A fixture claim stops at
 
 ### Carry the workflow with the package
 
-The v0.4.0 package includes two Agent Skills under `skills/`. `direct-setup` guides the product-port boundary, deterministic composition, and production-exclusion check. `direct-verify` guides scenario review, quiescence, cleanup, and evidence classification. The skills carry the technical detail an agent needs without forcing every human reader through an API manual.
+The package includes two Agent Skills under `skills/`. `direct-setup` guides the product-port boundary, deterministic composition, and production-exclusion check. `direct-verify` guides scenario review, quiescence, cleanup, and evidence classification. The skills carry the technical detail an agent needs without forcing every human reader through an API manual.
 
 Package installation leaves the skills inactive because coding-agent runners use different discovery directories. Copy or link the desired skill into the runner's configured location, then invoke it by name. The package does not run a postinstall script or edit agent configuration.
 

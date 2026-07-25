@@ -4,7 +4,12 @@ import {
   type FixtureParseOptions,
 } from "./fixture.js";
 import { parseScenarioId, type ScenarioId } from "./ids.js";
-import { stableHash, utf8ByteLength } from "./json.js";
+import {
+  stableHash,
+  tagStableHash,
+  utf8ByteLength,
+  type TaggedStableHash,
+} from "./json.js";
 import type { JsonValue } from "./json-value.js";
 import { err, ok, type Result } from "./result.js";
 import type { LogicalRuntimeSnapshot } from "./runtime.js";
@@ -28,7 +33,7 @@ export interface ActiveDirect<World extends JsonValue, Route extends string> {
   readonly route: Route;
   readonly world: World;
   readonly runtime: LogicalRuntimeSnapshot;
-  readonly activationHash: string;
+  readonly activationHash: TaggedStableHash;
 }
 
 export interface InactiveDirect {
@@ -134,12 +139,12 @@ function activationHash<World extends JsonValue, Route extends string>(
   route: Route,
   world: World,
   runtime: LogicalRuntimeSnapshot,
-): string {
+): TaggedStableHash {
   const hashed = stableHash({ source, scenario, route, world, runtime });
   if (!hashed.ok) {
     throw new Error(hashed.error.message);
   }
-  return `${hashed.value.algorithm}:${hashed.value.value}`;
+  return tagStableHash(hashed.value);
 }
 
 export function activateDirectScenario<World extends JsonValue, Route extends string>(

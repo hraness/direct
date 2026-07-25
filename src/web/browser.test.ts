@@ -51,7 +51,8 @@ describe("Direct browser installation", () => {
     if (!installed.ok) throw new Error(installed.error.message);
 
     const bridge = target.__direct as DirectBrowserBridge;
-    expect(bridge.coverage).toEqual(session.coverage);
+    expect(bridge.manifest).toEqual(session.manifest);
+    expect(bridge.manifest.coverage).toEqual(session.coverage);
     expect(bridge.snapshot()).toMatchObject({
       activationHash: session.activation.activationHash,
       isQuiescent: true,

@@ -2,7 +2,7 @@ import {
   parseCoverageCatalogSnapshot as parseCoverageCatalogSnapshotCore,
 } from "../core/coverage.js";
 
-/** Parse the canonical coverage value published by a browser installation. */
+/** Parse an exact coverage snapshot, including `window.__direct.manifest.coverage`. */
 export function parseCoverageCatalogSnapshot(
   input: unknown,
 ): ReturnType<typeof parseCoverageCatalogSnapshotCore> {
@@ -16,6 +16,7 @@ export type {
 export * from "./activity.js";
 export * from "./coverage-binding.js";
 export * from "./evidence.js";
+export * from "./manifest.js";
 export * from "./probe.js";
 export * from "./session.js";
 export * from "./scripted-transport.js";

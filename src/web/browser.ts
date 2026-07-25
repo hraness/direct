@@ -137,9 +137,10 @@ function runBrowserCleanup(
 }
 
 /**
- * Install the canonical browser bridge and fail-closed fetch boundary around
- * one session. Installation is failure-atomic and teardown is registered with
- * the session, so session disposal remains the aggregate lifecycle boundary.
+ * Install the exact session-manifest, probe, and reset browser bridge plus the
+ * fail-closed fetch boundary around one session. Installation is failure-atomic
+ * and teardown is registered with the session, so session disposal remains the
+ * aggregate lifecycle boundary.
  */
 export function installDirectBrowser<
   World extends JsonValue,
@@ -149,7 +150,7 @@ export function installDirectBrowser<
   options: InstallDirectBrowserOptions<World, Route, Harness>,
 ): Result<DirectBrowserInstallation, DirectBrowserInstallError> {
   let activity: DirectSession<World, Route, Harness>["activity"];
-  let coverage: DirectSession<World, Route, Harness>["coverage"];
+  let manifest: DirectSession<World, Route, Harness>["manifest"];
   let onDispose: DirectSession<World, Route, Harness>["onDispose"];
   let probe: DirectProbe;
   let reset: (() => undefined) | undefined;
@@ -158,7 +159,7 @@ export function installDirectBrowser<
   try {
     const session = options.session;
     activity = session.activity;
-    coverage = session.coverage;
+    manifest = session.manifest;
     onDispose = session.onDispose;
     probe = session.probe;
     reset = options.reset;
@@ -206,7 +207,7 @@ export function installDirectBrowser<
 
   const preparedBridgeResult = prepareDirectBrowserBridgeInstallation({
     probe,
-    coverage,
+    manifest,
     ...(reset === undefined ? {} : { reset }),
     ...(target === undefined ? {} : { target }),
   });

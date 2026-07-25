@@ -8,7 +8,10 @@ description: Verify an existing Direct composition, including strict activation,
 ## Discover the declared contract
 
 1. Read applicable `AGENTS.md` files, package scripts, Direct definition, world parser, deterministic adapters, session construction, browser installation, verifier, and production-boundary policy.
-2. List every scenario and coverage entry before running commands.
+2. If a Direct page is running, read and parse
+   `window.__direct.manifest` first. Use it to list every scenario and coverage
+   entry, then compare it with the authored definition when source is
+   available.
 3. Map each `fixture`, `mixed`, and `direct` claim to the evidence required to close it.
 4. Identify the production adapter, service, host, operating system, or device behavior replaced by each deterministic port.
 5. Inspect each command before treating it as evidence. A script named `verify` may build and scan boundaries without driving a browser.
@@ -21,11 +24,60 @@ Run the repository's narrow Direct typecheck, unit tests, property tests, and Di
 
 Verify that tests cover malformed worlds, explicit activation failures, adapter failures, cancellation, cleanup, and exact-script drain behavior when applicable.
 
-When a browser verifier exists, drive stable scenario URLs and interact in product terms. Read only the canonical `window.__direct` bridge and parse its probe and coverage values. Confirm that the installed coverage value matches the session's declared catalog. Do not accept compatibility or product-specific globals as equivalent evidence.
+When a browser verifier exists, drive stable scenario URLs and interact in
+product terms. Read only the canonical `window.__direct` bridge. Parse the
+complete manifest and every probe; bind `manifest.coverage` to the authored
+definition with `parseDefinitionCoverageSnapshot`. Do not accept compatibility
+or product-specific globals as equivalent evidence.
+
+The manifest is driver-neutral. With agent-browser, read one synchronous
+bridge sample:
+
+```sh
+agent-browser --json eval "(() => { const bridge = window.__direct; return { bridgeSchema: bridge?.schema, manifest: bridge?.manifest, probe: typeof bridge?.snapshot === 'function' ? bridge.snapshot() : undefined }; })()"
+```
+
+The JSON command envelope stores that sample at `data.result`; parse the
+result, not the envelope, as the Direct contract. With Playwright MCP, call
+`browser_evaluate` with the same page function:
+
+```json
+{
+  "function": "() => { const bridge = window.__direct; return { bridgeSchema: bridge?.schema, manifest: bridge?.manifest, probe: typeof bridge?.snapshot === 'function' ? bridge.snapshot() : undefined }; }"
+}
+```
+
+No Direct-specific browser plugin or MCP server is required. Add
+`manifest.queries.scenario` to the product's known Direct entry URL, navigate,
+and reacquire the complete sample because navigation replaces the document.
+The published scenario `route` is the product route under review, not
+necessarily the wrapper workbench's entry path.
+
+After every scenario navigation, require:
+
+- `bridgeSchema` equals `direct.browser-bridge/v2`;
+- `manifest.active.source` equals the requested activation source;
+- `manifest.active.scenario` equals the requested scenario;
+- `manifest.active.route` equals the expected product route; and
+- the parsed manifest's `active.selectionHash` binds that public selection to
+  its activation hash; and
+- the parsed probe activation hash equals
+  `manifest.active.activationHash`.
+
+Retain the complete initial manifest and probe with each result. After product
+interactions, atomically sample the bridge again and require unchanged public
+catalog metadata, coverage, catalog hash, full active selection, and probe
+activation identity. Bind every sampled `manifest.coverage` to the authored
+definition.
 
 ## Join the probe
 
-Wait until the same generation, revision, activity totals, and pending counters remain quiet for the verifier's bounded settle interval. A quiet probe requires zero current activity and zero pending counters.
+Wait until the same generation, revision, activity totals, and pending counters
+remain quiet for the verifier's bounded settle interval. A quiet probe requires
+zero current activity and zero pending counters. One successful
+`wait --fn "window.__direct?.snapshot().isQuiescent === true"` observes only a
+single quiet sample; it does not prove stability. Parse another probe after the
+settle interval and compare the complete quiet state.
 
 After each interaction:
 
@@ -58,4 +110,11 @@ A browser-only run keeps a direct claim `direct-required` and can report at most
 
 Use `classifyCoverageEvidence` from `@cclrte/direct/testing`. Pass only scenario IDs whose claim-specific assertions succeeded, and set direct evidence to verified only for a current passing direct gate. Do not hand-roll a looser status promotion.
 
-Include `HEAD` plus dirty or clean working-tree status, commands, scenario results, final probes, production surfaces scanned, retained artifacts, and exact failures. Report absent property tests, browser probes, or artifacts as `not present` or `not observed`. State skipped direct gates once. Do not use credentials, contact live services, or expand into device testing unless the user placed those systems in scope.
+Include `HEAD` plus dirty or clean working-tree status, commands, scenario
+results, catalog hash, activation hashes, final probes, production surfaces
+scanned, retained artifacts, and exact failures. Treat the catalog hash as a
+drift fingerprint, not a security digest or deployed-bundle identity. Report
+absent property tests, browser probes, or artifacts as `not present` or `not
+observed`. State skipped direct gates once. Do not use credentials, contact
+live services, or expand into device testing unless the user placed those
+systems in scope.
