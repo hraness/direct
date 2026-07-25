@@ -7,10 +7,29 @@ import { DIRECT_INSTALL_COMMAND } from "./version";
 
 export const dynamic = "force-static";
 
+const structuredData = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  applicationCategory: "DeveloperApplication",
+  codeRepository: DIRECT_GITHUB_URL,
+  description: "Named, repeatable app states for browser agents.",
+  isAccessibleForFree: true,
+  name: "Direct",
+  operatingSystem: "Any",
+  url: "https://hraness.direct/",
+} as const;
+
 export default function HomePage() {
   return (
     <>
       <main className="plain-page direct-page" id="main">
+        <script
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify(structuredData).replaceAll("<", "\\u003c"),
+          }}
+          id="direct-structured-data"
+          type="application/ld+json"
+        />
         <h1>direct</h1>
         <p>named, repeatable app states for browser agents.</p>
 
