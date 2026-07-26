@@ -280,7 +280,7 @@ await expect(page.getByRole("checkbox", {
 })).toBeChecked();
 ```
 
-Here, `waitForQuiescence` is product-owned verifier code around Direct's snapshot, not a Direct browser driver. Quiescence proves only that the work Direct knows about has settled. It does not prove that the screen is correct. The verifier must still reject relevant console, runtime, and unhandled-request errors, then make product-specific assertions or visual checks.
+Here, `waitForQuiescence` is product-owned verifier code around Direct's snapshot, not a Direct browser driver. Quiescence proves only that the work Direct knows about has settled. It does not prove that the screen is correct. The verifier must still reject relevant console, runtime, and unhandled-request errors, then make product-specific assertions or visual checks. The School lesson on [verification evidence and its boundaries](<https://hraness.school/lessons/what-is-a-coding-agent#verification>) places that evidence in the wider agent loop.
 
 ### Choose the smallest tool that covers the risk
 
