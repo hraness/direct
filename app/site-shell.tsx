@@ -1,6 +1,10 @@
 export const DIRECT_ARTICLE_URL =
   "https://hraness.pub/articles/direct-a-harness-for-your-frontend";
+export const DIRECT_DESCRIPTION = "Repeatable app screens for coding agents.";
 export const DIRECT_GITHUB_URL = "https://github.com/hraness/direct";
+export const DIRECT_SITE_URL = "https://hraness.direct";
+export const DIRECT_TAGLINE = "repeatable app screens for coding agents";
+export const DIRECT_TITLE = `direct — ${DIRECT_TAGLINE}`;
 
 type DirectRoute = "home" | "overview";
 

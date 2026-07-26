@@ -1,6 +1,9 @@
 import {
   DIRECT_ARTICLE_URL,
+  DIRECT_DESCRIPTION,
   DIRECT_GITHUB_URL,
+  DIRECT_SITE_URL,
+  DIRECT_TAGLINE,
   SiteFooter,
 } from "./site-shell";
 import { DIRECT_INSTALL_COMMAND } from "./version";
@@ -12,11 +15,11 @@ const structuredData = {
   "@type": "SoftwareApplication",
   applicationCategory: "DeveloperApplication",
   codeRepository: DIRECT_GITHUB_URL,
-  description: "Named, repeatable app states for browser agents.",
+  description: DIRECT_DESCRIPTION,
   isAccessibleForFree: true,
   name: "Direct",
   operatingSystem: "Any",
-  url: "https://hraness.direct/",
+  url: `${DIRECT_SITE_URL}/`,
 } as const;
 
 export default function HomePage() {
@@ -31,7 +34,7 @@ export default function HomePage() {
           type="application/ld+json"
         />
         <h1>direct</h1>
-        <p>named, repeatable app states for browser agents.</p>
+        <p>{DIRECT_TAGLINE}.</p>
 
         <section aria-labelledby="install">
           <h2 id="install">install</h2>
@@ -42,14 +45,14 @@ export default function HomePage() {
         <section aria-labelledby="about">
           <h2 id="about">about</h2>
           <p>
-            define signed-in, empty, error, and other hard-to-reach states once,
-            then open them by url in a development build.
+            set up signed-in, empty, error, and other hard-to-reach screens once,
+            then open them by URL during development.
           </p>
           <p>
-            your interface and feature code stay on their normal paths. the
-            development composition replaces selected external systems with
-            deterministic adapters. direct does not drive the browser or test
-            those systems.
+            your interface and feature code run normally. in development,
+            direct replaces only the outside systems needed for that screen
+            with predictable local stand-ins. direct does not click through the
+            browser or test the systems it replaces.
           </p>
         </section>
 

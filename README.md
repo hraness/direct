@@ -1,12 +1,12 @@
 # direct
 
-named, repeatable app states for browser agents.
+repeatable app screens for coding agents.
 
-define signed-in, empty, error, and other hard-to-reach states once, then open
-them by url in a development build. your interface and feature code stay on
-their normal paths. the development composition replaces selected external
-systems with deterministic adapters. direct does not drive the browser or test
-those systems.
+set up signed-in, empty, error, and other hard-to-reach screens once, then open
+them by URL during development. your interface and feature code run normally.
+direct replaces only the outside systems needed for that screen with
+predictable local stand-ins. it does not click through the browser or test the
+systems it replaces.
 
 ```sh
 bun add --dev github:hraness/direct#v0.6.0
