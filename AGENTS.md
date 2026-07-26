@@ -7,8 +7,6 @@
 - `docs/` – architecture, adoption, verification, and wire-format reference.
 - `examples/todos/` – runnable React example with separate production and Direct entries.
 - `examples/react-native/` – runnable Expo example with platform-resolved native production and React Native Web Direct entries.
-- `app/` – the statically generated `hraness.direct` product site with a concise landing page and a long-form Overview sourced from the synchronized README section.
-- `public/og.png` – the site’s typography-led social-preview card.
 - `skills/` – agent workflows for adding and verifying a Direct composition.
 - `.github/workflows/` – read-only branch validation and checks-gated immutable GitHub Release automation.
 - `README.md` – installation, quick start, scope, and command index.
@@ -23,7 +21,7 @@
 - Let each product own its semantic ports, strict versioned JSON world, deterministic adapters, scenarios, coverage claims, and workbench.
 - Prefer one validated definition, one owned session, and one atomic browser installation over assembling raw catalogs, stores, manifests, probes, and globals in each product.
 - Keep Direct development-only. Production entries and emitted production assets must not import the package, fixture worlds, scenario catalogs, workbench code, or browser bridge.
-- Keep the public site server-rendered and static. Put installation and the browser-tool decision on the concise landing page, parse the Overview from the repository-controlled README’s exact marker boundary, and keep the site outside the packed runtime allowlist.
+- Keep this repository package-only. Link to the canonical product page at `https://hraness.com/direct`; do not add a website or deployment contract here.
 - Parse foreign input from `unknown`, reject unknown reserved keys and object fields, and preserve atomic store, generation-fencing, cancellation, and exact-script invariants.
 - Publish one exact driver-neutral session manifest from the browser bridge. Parse
   the exact v2 schema, manifest, and probe from one synchronous page sample.
@@ -33,5 +31,4 @@
 - State proof limits precisely. Fixture evidence does not prove the live adapter, service, host, operating system, or device behavior that the composition replaces.
 - Run `bun run check` before handing off a change. Run the todo example's production build and marker scan when changing the example or package boundaries.
 - Run the React Native example's iOS, Android, and web export gate when changing mobile integration or production boundaries.
-- Run `bun run site:check` when changing the website, README article, metadata, or deployment contract.
 - Treat a `v*` tag as a release request, not a completed release. Before tagging, confirm repository-level immutable releases are enabled; use a strictly increasing stable package version, keep the tag equal to `v<package.json version>` on `main`, and let the read-only verification job complete before its write-scoped publisher creates the Release. Do not create the next tag until that workflow and Release are verified because GitHub concurrency is not a durable queue. After tagging, verify the matching non-draft immutable Release is Latest.

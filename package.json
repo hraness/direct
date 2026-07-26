@@ -1,6 +1,6 @@
 {
   "name": "@hraness/direct",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Repeatable app screens for coding agents.",
   "license": "MIT",
   "type": "module",
@@ -10,7 +10,7 @@
     "type": "git",
     "url": "git+https://github.com/hraness/direct.git"
   },
-  "homepage": "https://hraness.direct/",
+  "homepage": "https://hraness.com/direct",
   "bugs": {
     "url": "https://github.com/hraness/direct/issues"
   },
@@ -97,14 +97,9 @@
     "example:test": "bun test ./examples/todos",
     "example:typecheck": "tsc -p examples/todos/tsconfig.json --noEmit",
     "example:verify": "bun run examples/todos/verify.ts",
-    "lint": "eslint src examples scripts app next.config.ts",
-    "site:build": "next build --webpack",
-    "site:check": "bun run site:test && bun run site:typecheck && bun run site:build",
-    "site:dev": "next dev --webpack",
-    "site:test": "bun test ./app",
-    "site:typecheck": "tsc -p tsconfig.site.json --noEmit && tsc -p tsconfig.site-test.json --noEmit",
+    "lint": "eslint src examples scripts",
     "test:package": "bun run ./scripts/package-smoke.ts",
-    "check": "bun run typecheck && bun run test && bun run build && bun run lint && bun run example:test && bun run example:typecheck && bun run example:verify && bun run example:react-native:test && bun run example:react-native:typecheck && bun run example:react-native:verify && bun run site:check && bun run test:package",
+    "check": "bun run typecheck && bun run test && bun run build && bun run lint && bun run example:test && bun run example:typecheck && bun run example:verify && bun run example:react-native:test && bun run example:react-native:typecheck && bun run example:react-native:verify && bun run test:package",
     "prepack": "bun run check"
   },
   "peerDependencies": {
@@ -126,13 +121,10 @@
     "eslint": "^9.39.2",
     "expo": "~57.0.8",
     "fast-check": "^4.8.0",
-    "marked": "^17.0.1",
-    "next": "16.2.9",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.0",
     "react-native-web": "~0.21.2",
-    "sugar-high": "^1.2.1",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.53.0",
     "vite": "^8.1.5"

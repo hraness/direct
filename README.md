@@ -9,10 +9,10 @@ predictable local stand-ins. it does not click through the browser or test the
 systems it replaces.
 
 ```sh
-bun add --dev github:hraness/direct#v0.6.0
+bun add --dev github:hraness/direct#v0.6.1
 ```
 
-[overview](https://hraness.direct/docs/overview) ·
+[overview](https://hraness.com/direct/docs/overview) ·
 [article](https://hraness.pub/articles/direct-a-harness-for-your-frontend)
 
 ```text
@@ -32,7 +32,7 @@ Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
 Install hraness/direct and its bundled Agent Skills from
-https://github.com/hraness/direct at the immutable v0.6.0 tag. Follow the
+https://github.com/hraness/direct at the immutable v0.6.1 tag. Follow the
 repository README, add `@hraness/direct` to devDependencies only, copy or link
 `direct-setup` and `direct-verify` into this agent runner's configured
 skills directory, and verify that the production dependency graph excludes
@@ -48,7 +48,7 @@ Pin the public repository to an immutable version tag:
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "github:hraness/direct#v0.6.0"
+    "@hraness/direct": "github:hraness/direct#v0.6.1"
   }
 }
 ```
@@ -194,7 +194,7 @@ This repository contains the deterministic kernel, browser bridge, production-ex
 
 A browser agent can open a page, click a control, and inspect the result. It cannot make the state behind that page quick to reach. A signed-in account, a particular database record, a device permission, a model response, or a failure at the right moment may still take longer to arrange than the interface takes to review.
 
-[Hraness Direct](<https://hraness.direct>) separates those two jobs. A browser tool controls the page. The product connects Direct's named, repeatable states to its existing interface and feature logic through deterministic adapters below a small product-owned boundary. Direct speeds up development and review; it does not drive the browser or prove that replaced systems work.
+[Hraness Direct](<https://hraness.com/direct>) separates those two jobs. A browser tool controls the page. The product connects Direct's named, repeatable states to its existing interface and feature logic through deterministic adapters below a small product-owned boundary. Direct speeds up development and review; it does not drive the browser or prove that replaced systems work.
 
 ![The same interface cycles through named scenes, instant resets, and repeatable checks.](<https://hraness.pub/article-diagrams/direct-a-harness-for-your-frontend.light.webp>)
 
