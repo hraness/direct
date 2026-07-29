@@ -5,7 +5,7 @@ import { join } from "node:path";
 const packageName = "@hraness/direct";
 const importSpecifiers = ["@hraness/direct","@hraness/direct/core","@hraness/direct/react","@hraness/direct/testing","@hraness/direct/web"];
 const binNames = [];
-const verificationPackages = ["@eslint/js@^9.39.2","@expo/metro-runtime@~57.0.6","@types/bun@^1.3.14","@types/node@^24.10.0","@types/react@^19.2.14","@types/react-dom@^19.2.3","@vitejs/plugin-react@^6.0.3","eslint@^9.39.2","expo@~57.0.8","fast-check@^4.8.0","react@19.2.3","react-dom@19.2.3","react-native@0.86.0","react-native-web@~0.21.2","typescript@^6.0.3","typescript-eslint@^8.53.0","vite@^8.1.5"];
+const verificationPackages = ["@eslint/js@^9.39.2","@expo/metro-runtime@~57.0.6","@types/bun@^1.3.14","@types/node@^24.10.0","@types/react@^19.2.14","@types/react-dom@^19.2.3","@vitejs/plugin-react@^6.0.3","eslint@^9.39.2","expo@~57.0.9","fast-check@^4.8.0","react@19.2.3","react-dom@19.2.3","react-native@0.86.2","react-native-web@~0.21.2","typescript@^6.0.3","typescript-eslint@^8.53.0","vite@^8.1.5"];
 
 async function run(command: string[], cwd: string): Promise<void> {
   const process = Bun.spawn(command, { cwd, stdout: "inherit", stderr: "inherit" });
