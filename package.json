@@ -99,7 +99,7 @@
     "example:verify": "bun run examples/todos/verify.ts",
     "lint": "eslint src examples scripts",
     "test:package": "bun run ./scripts/package-smoke.ts",
-    "check": "bun run typecheck && bun run test && bun run build && bun run lint && bun run example:test && bun run example:typecheck && bun run example:verify && bun run example:react-native:test && bun run example:react-native:typecheck && bun run example:react-native:verify && bun run test:package",
+    "check": "bun run typecheck && bun run build && bun run test:package && bun run test && bun run lint && bun run example:test && bun run example:typecheck && bun run example:verify && bun run example:react-native:test && bun run example:react-native:typecheck && bun run example:react-native:verify",
     "prepack": "bun run check"
   },
   "peerDependencies": {
