@@ -22,6 +22,7 @@
     "src/**/*.tsx",
     "direct/**/*.ts",
     "direct/**/*.tsx",
-    "verify.ts"
+    "verify.ts",
+    "verify.test.ts"
   ]
 }
