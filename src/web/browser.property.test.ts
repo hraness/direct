@@ -104,6 +104,8 @@ describe("Direct browser installation properties", () => {
     ));
   });
 
+  // This exercises up to 4,000 replacement transactions. Keep Bun's harness
+  // from pre-empting fast-check's own bounded 10-second property deadline.
   test("any number of failed replacements preserves the current installation", () => {
     assertProperty(fc.property(
       fc.integer({ min: 1, max: 20 }),
@@ -130,5 +132,5 @@ describe("Direct browser installation properties", () => {
         expect(globalThis.fetch).toBe(hostFetch);
       },
     ));
-  });
+  }, 30_000);
 });

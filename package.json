@@ -4,7 +4,13 @@
   "description": "Repeatable app screens for coding agents.",
   "license": "MIT",
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "./src/core/index.ts",
+    "./src/index.ts",
+    "./src/react.ts",
+    "./src/testing/index.ts",
+    "./src/web.ts"
+  ],
   "packageManager": "bun@1.3.14",
   "repository": {
     "type": "git",
