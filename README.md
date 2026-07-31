@@ -13,7 +13,7 @@ bun add --dev github:hraness/direct#v0.6.1
 ```
 
 [overview](https://hraness.com/direct/docs/overview) ·
-[article](https://crclte.com/articles/direct-a-harness-for-your-frontend)
+[article](https://hraness.com/engineering/direct-a-harness-for-your-frontend)
 
 ```text
 real interface and feature state
@@ -188,7 +188,7 @@ hybrid bridge shape.
 This repository contains the deterministic kernel, browser bridge, production-exclusion pattern, agent skills, a small React example, and an Expo/React Native reference app. It does not contain a browser driver, browser-worker pool, screenshot deduplication, video recording, PySceneDetect integration, or storyboard generation. Use the browser tooling that fits your product and treat recorded media as evidence, not as the definition of correctness.
 
 <!-- article:direct-a-harness-for-your-frontend:start -->
-## [Direct gives browser agents deterministic app states](<https://crclte.com/articles/direct-a-harness-for-your-frontend>)
+## [Direct gives browser agents deterministic app states](<https://hraness.com/engineering/direct-a-harness-for-your-frontend>)
 
 > Browser tools control a page. Direct makes the state behind it quick to reach and repeatable without claiming to test the external systems it replaces.
 
@@ -196,7 +196,7 @@ A browser agent can open a page, click a control, and inspect the result. It can
 
 [Hraness Direct](<https://hraness.com/direct>) separates those two jobs. A browser tool controls the page. The product connects Direct's named, repeatable states to its existing interface and feature logic through deterministic adapters below a small product-owned boundary. Direct speeds up development and review; it does not drive the browser or prove that replaced systems work.
 
-![The same interface cycles through named scenes, instant resets, and repeatable checks.](<https://crclte.com/article-diagrams/direct-a-harness-for-your-frontend.light.webp>)
+![The same interface cycles through named scenes, instant resets, and repeatable checks.](<https://hraness.com/engineering/diagrams/direct-a-harness-for-your-frontend.light.webp>)
 
 *Hraness Direct keeps the interface while making scenes quick to reset and check.*
 
@@ -250,17 +250,17 @@ The interface speaks in product terms: todos and completion. It contains no Dire
 
 Direct gives the development composition one lifecycle instead of a collection of unrelated fixture helpers:
 
-- A definition validates the named worlds, routes, and evidence claims.
-- A session activates one world and owns its state, logical time, tracked work, reset generation, and cleanup.
-- A browser installation publishes the scenario catalog, active-state identity, coverage contract, probe, and reset action while blocking unmapped application requests by default.
+- A definition lists the named scenarios, their routes, and which systems each check claims to exercise, then validates that those declarations agree.
+- A session activates one scenario and owns its deterministic state, controllable clock, pending work, reset, and cleanup.
+- A small browser-facing manifest identifies the available and active scenarios, exposes readiness and reset controls, and blocks unmapped application requests by default.
 
 That default network policy matters. A deterministic page should not silently call a live service when a fixture misses a case. The product can allow exact URLs when needed, but unknown application calls fail visibly. Direct and its fixture worlds also stay outside the production dependency graph.
 
-The published manifest makes the page self-describing. An agent can discover valid scenario IDs and routes, confirm which activation the current probe belongs to, and check that it is the requested scenario and route without reading a product-specific source file. The browser tool still owns navigation and interaction; Direct does not turn scenarios into commands.
+The published manifest is a machine-readable description of the deterministic page. An agent can discover valid scenario IDs and routes, confirm that the active session matches the requested scenario and route, and inspect readiness without reading a product-specific source file. The browser tool still owns navigation and interaction; Direct does not turn scenarios into commands.
 
 ### Wait for the app, not a guess
 
-A fixed delay says, “wait 500 milliseconds and hope.” Direct exposes a quiescence snapshot: no tracked operation is active, and each product-named pending counter is zero. The product's browser verifier must poll that snapshot until its generation, revision, and counters remain stable for a bounded interval before checking the interface.
+A fixed delay says, “wait 500 milliseconds and hope.” Direct exposes a readiness snapshot: no tracked operation is active, and each product-named pending counter is zero. The product's browser verifier polls until the active scenario, its tracked-work revision, and the counters remain unchanged for a bounded interval before checking the interface.
 
 **Browser check using a named Direct scenario**
 
@@ -280,7 +280,7 @@ await expect(page.getByRole("checkbox", {
 })).toBeChecked();
 ```
 
-Here, `waitForQuiescence` is product-owned verifier code around Direct's snapshot, not a Direct browser driver. Quiescence proves only that the work Direct knows about has settled. It does not prove that the screen is correct. The verifier must still reject relevant console, runtime, and unhandled-request errors, then make product-specific assertions or visual checks.
+Here, `waitForQuiescence` is product-owned verifier code around Direct's snapshot, not a Direct browser driver. A settled snapshot proves only that the work Direct knows about has stopped changing. It does not prove that the screen is correct. The verifier must still reject relevant console, runtime, and unhandled-request errors, then make product-specific assertions or visual checks.
 
 ### Choose the smallest tool that covers the risk
 
@@ -289,13 +289,7 @@ Here, `waitForQuiescence` is product-owned verifier code around Direct's snapsho
 - Use unit or component tests when the subject is isolated logic or rendering that does not need the full application composition.
 - Keep live integration and end-to-end tests when the backend, native host, browser assembly, filesystem, operating system, or device is the subject.
 
-Direct records the same distinction in coverage claims. A fixture claim stops at deterministic ports. A mixed claim combines fixture evidence with a named live check. A direct claim requires the real system. The labels do not create evidence; they keep a fast development check from being reported as proof of a system it never touched.
-
-### Carry the workflow with the package
-
-The package includes two Agent Skills under `skills/`. `direct-setup` guides the product-port boundary, deterministic composition, and production-exclusion check. `direct-verify` guides scenario review, quiescence, cleanup, and evidence classification. The skills carry the technical detail an agent needs without forcing every human reader through an API manual.
-
-Package installation leaves the skills inactive because coding-agent runners use different discovery directories. Copy or link the desired skill into the runner's configured location, then invoke it by name. The package does not run a postinstall script or edit agent configuration.
+A coverage claim records which systems a check actually exercised. Direct uses three labels: a fixture claim stops at deterministic ports, a mixed claim combines fixture evidence with a named live check, and a direct claim requires the real system. The labels do not create evidence; they keep a fast development check from being reported as proof of a system it never touched.
 
 Use Direct when the state behind the interface is the bottleneck and a small product-owned port can replace that setup without copying the behavior under review. Use the browser tool alone when it can already reach the state cheaply. In either case, the browser driver supplies the actions and assertions. Direct never exercises the systems behind replaced ports; cover those boundaries separately with live integration or end-to-end tests when their risk requires it.
 <!-- article:direct-a-harness-for-your-frontend:end -->
