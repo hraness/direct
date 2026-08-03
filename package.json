@@ -1,7 +1,7 @@
 {
   "name": "@hraness/direct",
   "version": "0.6.1",
-  "description": "Repeatable app screens for coding agents.",
+  "description": "A general harness for repeatable app states.",
   "license": "MIT",
   "type": "module",
   "sideEffects": [
