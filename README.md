@@ -12,8 +12,7 @@ systems it replaces.
 bun add --dev github:hraness/direct#v0.6.1
 ```
 
-[overview](https://hraness.com/direct/docs/overview) ·
-[article](https://hraness.com/engineering/direct-a-harness-for-your-frontend)
+[overview](https://hraness.com/direct/docs/overview)
 
 ```text
 real interface and feature state
@@ -188,17 +187,13 @@ hybrid bridge shape.
 This repository contains the deterministic kernel, browser bridge, production-exclusion pattern, agent skills, a small React example, and an Expo/React Native reference app. It does not contain a browser driver, browser-worker pool, screenshot deduplication, video recording, PySceneDetect integration, or storyboard generation. Use the browser tooling that fits your product and treat recorded media as evidence, not as the definition of correctness.
 
 <!-- article:direct-a-harness-for-your-frontend:start -->
-## [Direct gives browser agents deterministic app states](<https://hraness.com/engineering/direct-a-harness-for-your-frontend>)
+## [Direct gives browser agents deterministic app states](<https://hraness.com/direct/docs/overview>)
 
 > Browser tools control a page. Direct makes the state behind it quick to reach and repeatable without claiming to test the external systems it replaces.
 
 A browser agent can open a page, click a control, and inspect the result. It cannot make the state behind that page quick to reach. A signed-in account, a particular database record, a device permission, a model response, or a failure at the right moment may still take longer to arrange than the interface takes to review.
 
 [Hraness Direct](<https://hraness.com/direct>) separates those two jobs. A browser tool controls the page. The product connects Direct's named, repeatable states to its existing interface and feature logic through deterministic adapters below a small product-owned boundary. Direct speeds up development and review; it does not drive the browser or prove that replaced systems work.
-
-![The same interface cycles through named scenes, instant resets, and repeatable checks.](<https://hraness.com/engineering/diagrams/direct-a-harness-for-your-frontend.light.webp>)
-
-*Hraness Direct keeps the interface while making scenes quick to reset and check.*
 
 ### Browser control and app state are different jobs
 
