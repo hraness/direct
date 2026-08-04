@@ -45,6 +45,16 @@ Define one bounded, strict, versioned JSON world. Parse it from `unknown`, rejec
 
 The shared store retains the immutable scenario seed and activity ledger. A product adapter may create mutable repositories, event streams, or projections from that seed. Do not turn the world store into a generic replay database for every product mutation.
 
+Activation, reset, and ordinary `transact` calls always pass through the strict
+world parser. A measured hot path may opt into `transactReplacements` for a
+bounded set of existing primitive leaves. Direct parses the exact replacement
+rows, rejects container changes and any increase in the world's aggregate raw
+UTF-8 string bytes, copies and freezes only touched ancestors, and presents both
+the base and candidate worlds to a semantic validator captured when the store is
+constructed. Publication requires that validator to approve the exact
+generation, operation, replacements, and candidate synchronously. This path is
+not a foreign-input parser bypass.
+
 ## Keep production exclusion structural
 
 Use distinct entries and compositions:

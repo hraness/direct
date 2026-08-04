@@ -1,6 +1,8 @@
 import {
+  DIRECT_STORE_MAX_REPLACEMENTS,
+  DIRECT_STORE_MAX_REPLACEMENT_PATH_DEPTH,
   createDirectStore
-} from "../index-6pv1bpkp.js";
+} from "../index-6mdfd2ey.js";
 import {
   DEFAULT_JSON_LIMITS,
   DEFAULT_LOGICAL_RUNTIME_SNAPSHOT,
@@ -49,7 +51,7 @@ import {
   stableHash,
   tagStableHash,
   utf8ByteLength
-} from "../index-s0h6zg88.js";
+} from "../index-1csg00w4.js";
 // src/core/effects.ts
 function ownQueuedEffect(entry) {
   const id = parseOperationId(entry.id);
@@ -150,6 +152,8 @@ export {
   FIXTURE_SCHEMA,
   FIXTURE_QUERY_KEY,
   EMPTY_COVERAGE_CATALOG_SNAPSHOT,
+  DIRECT_STORE_MAX_REPLACEMENT_PATH_DEPTH,
+  DIRECT_STORE_MAX_REPLACEMENTS,
   DIRECT_COVERAGE_SCHEMA,
   DEFAULT_MAX_QUERY_BYTES,
   DEFAULT_MAX_FIXTURE_BYTES,

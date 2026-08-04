@@ -77,7 +77,7 @@ export interface DirectSessionOptions<
     context: DirectSessionContext<World, Route>,
   ) => DirectSessionObservation;
   readonly sleep?: LogicalSleep;
-  readonly storeOptions?: DirectStoreOptions;
+  readonly storeOptions?: DirectStoreOptions<World>;
 }
 
 export type DirectSessionError =
@@ -271,7 +271,7 @@ export function createDirectSession<
   let observeHarness: DirectSessionOptions<World, Route, Harness>["observe"];
   let parseWorld: DirectDefinition<World, Route>["parseWorld"];
   let sleep: LogicalSleep | undefined;
-  let storeOptions: DirectStoreOptions | undefined;
+  let storeOptions: DirectStoreOptions<World> | undefined;
   try {
     definition = options.definition;
     parseWorld = definition.parseWorld;
@@ -291,8 +291,12 @@ export function createDirectSession<
       storeOptions = undefined;
     } else {
       const onListenerError = storeOptionsInput.onListenerError;
+      const validateReplacements = storeOptionsInput.validateReplacements;
       storeOptions = Object.freeze({
         ...(onListenerError === undefined ? {} : { onListenerError }),
+        ...(validateReplacements === undefined
+          ? {}
+          : { validateReplacements }),
       });
     }
   } catch (reason) {

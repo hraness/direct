@@ -47,3 +47,59 @@ test("property: reset fences every active lease without leaking activity into th
     expect(store.getSnapshot().world.count).toBe(resetCount);
   }));
 });
+
+test("property: primitive replacement sequences preserve immutable structural sharing", () => {
+  assertProperty(fc.property(
+    fc.array(fc.integer(), { minLength: 1, maxLength: 40 }),
+    (counts) => {
+      const created = createDirectStore(
+        { count: 0, messages: ["stable"] },
+        parseTestWorld,
+        { validateReplacements: () => undefined },
+      );
+      if (!created.ok) throw new Error(created.error.message);
+      const store = created.value;
+      for (const [index, count] of counts.entries()) {
+        const before = store.getSnapshot();
+        const result = store.transactReplacements(
+          before.generation,
+          operationId(`replace-${String(index + 1).padStart(6, "0")}`),
+          [{
+            expected: before.world.count,
+            path: ["count"],
+            value: count,
+          }],
+        );
+        expect(result).toMatchObject({ ok: true, value: { world: { count } } });
+        if (!result.ok) throw new Error(result.error.message);
+        expect(result.value.world.messages).toBe(before.world.messages);
+        expect(Object.isFrozen(result.value.world)).toBe(true);
+        expect(Object.isFrozen(result.value.world.messages)).toBe(true);
+      }
+    },
+  ));
+});
+
+test("property: incorrect expected leaves never publish or reach the domain validator", () => {
+  assertProperty(fc.property(
+    fc.integer(),
+    fc.integer().filter(value => value !== 0),
+    (value, wrongExpected) => {
+      let validationCalls = 0;
+      const created = createDirectStore(
+        { count: 0, messages: [] },
+        parseTestWorld,
+        { validateReplacements: () => { validationCalls += 1; } },
+      );
+      if (!created.ok) throw new Error(created.error.message);
+      const before = created.value.getSnapshot();
+      expect(created.value.transactReplacements(
+        before.generation,
+        operationId("wrong-expected-000001"),
+        [{ expected: wrongExpected, path: ["count"], value }],
+      )).toMatchObject({ ok: false, error: { code: "invalid-world" } });
+      expect(created.value.getSnapshot()).toBe(before);
+      expect(validationCalls).toBe(0);
+    },
+  ));
+});

@@ -44,6 +44,34 @@ interface JsonBudget {
   stringBytes: number;
 }
 
+interface JsonCloneOptions {
+  readonly freeze: boolean;
+  readonly normalizeNegativeZero: boolean;
+  readonly objectPrototype: "null" | "ordinary";
+  readonly sortObjectKeys: boolean;
+}
+
+const PARSED_JSON_OPTIONS = Object.freeze({
+  freeze: false,
+  normalizeNegativeZero: false,
+  objectPrototype: "null",
+  sortObjectKeys: false,
+}) satisfies JsonCloneOptions;
+
+const CLONED_JSON_OPTIONS = Object.freeze({
+  freeze: false,
+  normalizeNegativeZero: true,
+  objectPrototype: "ordinary",
+  sortObjectKeys: true,
+}) satisfies JsonCloneOptions;
+
+const FROZEN_CLONED_JSON_OPTIONS = Object.freeze({
+  freeze: true,
+  normalizeNegativeZero: true,
+  objectPrototype: "ordinary",
+  sortObjectKeys: true,
+}) satisfies JsonCloneOptions;
+
 function jsonError(code: JsonBoundaryErrorCode, path: string, message: string): JsonBoundaryError {
   return { code, path, message };
 }
@@ -228,6 +256,7 @@ function parseJsonAt(
   limits: JsonLimits,
   budget: JsonBudget,
   ancestors: ReadonlySet<object>,
+  options: JsonCloneOptions,
 ): Result<JsonValue, JsonBoundaryError> {
   budget.nodes += 1;
   if (budget.nodes > limits.maxNodes) {
@@ -248,7 +277,7 @@ function parseJsonAt(
   }
   if (typeof input === "number") {
     return Number.isFinite(input)
-      ? ok(input)
+      ? ok(options.normalizeNegativeZero && Object.is(input, -0) ? 0 : input)
       : err(jsonError("invalid-number", path, "JSON numbers must be finite"));
   }
   if (typeof input !== "object") {
@@ -298,13 +327,21 @@ function parseJsonAt(
       if (!descriptor.enumerable) {
         return err(jsonError("invalid-object", `${path}[${index}]`, "JSON array elements must be enumerable"));
       }
-      const item = parseJsonAt(descriptor.value, `${path}[${index}]`, depth + 1, limits, budget, nextAncestors);
+      const item = parseJsonAt(
+        descriptor.value,
+        `${path}[${index}]`,
+        depth + 1,
+        limits,
+        budget,
+        nextAncestors,
+        options,
+      );
       if (!item.ok) {
         return item;
       }
       output.push(item.value);
     }
-    return ok(output);
+    return ok(options.freeze ? Object.freeze(output) : output);
   }
 
   const prototype = Object.getPrototypeOf(input) as unknown;
@@ -312,7 +349,11 @@ function parseJsonAt(
     return err(jsonError("invalid-object", path, "JSON objects must have Object or null prototypes"));
   }
 
-  const output = Object.create(null) as JsonObject;
+  const output = (
+    options.objectPrototype === "ordinary" ? {} : Object.create(null)
+  ) as JsonObject;
+  const entries: Array<readonly [string, JsonValue]> | null =
+    options.sortObjectKeys ? [] : null;
   for (const key of Reflect.ownKeys(input)) {
     if (typeof key === "symbol") {
       return err(jsonError("symbol-key", path, "JSON objects cannot have symbol keys"));
@@ -328,18 +369,42 @@ function parseJsonAt(
     if (budget.stringBytes > limits.maxStringBytes) {
       return err(jsonError("string-limit-exceeded", `${path}.${key}`, `JSON strings exceed ${limits.maxStringBytes} UTF-8 bytes`));
     }
-    const child = parseJsonAt(descriptor.value, `${path}.${key}`, depth + 1, limits, budget, nextAncestors);
+    const child = parseJsonAt(
+      descriptor.value,
+      `${path}.${key}`,
+      depth + 1,
+      limits,
+      budget,
+      nextAncestors,
+      options,
+    );
     if (!child.ok) {
       return child;
     }
-    output[key] = child.value;
+    if (entries === null) {
+      output[key] = child.value;
+    } else {
+      entries.push([key, child.value]);
+    }
   }
-  return ok(output);
+  if (entries !== null) {
+    entries.sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+    for (const [key, value] of entries) {
+      Object.defineProperty(output, key, {
+        configurable: true,
+        enumerable: true,
+        value,
+        writable: true,
+      });
+    }
+  }
+  return ok(options.freeze ? Object.freeze(output) : output);
 }
 
-export function parseJsonValue(
+function validateAndCloneJson(
   input: unknown,
-  limits: JsonLimits = DEFAULT_JSON_LIMITS,
+  limits: JsonLimits,
+  options: JsonCloneOptions,
 ): Result<JsonValue, JsonBoundaryError> {
   if (
     !Number.isSafeInteger(limits.maxDepth)
@@ -352,7 +417,15 @@ export function parseJsonValue(
     throw new Error("JSON limits must be non-negative safe integers and allow at least one node");
   }
   try {
-    return parseJsonAt(input, "$", 0, limits, { nodes: 0, stringBytes: 0 }, new Set());
+    return parseJsonAt(
+      input,
+      "$",
+      0,
+      limits,
+      { nodes: 0, stringBytes: 0 },
+      new Set(),
+      options,
+    );
   } catch (reason) {
     return err(jsonError(
       "invalid-object",
@@ -360,6 +433,13 @@ export function parseJsonValue(
       renderUnknownReason(reason, "JSON object inspection failed"),
     ));
   }
+}
+
+export function parseJsonValue(
+  input: unknown,
+  limits: JsonLimits = DEFAULT_JSON_LIMITS,
+): Result<JsonValue, JsonBoundaryError> {
+  return validateAndCloneJson(input, limits, PARSED_JSON_OPTIONS);
 }
 
 function canonicalize(value: JsonValue): string {
@@ -387,11 +467,7 @@ export function cloneJson(
   input: unknown,
   limits: JsonLimits = DEFAULT_JSON_LIMITS,
 ): Result<JsonValue, JsonBoundaryError> {
-  const canonical = canonicalJson(input, limits);
-  if (!canonical.ok) {
-    return canonical;
-  }
-  return ok(JSON.parse(canonical.value) as JsonValue);
+  return validateAndCloneJson(input, limits, CLONED_JSON_OPTIONS);
 }
 
 export function freezeJson<Value extends JsonValue>(value: Value): Value {
@@ -502,11 +578,15 @@ export function parseAndCloneWorld<World extends JsonValue>(
   }
   try {
     const world = parseWorld(cloned.value);
-    const verified = cloneJson(world);
+    const verified = validateAndCloneJson(
+      world,
+      DEFAULT_JSON_LIMITS,
+      FROZEN_CLONED_JSON_OPTIONS,
+    );
     if (!verified.ok) {
       return verified;
     }
-    return ok(freezeJson(verified.value as World));
+    return ok(verified.value as World);
   } catch (reason) {
     return err({ code: "invalid-world", message: renderUnknownReason(reason) });
   }

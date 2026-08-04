@@ -79,6 +79,24 @@ var DEFAULT_JSON_LIMITS = Object.freeze({
   maxNodes: 1e5,
   maxStringBytes: 1048576
 });
+var PARSED_JSON_OPTIONS = Object.freeze({
+  freeze: false,
+  normalizeNegativeZero: false,
+  objectPrototype: "null",
+  sortObjectKeys: false
+});
+var CLONED_JSON_OPTIONS = Object.freeze({
+  freeze: false,
+  normalizeNegativeZero: true,
+  objectPrototype: "ordinary",
+  sortObjectKeys: true
+});
+var FROZEN_CLONED_JSON_OPTIONS = Object.freeze({
+  freeze: true,
+  normalizeNegativeZero: true,
+  objectPrototype: "ordinary",
+  sortObjectKeys: true
+});
 function jsonError(code, path, message) {
   return { code, path, message };
 }
@@ -218,7 +236,7 @@ function parseExactJsonSource(source) {
     return err(exactJsonSourceError("invalid-json", "$", renderUnknownReason(reason, "JSON source inspection failed")));
   }
 }
-function parseJsonAt(input, path, depth, limits, budget, ancestors) {
+function parseJsonAt(input, path, depth, limits, budget, ancestors, options) {
   budget.nodes += 1;
   if (budget.nodes > limits.maxNodes) {
     return err(jsonError("node-limit-exceeded", path, `JSON value exceeds ${limits.maxNodes} nodes`));
@@ -237,7 +255,7 @@ function parseJsonAt(input, path, depth, limits, budget, ancestors) {
     return ok(input);
   }
   if (typeof input === "number") {
-    return Number.isFinite(input) ? ok(input) : err(jsonError("invalid-number", path, "JSON numbers must be finite"));
+    return Number.isFinite(input) ? ok(options.normalizeNegativeZero && Object.is(input, -0) ? 0 : input) : err(jsonError("invalid-number", path, "JSON numbers must be finite"));
   }
   if (typeof input !== "object") {
     return err(jsonError("invalid-type", path, `${typeof input} is not a JSON value`));
@@ -279,19 +297,20 @@ function parseJsonAt(input, path, depth, limits, budget, ancestors) {
       if (!descriptor.enumerable) {
         return err(jsonError("invalid-object", `${path}[${index}]`, "JSON array elements must be enumerable"));
       }
-      const item = parseJsonAt(descriptor.value, `${path}[${index}]`, depth + 1, limits, budget, nextAncestors);
+      const item = parseJsonAt(descriptor.value, `${path}[${index}]`, depth + 1, limits, budget, nextAncestors, options);
       if (!item.ok) {
         return item;
       }
       output2.push(item.value);
     }
-    return ok(output2);
+    return ok(options.freeze ? Object.freeze(output2) : output2);
   }
   const prototype = Object.getPrototypeOf(input);
   if (prototype !== Object.prototype && prototype !== null) {
     return err(jsonError("invalid-object", path, "JSON objects must have Object or null prototypes"));
   }
-  const output = Object.create(null);
+  const output = options.objectPrototype === "ordinary" ? {} : Object.create(null);
+  const entries = options.sortObjectKeys ? [] : null;
   for (const key of Reflect.ownKeys(input)) {
     if (typeof key === "symbol") {
       return err(jsonError("symbol-key", path, "JSON objects cannot have symbol keys"));
@@ -307,23 +326,41 @@ function parseJsonAt(input, path, depth, limits, budget, ancestors) {
     if (budget.stringBytes > limits.maxStringBytes) {
       return err(jsonError("string-limit-exceeded", `${path}.${key}`, `JSON strings exceed ${limits.maxStringBytes} UTF-8 bytes`));
     }
-    const child = parseJsonAt(descriptor.value, `${path}.${key}`, depth + 1, limits, budget, nextAncestors);
+    const child = parseJsonAt(descriptor.value, `${path}.${key}`, depth + 1, limits, budget, nextAncestors, options);
     if (!child.ok) {
       return child;
     }
-    output[key] = child.value;
+    if (entries === null) {
+      output[key] = child.value;
+    } else {
+      entries.push([key, child.value]);
+    }
   }
-  return ok(output);
+  if (entries !== null) {
+    entries.sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+    for (const [key, value] of entries) {
+      Object.defineProperty(output, key, {
+        configurable: true,
+        enumerable: true,
+        value,
+        writable: true
+      });
+    }
+  }
+  return ok(options.freeze ? Object.freeze(output) : output);
 }
-function parseJsonValue(input, limits = DEFAULT_JSON_LIMITS) {
+function validateAndCloneJson(input, limits, options) {
   if (!Number.isSafeInteger(limits.maxDepth) || limits.maxDepth < 0 || !Number.isSafeInteger(limits.maxNodes) || limits.maxNodes < 1 || !Number.isSafeInteger(limits.maxStringBytes) || limits.maxStringBytes < 0) {
     throw new Error("JSON limits must be non-negative safe integers and allow at least one node");
   }
   try {
-    return parseJsonAt(input, "$", 0, limits, { nodes: 0, stringBytes: 0 }, new Set);
+    return parseJsonAt(input, "$", 0, limits, { nodes: 0, stringBytes: 0 }, new Set, options);
   } catch (reason) {
     return err(jsonError("invalid-object", "$", renderUnknownReason(reason, "JSON object inspection failed")));
   }
+}
+function parseJsonValue(input, limits = DEFAULT_JSON_LIMITS) {
+  return validateAndCloneJson(input, limits, PARSED_JSON_OPTIONS);
 }
 function canonicalize(value) {
   if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
@@ -340,11 +377,7 @@ function canonicalJson(input, limits = DEFAULT_JSON_LIMITS) {
   return parsed.ok ? ok(canonicalize(parsed.value)) : parsed;
 }
 function cloneJson(input, limits = DEFAULT_JSON_LIMITS) {
-  const canonical = canonicalJson(input, limits);
-  if (!canonical.ok) {
-    return canonical;
-  }
-  return ok(JSON.parse(canonical.value));
+  return validateAndCloneJson(input, limits, CLONED_JSON_OPTIONS);
 }
 function freezeJson(value) {
   if (value !== null && typeof value === "object") {
@@ -414,11 +447,11 @@ function parseAndCloneWorld(input, parseWorld) {
   }
   try {
     const world = parseWorld(cloned.value);
-    const verified = cloneJson(world);
+    const verified = validateAndCloneJson(world, DEFAULT_JSON_LIMITS, FROZEN_CLONED_JSON_OPTIONS);
     if (!verified.ok) {
       return verified;
     }
-    return ok(freezeJson(verified.value));
+    return ok(verified.value);
   } catch (reason) {
     return err({ code: "invalid-world", message: renderUnknownReason(reason) });
   }

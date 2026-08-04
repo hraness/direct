@@ -1,6 +1,6 @@
 import {
   createDirectStore
-} from "../index-6pv1bpkp.js";
+} from "../index-6mdfd2ey.js";
 import {
   DIRECT_CATALOG_HASH_ALGORITHM,
   DIRECT_PROBE_SCHEMA,
@@ -10,7 +10,7 @@ import {
   createDirectSessionManifest,
   parseDirectProbeSnapshot,
   parseDirectSessionManifest
-} from "../index-way196f7.js";
+} from "../index-7n1h75n6.js";
 import {
   canonicalJson,
   createCoverageCatalogSnapshot,
@@ -24,7 +24,7 @@ import {
   parseLogicalRuntimeSnapshot,
   parseTaggedStableHash,
   renderUnknownReason
-} from "../index-s0h6zg88.js";
+} from "../index-1csg00w4.js";
 
 // src/testing/activity.ts
 function storeErrorMessage(cause) {
@@ -322,8 +322,10 @@ function createDirectSession(options) {
       storeOptions = undefined;
     } else {
       const onListenerError = storeOptionsInput.onListenerError;
+      const validateReplacements = storeOptionsInput.validateReplacements;
       storeOptions = Object.freeze({
-        ...onListenerError === undefined ? {} : { onListenerError }
+        ...onListenerError === undefined ? {} : { onListenerError },
+        ...validateReplacements === undefined ? {} : { validateReplacements }
       });
     }
   } catch (reason) {

@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
 import { defineDirect } from "../core/definition.js";
+import { operationId } from "../core/ids.js";
 import { SCENARIO_QUERY_KEY } from "../core/query.js";
-import { parseTestWorld } from "../core/test-support.js";
+import type {
+  DirectStoreReplacementValidationContext,
+} from "../core/store.js";
+import { parseTestWorld, type TestWorld } from "../core/test-support.js";
 import {
   createDirectSession,
   type DirectSessionCleanup,
@@ -118,6 +122,45 @@ describe("Direct session", () => {
     if (!lease.ok) throw new Error(lease.error.message);
     expect(lease.value.release()).toEqual({ ok: true, value: true });
     expect(reports).toEqual({ captured: 2, mutated: 0 });
+    created.value.dispose();
+  });
+
+  test("passes captured primitive replacement validation through the session store", () => {
+    const contexts: DirectStoreReplacementValidationContext<TestWorld>[] = [];
+    let retargetedCalls = 0;
+    const storeOptions = {
+      validateReplacements: (
+        context: DirectStoreReplacementValidationContext<TestWorld>,
+      ): undefined => {
+        contexts.push(context);
+        return undefined;
+      },
+    };
+    const created = createDirectSession({
+      definition: definition(),
+      activation: { kind: "scenario", scenario: "chat.empty" },
+      storeOptions,
+      create: () => ({}),
+    });
+    if (!created.ok) throw new Error(created.error.message);
+    storeOptions.validateReplacements = () => {
+      retargetedCalls += 1;
+      return undefined;
+    };
+    const before = created.value.store.getSnapshot();
+
+    const committed = created.value.store.transactReplacements(
+      before.generation,
+      operationId("session-replacement-validation"),
+      [{ expected: 0, path: ["count"], value: 1 }],
+    );
+
+    expect(committed).toMatchObject({ ok: true, value: { world: { count: 1 } } });
+    if (!committed.ok) throw new Error(committed.error.message);
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0]?.baseWorld).toBe(before.world);
+    expect(contexts[0]?.candidateWorld).toBe(committed.value.world);
+    expect(retargetedCalls).toBe(0);
     created.value.dispose();
   });
 
