@@ -12,7 +12,7 @@ or test the systems it replaces.
 bun add --dev github:hraness/direct#v0.6.1
 ```
 
-[overview](https://hraness.com/direct/docs/overview)
+[overview](https://hraness.com/direct)
 
 ```text
 real interface and feature state
@@ -187,7 +187,7 @@ hybrid bridge shape.
 This repository contains the deterministic kernel, browser bridge, production-exclusion pattern, agent skills, a small React example, and an Expo/React Native reference app. It does not contain a browser driver, browser-worker pool, screenshot deduplication, video recording, PySceneDetect integration, or storyboard generation. Use the browser tooling that fits your product and treat recorded media as evidence, not as the definition of correctness.
 
 <!-- article:direct-a-harness-for-your-frontend:start -->
-## [Direct gives browser agents deterministic app states](<https://hraness.com/direct/docs/overview>)
+## [Direct gives browser agents deterministic app states](<https://hraness.com/direct>)
 
 > Browser tools control a page. Direct makes the state behind it quick to reach and repeatable without claiming to test the external systems it replaces.
 
