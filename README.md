@@ -9,7 +9,7 @@ state with predictable local stand-ins. it does not click through the browser
 or test the systems it replaces.
 
 ```sh
-bun add --dev github:hraness/direct#v0.6.1
+bun add --dev github:hraness/direct#v0.6.2
 ```
 
 [overview](https://hraness.com/direct)
@@ -31,7 +31,7 @@ Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
 Install hraness/direct and its bundled Agent Skills from
-https://github.com/hraness/direct at the immutable v0.6.1 tag. Follow the
+https://github.com/hraness/direct at the immutable v0.6.2 tag. Follow the
 repository README, add `@hraness/direct` to devDependencies only, copy or link
 `direct-setup` and `direct-verify` into this agent runner's configured
 skills directory, and verify that the production dependency graph excludes
@@ -47,7 +47,7 @@ Pin the public repository to an immutable version tag:
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "github:hraness/direct#v0.6.1"
+    "@hraness/direct": "github:hraness/direct#v0.6.2"
   }
 }
 ```
