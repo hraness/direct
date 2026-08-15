@@ -15,14 +15,96 @@ discovery location and invoke `$direct-verify` for the workflow below. The
 skill structures the audit; it does not turn deterministic evidence into
 proof of a substituted live system.
 
-## Discover the running contract
+## Isolate and select the browser backend
 
-Read the bridge schema, manifest, and probe in one synchronous evaluation
-through whichever browser driver already owns the page. For example,
-agent-browser can return the atomic sample with:
+The product verifier chooses a backend from the target and required browser
+capabilities. Kitesurf is an optional remote-CDP backend for an eligible,
+non-sensitive built or deployed public HTTPS preview. Local Chromium covers
+development servers, localhost, private or credential-bearing targets, and
+features that require Chromium compatibility.
+
+Before either backend, create a fresh task-owned config and socket directory,
+then define one sanitized wrapper. The config path is new, so these commands do
+not overwrite a user or project config:
 
 ```sh
-agent-browser --json eval "(() => { const bridge = window.__direct; return { bridgeSchema: bridge?.schema, manifest: bridge?.manifest, probe: typeof bridge?.snapshot === 'function' ? bridge.snapshot() : undefined }; })()"
+DIRECT_AGENT_BROWSER_BIN="$(command -v agent-browser)"
+test -x "$DIRECT_AGENT_BROWSER_BIN"
+DIRECT_BROWSER_CONFIG_DIRECTORY="$(mktemp -d)"
+DIRECT_BROWSER_SOCKET_DIRECTORY="$(mktemp -d)"
+DIRECT_BROWSER_CONFIG="$DIRECT_BROWSER_CONFIG_DIRECTORY/agent-browser.json"
+printf '%s\n' '{}' > "$DIRECT_BROWSER_CONFIG"
+test "$(tr -d '[:space:]' < "$DIRECT_BROWSER_CONFIG")" = '{}'
+direct_agent_browser() {
+  env -i \
+    PATH="$PATH" \
+    HOME="$HOME" \
+    TMPDIR="${TMPDIR:-/tmp}" \
+    AGENT_BROWSER_SOCKET_DIR="$DIRECT_BROWSER_SOCKET_DIRECTORY" \
+    "$DIRECT_AGENT_BROWSER_BIN" \
+    --config "$DIRECT_BROWSER_CONFIG" "$@"
+}
+direct_agent_browser --version
+```
+
+`env -i` removes every inherited `AGENT_BROWSER_*` setting and ambient proxy
+variable. The wrapper restores only the process paths agent-browser needs and
+the fresh socket directory. Use this same wrapper, config, socket directory,
+and explicit `--session` for every open, evaluation, wait, action, diagnostic,
+and close command in one run. Parallel runs need different session names and
+different isolation directories. Run the prelude again before changing
+backends.
+
+Direct neither provides nor pins agent-browser. Retain the exact version
+printed by the wrapper. This recipe was exercised with agent-browser 0.32.3,
+but every verification report records the version it actually used.
+
+For eligible Kitesurf runs, set the known emitted preview URL and attach before
+navigation:
+
+```sh
+PUBLIC_DIRECT_URL='https://preview.example/direct/?__direct_scenario=todos.populated'
+DIRECT_BROWSER_SESSION='direct-kitesurf'
+direct_agent_browser --session "$DIRECT_BROWSER_SESSION" \
+  --cdp 'wss://kitesurf.cloudflare.app/devtools/browser' \
+  --json open "$PUBLIC_DIRECT_URL"
+```
+
+The [public playground endpoint](https://kitesurf.cloudflare.app/) requires no
+API token. Do not add credentials, cookies, preview-bypass secrets, or private
+fixture data. It accepts public HTTPS navigation, with a current playground
+limit of 20 seconds of CPU time and 60 seconds of wall time per navigation.
+The service is beta, stateless, and implements a subset of CDP and browser
+behavior. Do not assume compatibility with development-only module graphs,
+exact Chromium rendering, video, WebGL, bot-challenge TLS behavior, or long
+authenticated sessions with persistent state.
+
+For local Chromium, run the isolation prelude again, then select a new session
+before navigation:
+
+```sh
+LOCAL_DIRECT_URL='http://127.0.0.1:5173/direct/?__direct_scenario=todos.populated'
+DIRECT_BROWSER_SESSION='direct-chromium'
+direct_agent_browser --session "$DIRECT_BROWSER_SESSION" --engine chrome \
+  --json open "$LOCAL_DIRECT_URL"
+```
+
+If Kitesurf proves incompatible, retain that failed or unsupported attempt,
+then restart the scenario from its initial state through a new isolated
+Chromium run. Never describe a retry under another backend as one continuous
+result. Close only after collecting the final evidence:
+
+```sh
+direct_agent_browser --session "$DIRECT_BROWSER_SESSION" --json close
+```
+
+## Discover the running contract
+
+Read the bridge schema, manifest, browser identity, and probe in one
+synchronous evaluation through the selected session:
+
+```sh
+direct_agent_browser --session "$DIRECT_BROWSER_SESSION" --json eval "(() => { const bridge = window.__direct; return { browserIdentity: { userAgent: navigator.userAgent, platform: navigator.platform }, bridgeSchema: bridge?.schema, manifest: bridge?.manifest, probe: typeof bridge?.snapshot === 'function' ? bridge.snapshot() : undefined }; })()"
 ```
 
 The command's JSON envelope carries the sample at `data.result`; the envelope
@@ -31,12 +113,16 @@ function:
 
 ```json
 {
-  "function": "() => { const bridge = window.__direct; return { bridgeSchema: bridge?.schema, manifest: bridge?.manifest, probe: typeof bridge?.snapshot === 'function' ? bridge.snapshot() : undefined }; }"
+  "function": "() => { const bridge = window.__direct; return { browserIdentity: { userAgent: navigator.userAgent, platform: navigator.platform }, bridgeSchema: bridge?.schema, manifest: bridge?.manifest, probe: typeof bridge?.snapshot === 'function' ? bridge.snapshot() : undefined }; }"
 }
 ```
 
 Both calls project the same page contract. No driver-specific Direct plugin is
-required.
+required. `browserIdentity` is run metadata, not part of the Direct bridge.
+Retain the exact agent-browser version, selected backend, CDP endpoint origin
+when one was used, and observed identity. Kitesurf currently reports a user
+agent beginning with `Kitesurf/` and platform `Cloudflare Workers`; do not pin
+the version suffix or treat a user-agent string as proof of backend custody.
 
 Require `bridgeSchema` to equal `direct.browser-bridge/v2`, then parse both
 `manifest` and `probe` from `unknown`. Select only a declared scenario. Add
@@ -120,11 +206,31 @@ Fail when no expected executable and source-map files were scanned, and positive
 ## Preserve bounded evidence
 
 Record the scenario identifier, catalog hash, activation hash, route, final
-probe, semantic assertions, violations, console and page errors, and artifact
-paths. The catalog hash is a deterministic drift fingerprint, not a security
-digest or a deployed-bundle identity. Keep generated evidence out of source
-control unless the repository explicitly treats a fixture or baseline as
-reviewed source.
+probe, exact browser-driver version, browser backend and identity, semantic
+assertions, violations, console and page errors, and artifact paths. The
+catalog hash is a deterministic drift fingerprint, not a security digest or a
+deployed-bundle identity. Keep generated evidence out of source control unless
+the repository explicitly treats a fixture or baseline as reviewed source.
+
+## Compare performance only when requested
+
+Collect performance evidence only when a backend comparison is explicitly in
+scope. Report end-to-end wall time and local host load as different results.
+Wall time covers backend connection, navigation, settlement, interactions,
+assertions, and teardown. Host load covers the local agent-browser client and
+all local browser descendants, with CPU time and peak resident memory reported
+separately. Provider-side CPU and memory are a third category and require
+provider metrics; do not infer them from the local client process.
+
+Use the same preview, scenario, actions, assertions, concurrency, and cold or
+warm policy for both backends. Lower local CPU or memory does not by itself
+mean lower wall time. [Cloudflare's August 2026 vendor
+benchmark](https://blog.cloudflare.com/kitesurf/) reported medians of five
+Browser Run Quick Action runs across 14 URLs. Against a warm Chromium pool,
+Kitesurf used 3.1 to 3.8 times less service-side CPU and 4.7 to 7.0 times less
+service-side memory, while each Quick Action took 1.7 to 1.8 times longer in
+wall time. Those figures provide context only; they are not Direct,
+agent-browser, host-load, or product-verification evidence.
 
 Direct does not include browser-worker reuse, screenshot deduplication, video capture, scene detection, or storyboard generation. A product may add those mechanisms without changing the manifest, probe, and coverage contracts.
 

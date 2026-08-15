@@ -132,6 +132,13 @@ Retain one catalog hash across the run. Direct does not need a driver-specific
 plugin: agent-browser, Playwright MCP, and other tools can read the same page
 contract.
 
+For a non-sensitive built or deployed public HTTPS preview, the
+[verification guide](./docs/verification.md#isolate-and-select-the-browser-backend)
+documents Kitesurf as an optional agent-browser CDP backend when its
+capabilities fit, with a separate local Chromium path for development servers,
+local, private, credential-bearing, or incompatible targets. Direct remains
+driver-neutral and adds neither browser as a dependency.
+
 See the [Todo example](https://github.com/hraness/direct/tree/main/examples/todos) for a strict parser, product-owned port, React workbench, and emitted-graph boundary verifier. The [React Native example](https://github.com/hraness/direct/tree/main/examples/react-native) uses the same session model in a platform-resolved Expo composition while keeping native production graphs Direct-free.
 
 ## Keep evidence honest

@@ -61,6 +61,23 @@ entry lives at that route or inside one wrapper URL.
 
 Display activation failures. Never fall back from malformed explicit activation to a nearby valid scenario.
 
+Keep browser-backend policy in the product verifier, outside Direct and the
+product composition. When the product already publishes an authorized,
+non-sensitive built or deployed public HTTPS Direct preview, the verifier may
+select Kitesurf as an optional remote-CDP backend when its required
+capabilities are compatible. Keep a local Chromium path for development
+servers, localhost, loopback, private-network, plain-HTTP,
+credential-bearing, or Kitesurf-incompatible targets. Select the backend
+before navigation and use distinct sessions; do not add a Kitesurf or Chromium
+runtime dependency to Direct to make that choice.
+
+Direct neither provides nor pins agent-browser. Require the verifier to record
+the exact version it supplies. Every agent-browser command in one run must use
+the same explicit session and task-owned isolation wrapper with a reviewed
+empty config, fresh socket directory, and sanitized environment. The wrapper
+must remove all inherited `AGENT_BROWSER_*` and proxy variables before
+restoring only required process paths and its fresh socket directory.
+
 ## Prove behavior and exclusion
 
 Add focused tests for:
@@ -81,3 +98,9 @@ Update the nearest `AGENTS.md`, package README, and command documentation. Run t
 ## Report the result
 
 Name the selected port, deterministic scenarios, proof modes, commands run, production surfaces scanned, and direct evidence that still remains. Do not describe fixture evidence as proof of a replaced external system.
+When browser verification is in scope, also name the backend-selection policy
+and require each evidence record to carry the exact browser-driver version,
+configured backend, and observed browser identity. Only when a backend
+performance comparison is explicitly requested, report wall time separately
+from local host CPU and peak resident memory; lower host load is not itself a
+faster result.

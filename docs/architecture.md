@@ -39,6 +39,33 @@ coverage snapshot. agent-browser, Playwright MCP, and other browser tools can
 read the same exact value through page evaluation. Direct does not own their
 browser sessions, selectors, navigation, screenshots, or action histories.
 
+The product verifier also owns browser-backend selection. Attaching through a
+remote CDP endpoint changes where the browser runs, not Direct's bridge or
+evidence semantics. A verifier may select Cloudflare Kitesurf as an optional
+remote-CDP backend for a non-sensitive built or deployed public HTTPS preview
+when its required capabilities are compatible. Development-server module
+graphs, localhost, loopback, private-network, plain-HTTP, and
+credential-bearing targets use local Chromium. Select one backend before
+opening the target and give each backend a distinct browser session. If a
+required CDP command or page feature is incompatible with Kitesurf, start a
+clean Chromium run and report the Kitesurf attempt separately. Do not silently
+continue one evidence run under another backend.
+
+Direct neither provides nor pins agent-browser. Evidence from either backend
+records the exact `agent-browser --version` output alongside the configured
+backend and observed browser identity. Every browser command runs through the
+same task-owned isolation wrapper: a reviewed empty config, a fresh socket
+directory, and a sanitized environment with inherited agent-browser state and
+proxy selection removed. This prevents a user or project default from loading
+state or silently changing backend custody.
+
+[Kitesurf is a beta browser](https://blog.cloudflare.com/kitesurf/) with a
+subset of CDP and web-platform behavior. It is intended for ephemeral agent
+tasks, not exact Chromium rendering, video, WebGL, bot-challenge TLS behavior,
+or long authenticated sessions with persistent state. These limits belong in
+the verifier's preflight and report. They do not justify a Kitesurf dependency
+or backend branch in Direct or the product composition.
+
 ## Treat the world as a seed
 
 Define one bounded, strict, versioned JSON world. Parse it from `unknown`, reject unknown fields, and return owned values. A scenario selects a world, route, and logical-runtime snapshot.
