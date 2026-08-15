@@ -49,7 +49,8 @@ and reset action, installs the fail-closed application-fetch firewall by
 default, tracks fetch work in the session activity scope, and registers
 cleanup with the session. Configure blocked-request and activity-error
 observers as named violations. Pass `firewall: false` only when another
-checked boundary owns network containment.
+checked boundary owns the same application-`fetch` policy. The verifier still
+needs pre-navigation egress containment.
 
 Do not create a product-specific scenario-discovery global. The manifest
 already publishes the query keys, default scenario, ordered scenario metadata,
@@ -61,22 +62,44 @@ entry lives at that route or inside one wrapper URL.
 
 Display activation failures. Never fall back from malformed explicit activation to a nearby valid scenario.
 
-Keep browser-backend policy in the product verifier, outside Direct and the
-product composition. When the product already publishes an authorized,
-non-sensitive built or deployed public HTTPS Direct preview, the verifier may
-select Kitesurf as an optional remote-CDP backend when its required
-capabilities are compatible. Keep a local Chromium path for development
-servers, localhost, loopback, private-network, plain-HTTP,
-credential-bearing, or Kitesurf-incompatible targets. Select the backend
-before navigation and use distinct sessions; do not add a Kitesurf or Chromium
-runtime dependency to Direct to make that choice.
+Keep browser process and session policy in the product verifier, outside
+Direct and the product composition. Direct remains driver-neutral and provides
+no browser launcher, driver, coordinator, or cleanup supervisor.
 
-Direct neither provides nor pins agent-browser. Require the verifier to record
-the exact version it supplies. Every agent-browser command in one run must use
-the same explicit session and task-owned isolation wrapper with a reviewed
-empty config, fresh socket directory, and sanitized environment. The wrapper
-must remove all inherited `AGENT_BROWSER_*` and proxy variables before
-restoring only required process paths and its fresh socket directory.
+Use one task-owned local Chromium session and process for a sequential batch of
+at most eight scenarios. Call `window new` before every scenario to create a
+fresh BrowserContext. Inventory its tabs and attempt to close scenario-owned
+tabs, retaining each command result and the post-attempt inventory.
+agent-browser 0.32.3 can ignore `Target.closeTarget` errors, so do not claim
+proven per-tab closure. Keep the inert no-URL bootstrap tab until the final
+whole-browser close, which is the stronger disposal boundary. Do not reuse a
+context, substitute `tab new`, or launch one process per scenario. Capture
+semantic and visual evidence in the same exact Chromium context.
+
+Pass an exact `--allowed-domains` list for the target and required asset hosts
+before the first navigation. Start Chromium with `open` and no URL so
+agent-browser installs the allowlist while creating its inert internal
+`about:blank` tab. Do not pass `about:blank` as an explicit URL; 0.32.3 rejects
+that hostname-free navigation under the allowlist. Keep the Direct
+application-`fetch` firewall as instrumentation; it does not contain
+navigation, subresources, WebSockets, workers, service workers, beacons,
+WebRTC, native traffic, or another realm.
+Forbid ordinary browser-wide `--cdp` attachment because named sessions do not
+isolate contexts and agent-browser 0.32.3 cannot combine that attachment with
+`--allowed-domains`.
+
+Run locally serial unless a real external coordinator enforces shared
+admission. Direct does not integrate or enforce a process cap. Use one explicit
+session, empty task-owned config, fresh socket directory, sanitized
+environment, exact allowlist, and bounded idle timeout for every batch command.
+Record the exact agent-browser version.
+
+Require a successful final browser close. A close failure invalidates the
+batch; preserve task metadata and do not claim disposal or performance.
+The idle timeout is only an orphan backstop. Parallel-admission or crash-safe
+cleanup claims require a real external supervisor that owns both the
+agent-browser daemon and Chromium roots, or one containing job. The roots can
+occupy different process groups, so daemon exit alone is not cleanup proof.
 
 ## Prove behavior and exclusion
 
@@ -98,9 +121,12 @@ Update the nearest `AGENTS.md`, package README, and command documentation. Run t
 ## Report the result
 
 Name the selected port, deterministic scenarios, proof modes, commands run, production surfaces scanned, and direct evidence that still remains. Do not describe fixture evidence as proof of a replaced external system.
-When browser verification is in scope, also name the backend-selection policy
-and require each evidence record to carry the exact browser-driver version,
-configured backend, and observed browser identity. Only when a backend
-performance comparison is explicitly requested, report wall time separately
-from local host CPU and peak resident memory; lower host load is not itself a
-faster result.
+When browser verification is in scope, also name the process and session
+policy. Require each evidence record to carry the exact browser-driver version,
+configured backend, allowed hosts, observed browser identity, batch index and
+size, verifier-assigned scenario/context label, fresh `window new` command and
+result, tab inventories and close-attempt results, execution mode, and final
+close result. Only when a performance comparison is explicitly requested, report wall time
+separately from local host CPU and peak resident memory; lower host load is not
+itself a faster result. Direct provides no browser-run or performance evidence;
+require external product evidence for either claim.

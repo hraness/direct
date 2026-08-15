@@ -15,101 +15,102 @@ discovery location and invoke `$direct-verify` for the workflow below. The
 skill structures the audit; it does not turn deterministic evidence into
 proof of a substituted live system.
 
-## Isolate and select the browser backend
+## Run one bounded local Chromium batch
 
-The product verifier chooses a backend from the target and required browser
-capabilities. Kitesurf is an optional remote-CDP backend for an eligible,
-non-sensitive built or deployed public HTTPS preview. Local Chromium covers
-development servers, localhost, private or credential-bearing targets, and
-features that require Chromium compatibility.
+Direct is driver-neutral. It provides deterministic state and a browser bridge,
+not a browser launcher, driver, process coordinator, or cleanup supervisor. The
+product verifier owns browser commands and process policy.
 
-Before either backend, create a fresh task-owned config and socket directory,
-then define one sanitized wrapper. The config path is new, so these commands do
-not overwrite a user or project config:
+The canonical local policy uses one task-owned agent-browser session and one
+Chromium process for a sequential batch of at most eight scenarios. Before each
+scenario, call `window new` to create a fresh BrowserContext. Inventory its
+tabs and attempt to close scenario-owned tabs, including popups. agent-browser
+0.32.3 can ignore `Target.closeTarget` errors, so retain each command result
+and a post-attempt inventory instead of claiming proven per-tab closure. Keep
+the inert no-URL bootstrap tab until the final whole-browser close, which is
+the stronger disposal boundary. Do not reuse a context, substitute `tab new`,
+or launch one browser process per scenario. Semantic and visual evidence come
+from the same exact Chromium context.
+
+Declare the product target and every required asset host in
+`--allowed-domains` before the first navigation. Direct's application-`fetch`
+firewall remains deterministic instrumentation; it does not contain
+navigations, subresources, WebSockets, workers, service workers, beacons,
+WebRTC, native traffic, or another realm. Ordinary browser-wide `--cdp`
+attachment is forbidden: multiple agent-browser session names do not create
+isolated contexts, and agent-browser 0.32.3 rejects `--allowed-domains` with
+`--cdp`.
+
+Run batches serially unless a real external coordinator enforces a shared
+host-wide limit. Direct does not enforce a process cap. A claim of parallel
+admission or crash-safe cleanup also requires an external supervisor that owns
+both the agent-browser daemon and Chromium roots, or one containing job.
+agent-browser 0.32.3 may place those roots in different process groups, so
+daemon exit alone is not cleanup proof.
+
+### Isolate and run the session
+
+This command path uses an empty task-owned config, a fresh socket directory, a
+sanitized environment, an exact allowlist, and a one-minute idle timeout. A
+no-URL `open` launches Chromium on its inert internal `about:blank` tab while
+installing the allowlist. Do not pass `about:blank` as an explicit URL;
+agent-browser 0.32.3 rejects that hostname-free navigation under the allowlist.
 
 ```sh
+set -eu
 DIRECT_AGENT_BROWSER_BIN="$(command -v agent-browser)"
 test -x "$DIRECT_AGENT_BROWSER_BIN"
-DIRECT_BROWSER_CONFIG_DIRECTORY="$(mktemp -d)"
-DIRECT_BROWSER_SOCKET_DIRECTORY="$(mktemp -d)"
+DIRECT_BROWSER_SESSION='direct-chromium'
+DIRECT_BROWSER_BACKEND='local-chromium'
+DIRECT_BROWSER_ALLOWED_DOMAINS='127.0.0.1'
+DIRECT_BROWSER_SCENARIO_URL='http://127.0.0.1:5173/direct/?__direct_scenario=todos.populated'
+DIRECT_BROWSER_IDLE_TIMEOUT_MS=60000
+DIRECT_BROWSER_CONFIG_DIRECTORY="$(mktemp -d "${TMPDIR:-/tmp}/direct-browser-config.XXXXXX")"
+DIRECT_BROWSER_SOCKET_DIRECTORY="$(mktemp -d "${TMPDIR:-/tmp}/direct-browser-socket.XXXXXX")"
 DIRECT_BROWSER_CONFIG="$DIRECT_BROWSER_CONFIG_DIRECTORY/agent-browser.json"
 printf '%s\n' '{}' > "$DIRECT_BROWSER_CONFIG"
 test "$(tr -d '[:space:]' < "$DIRECT_BROWSER_CONFIG")" = '{}'
+
 direct_agent_browser() {
   env -i \
     PATH="$PATH" \
     HOME="$HOME" \
     TMPDIR="${TMPDIR:-/tmp}" \
     AGENT_BROWSER_SOCKET_DIR="$DIRECT_BROWSER_SOCKET_DIRECTORY" \
+    AGENT_BROWSER_IDLE_TIMEOUT_MS="$DIRECT_BROWSER_IDLE_TIMEOUT_MS" \
     "$DIRECT_AGENT_BROWSER_BIN" \
-    --config "$DIRECT_BROWSER_CONFIG" "$@"
+    --config "$DIRECT_BROWSER_CONFIG" \
+    --allowed-domains "$DIRECT_BROWSER_ALLOWED_DOMAINS" "$@"
 }
+
 direct_agent_browser --version
-```
-
-`env -i` removes every inherited `AGENT_BROWSER_*` setting and ambient proxy
-variable. The wrapper restores only the process paths agent-browser needs and
-the fresh socket directory. Use this same wrapper, config, socket directory,
-and explicit `--session` for every open, evaluation, wait, action, diagnostic,
-and close command in one run. Parallel runs need different session names and
-different isolation directories. Run the prelude again before changing
-backends.
-
-Direct neither provides nor pins agent-browser. Retain the exact version
-printed by the wrapper. This recipe was exercised with agent-browser 0.32.3,
-but every verification report records the version it actually used.
-
-For eligible Kitesurf runs, set the known emitted preview URL and attach before
-navigation:
-
-```sh
-PUBLIC_DIRECT_URL='https://preview.example/direct/?__direct_scenario=todos.populated'
-DIRECT_BROWSER_SESSION='direct-kitesurf'
-direct_agent_browser --session "$DIRECT_BROWSER_SESSION" \
-  --cdp 'wss://kitesurf.cloudflare.app/devtools/browser' \
-  --json open "$PUBLIC_DIRECT_URL"
-```
-
-The [public playground endpoint](https://kitesurf.cloudflare.app/) requires no
-API token. Do not add credentials, cookies, preview-bypass secrets, or private
-fixture data. It accepts public HTTPS navigation, with a current playground
-limit of 20 seconds of CPU time and 60 seconds of wall time per navigation.
-The service is beta, stateless, and implements a subset of CDP and browser
-behavior. Do not assume compatibility with development-only module graphs,
-exact Chromium rendering, video, WebGL, bot-challenge TLS behavior, or long
-authenticated sessions with persistent state.
-
-For local Chromium, run the isolation prelude again, then select a new session
-before navigation:
-
-```sh
-LOCAL_DIRECT_URL='http://127.0.0.1:5173/direct/?__direct_scenario=todos.populated'
-DIRECT_BROWSER_SESSION='direct-chromium'
 direct_agent_browser --session "$DIRECT_BROWSER_SESSION" --engine chrome \
-  --json open "$LOCAL_DIRECT_URL"
-```
-
-If Kitesurf proves incompatible, retain that failed or unsupported attempt,
-then restart the scenario from its initial state through a new isolated
-Chromium run. Never describe a retry under another backend as one continuous
-result. Close only after collecting the final evidence:
-
-```sh
-direct_agent_browser --session "$DIRECT_BROWSER_SESSION" --json close
-```
-
-## Discover the running contract
-
-Read the bridge schema, manifest, browser identity, and probe in one
-synchronous evaluation through the selected session:
-
-```sh
+  --json open
+direct_agent_browser --session "$DIRECT_BROWSER_SESSION" --json tab
+direct_agent_browser --session "$DIRECT_BROWSER_SESSION" --json window new
+direct_agent_browser --session "$DIRECT_BROWSER_SESSION" \
+  --json open "$DIRECT_BROWSER_SCENARIO_URL"
+direct_agent_browser --session "$DIRECT_BROWSER_SESSION" --json tab
 direct_agent_browser --session "$DIRECT_BROWSER_SESSION" --json eval "(() => { const bridge = window.__direct; return { browserIdentity: { userAgent: navigator.userAgent, platform: navigator.platform }, bridgeSchema: bridge?.schema, manifest: bridge?.manifest, probe: typeof bridge?.snapshot === 'function' ? bridge.snapshot() : undefined }; })()"
 ```
 
-The command's JSON envelope carries the sample at `data.result`; the envelope
-itself is not the manifest. With Playwright MCP, call `browser_evaluate` with a
-function:
+Use the same wrapper and session for every command in the batch. Repeat
+`window new`, navigation, evidence, and tab-close attempts for each scenario;
+reject a ninth scenario before launch. Assign each scenario context a verifier
+label and retain the fresh `window new` command and result. Parse the JSON tab
+inventories, run `tab close <id>` for scenario-owned tabs, and retain the
+command results plus a post-attempt inventory. Keep the inert no-URL bootstrap
+tab until whole-browser teardown because agent-browser 0.32.3 cannot close the
+last tab. Do not invoke final `close` until all scenario verification
+finishes. A fresh context is required because permissions, IndexedDB, Cache
+Storage, and service workers cannot be reset reliably in place.
+
+## Discover the running contract
+
+The synchronous `eval` command above reads the bridge schema, manifest,
+browser identity, and probe. Its JSON envelope carries the sample at
+`data.result`; the envelope itself is not the manifest. With Playwright MCP,
+call `browser_evaluate` with the same page function:
 
 ```json
 {
@@ -119,10 +120,14 @@ function:
 
 Both calls project the same page contract. No driver-specific Direct plugin is
 required. `browserIdentity` is run metadata, not part of the Direct bridge.
-Retain the exact agent-browser version, selected backend, CDP endpoint origin
-when one was used, and observed identity. Kitesurf currently reports a user
-agent beginning with `Kitesurf/` and platform `Cloudflare Workers`; do not pin
-the version suffix or treat a user-agent string as proof of backend custody.
+An alternative driver must independently provide the same pre-navigation
+containment, fresh-context isolation, execution mode, and final-close policy;
+reading the bridge alone does not establish those properties. Retain the exact
+agent-browser version, configured backend, allowed hosts, observed browser
+identity, verifier-assigned scenario/context label, fresh `window new` command
+and result, tab inventories and close-attempt results, batch index and size,
+execution mode, and final close result. A user-agent string is descriptive
+metadata, not proof of browser or context custody.
 
 Require `bridgeSchema` to equal `direct.browser-bridge/v2`, then parse both
 `manifest` and `probe` from `unknown`. Select only a declared scenario. Add
@@ -179,7 +184,28 @@ A quiet probe does not prove the interface is correct. After the join:
 4. Assert the resulting product state and relevant accessibility or layout conditions.
 5. Capture bounded diagnostics or visual evidence when the claim needs them.
 
-The package does not choose a browser driver or visual-comparison policy. Keep those decisions in the product verifier.
+The package does not choose a browser driver or visual-comparison policy. Keep
+those decisions in the product verifier. Under the canonical workflow, capture
+visual evidence from the same exact local Chromium context that produced the
+manifest, probe, actions, and semantic assertions.
+
+## Tear down the browser batch
+
+After the final scenario evidence, retain one last tab inventory and every
+tab-close attempt result. agent-browser 0.32.3 can ignore
+`Target.closeTarget` errors, so a successful tab-close command does not prove
+that its target disappeared. Keep the inert no-URL bootstrap tab open and use
+the whole-browser close as the stronger batch disposal boundary:
+
+```sh
+direct_agent_browser --session "$DIRECT_BROWSER_SESSION" --json close
+```
+
+Treat a nonzero final `close` as a failed batch. Preserve task metadata and do
+not claim context disposal or performance evidence. Remove only the temporary
+directories created by the task, and only after close succeeds. The idle
+timeout is an orphan backstop, not crash-safe cleanup proof. Direct contains no
+browser-run or performance evidence for this policy.
 
 ## Report coverage without promotion
 
@@ -206,33 +232,39 @@ Fail when no expected executable and source-map files were scanned, and positive
 ## Preserve bounded evidence
 
 Record the scenario identifier, catalog hash, activation hash, route, final
-probe, exact browser-driver version, browser backend and identity, semantic
-assertions, violations, console and page errors, and artifact paths. The
-catalog hash is a deterministic drift fingerprint, not a security digest or a
-deployed-bundle identity. Keep generated evidence out of source control unless
-the repository explicitly treats a fixture or baseline as reviewed source.
+probe, exact browser-driver version, browser backend and identity, allowed
+hosts, batch index and size, verifier-assigned scenario/context labels, fresh
+`window new` commands and results, tab inventories and close-attempt results,
+execution mode, final close result, semantic assertions, violations, console
+and page errors, and artifact paths.
+
+The catalog hash is a deterministic drift fingerprint, not a security digest
+or a deployed-bundle identity. Keep generated evidence out of source control
+unless the repository explicitly treats a fixture or baseline as reviewed
+source.
 
 ## Compare performance only when requested
 
-Collect performance evidence only when a backend comparison is explicitly in
-scope. Report end-to-end wall time and local host load as different results.
-Wall time covers backend connection, navigation, settlement, interactions,
-assertions, and teardown. Host load covers the local agent-browser client and
-all local browser descendants, with CPU time and peak resident memory reported
-separately. Provider-side CPU and memory are a third category and require
-provider metrics; do not infer them from the local client process.
+Direct contains no browser-run or performance evidence for this policy.
+Collect such evidence externally in the product verifier only when a process
+or context-policy comparison is explicitly in scope. Report end-to-end wall
+time and local host load as different results. Wall time covers any admission
+wait, process launch, context creation, navigation, settlement, interactions,
+assertions, tab-close attempts, and final close. Host load covers the
+local agent-browser client and all local Chromium descendants, with CPU time
+and peak resident memory reported separately.
 
-Use the same preview, scenario, actions, assertions, concurrency, and cold or
-warm policy for both backends. Lower local CPU or memory does not by itself
-mean lower wall time. [Cloudflare's August 2026 vendor
-benchmark](https://blog.cloudflare.com/kitesurf/) reported medians of five
-Browser Run Quick Action runs across 14 URLs. Against a warm Chromium pool,
-Kitesurf used 3.1 to 3.8 times less service-side CPU and 4.7 to 7.0 times less
-service-side memory, while each Quick Action took 1.7 to 1.8 times longer in
-wall time. Those figures provide context only; they are not Direct,
-agent-browser, host-load, or product-verification evidence.
+Use the same preview, scenarios, actions, assertions, batch bound, admitted
+concurrency, context policy, containment, and cold or warm policy for every
+comparison. Report browser launches and contexts created. Lower CPU or memory
+does not by itself mean lower wall time, and state leakage or incomplete
+cleanup is not a valid performance improvement.
 
-Direct does not include browser-worker reuse, screenshot deduplication, video capture, scene detection, or storyboard generation. A product may add those mechanisms without changing the manifest, probe, and coverage contracts.
+Direct does not include a browser coordinator, browser broker, browser-worker
+pool, screenshot deduplication, video capture, scene detection, storyboard
+generation, or benchmark result. A product may add those mechanisms without
+changing the manifest, probe, and coverage contracts, but must supply its own
+external correctness and performance evidence.
 
 ## Verify React Native exclusion
 

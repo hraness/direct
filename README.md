@@ -132,12 +132,28 @@ Retain one catalog hash across the run. Direct does not need a driver-specific
 plugin: agent-browser, Playwright MCP, and other tools can read the same page
 contract.
 
-For a non-sensitive built or deployed public HTTPS preview, the
-[verification guide](./docs/verification.md#isolate-and-select-the-browser-backend)
-documents Kitesurf as an optional agent-browser CDP backend when its
-capabilities fit, with a separate local Chromium path for development servers,
-local, private, credential-bearing, or incompatible targets. Direct remains
-driver-neutral and adds neither browser as a dependency.
+Direct remains driver-neutral and provides no browser launcher. The canonical
+[verification workflow](./docs/verification.md#run-one-bounded-local-chromium-batch)
+uses one task-owned local Chromium session and process for a sequential batch
+of at most eight scenarios. It opens a fresh BrowserContext with `window new`
+before every scenario and attempts to close scenario-owned tabs while
+retaining the command results and tab inventories. It keeps the inert
+no-URL bootstrap tab until the final whole-browser close, which is the
+stronger disposal boundary. Semantic and visual evidence come from the same
+exact Chromium context.
+
+The product verifier declares exact `--allowed-domains` before navigation and
+uses a bounded idle timeout. Direct's application-`fetch` firewall remains
+instrumentation, not full egress containment. Runs stay serial unless a real
+external coordinator enforces shared admission; Direct does not integrate or
+enforce a process cap. Ordinary browser-wide `--cdp` attachment is forbidden
+because named agent-browser sessions do not isolate contexts.
+
+A nonzero final close fails the batch. Parallel-admission or crash-safe cleanup
+claims require an external supervisor that owns both the agent-browser daemon
+and Chromium roots, or one containing job; the roots can occupy different
+process groups. Direct supplies neither that supervisor nor browser or
+performance evidence.
 
 See the [Todo example](https://github.com/hraness/direct/tree/main/examples/todos) for a strict parser, product-owned port, React workbench, and emitted-graph boundary verifier. The [React Native example](https://github.com/hraness/direct/tree/main/examples/react-native) uses the same session model in a platform-resolved Expo composition while keeping native production graphs Direct-free.
 
@@ -191,7 +207,7 @@ hybrid bridge shape.
 
 ## Repository scope
 
-This repository contains the deterministic kernel, browser bridge, production-exclusion pattern, agent skills, a small React example, and an Expo/React Native reference app. It does not contain a browser driver, browser-worker pool, screenshot deduplication, video recording, PySceneDetect integration, or storyboard generation. Use the browser tooling that fits your product and treat recorded media as evidence, not as the definition of correctness.
+This repository contains the deterministic kernel, browser bridge, production-exclusion pattern, agent skills, a small React example, and an Expo/React Native reference app. It does not contain a browser launcher or driver, process coordinator, cleanup supervisor, browser-worker pool, or browser benchmark. Use the browser tooling that fits your product and require external evidence for browser or performance claims.
 
 <!-- article:direct-a-harness-for-your-frontend:start -->
 ## [Direct gives browser agents deterministic app states](<https://hraness.com/direct>)

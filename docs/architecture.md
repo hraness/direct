@@ -39,32 +39,47 @@ coverage snapshot. agent-browser, Playwright MCP, and other browser tools can
 read the same exact value through page evaluation. Direct does not own their
 browser sessions, selectors, navigation, screenshots, or action histories.
 
-The product verifier also owns browser-backend selection. Attaching through a
-remote CDP endpoint changes where the browser runs, not Direct's bridge or
-evidence semantics. A verifier may select Cloudflare Kitesurf as an optional
-remote-CDP backend for a non-sensitive built or deployed public HTTPS preview
-when its required capabilities are compatible. Development-server module
-graphs, localhost, loopback, private-network, plain-HTTP, and
-credential-bearing targets use local Chromium. Select one backend before
-opening the target and give each backend a distinct browser session. If a
-required CDP command or page feature is incompatible with Kitesurf, start a
-clean Chromium run and report the Kitesurf attempt separately. Do not silently
-continue one evidence run under another backend.
+Direct remains driver-neutral and has no browser launcher. The product
+verifier owns the driver, process lifetime, context policy, navigation, and
+evidence capture.
 
-Direct neither provides nor pins agent-browser. Evidence from either backend
-records the exact `agent-browser --version` output alongside the configured
-backend and observed browser identity. Every browser command runs through the
-same task-owned isolation wrapper: a reviewed empty config, a fresh socket
-directory, and a sanitized environment with inherited agent-browser state and
-proxy selection removed. This prevents a user or project default from loading
-state or silently changing backend custody.
+The canonical local policy uses one task-owned agent-browser session and one
+Chromium process for a sequential batch of at most eight scenarios. The
+verifier calls `window new` before every scenario for a fresh BrowserContext,
+inventories the tabs that context creates, and attempts to close its
+scenario-owned tabs. agent-browser 0.32.3 can ignore `Target.closeTarget`
+errors, so the verifier retains each command result and a post-attempt
+inventory instead of claiming proven tab closure. It keeps the inert no-URL
+bootstrap tab until the final whole-browser close, which is the stronger
+disposal boundary. It never reuses a context or substitutes `tab new`.
+Semantic and visual evidence describe the same exact Chromium context.
 
-[Kitesurf is a beta browser](https://blog.cloudflare.com/kitesurf/) with a
-subset of CDP and web-platform behavior. It is intended for ephemeral agent
-tasks, not exact Chromium rendering, video, WebGL, bot-challenge TLS behavior,
-or long authenticated sessions with persistent state. These limits belong in
-the verifier's preflight and report. They do not justify a Kitesurf dependency
-or backend branch in Direct or the product composition.
+The verifier passes an exact `--allowed-domains` list for the target and every
+required asset host before navigation. Direct's application-`fetch` firewall
+still reports unmapped fetches in its JavaScript realm, but it is
+instrumentation rather than full containment for navigation, subresources,
+WebSockets, workers, service workers, beacons, WebRTC, native traffic, or
+another realm.
+
+Local batches run serially unless an external shared coordinator enforces
+admission. Direct does not integrate or enforce a process cap. Ordinary
+browser-wide `--cdp` attachment is forbidden because named agent-browser
+sessions do not isolate contexts; agent-browser 0.32.3 also rejects
+`--allowed-domains` with `--cdp`.
+
+Every batch uses an explicit session, empty task-owned config, fresh socket
+directory, sanitized environment, exact allowlist, and bounded idle timeout.
+A nonzero final browser close invalidates the batch. The idle timeout is an
+orphan backstop, not crash-safe cleanup proof. Parallel-admission or crash-safe
+cleanup claims require an external supervisor that owns both the agent-browser
+daemon and Chromium roots, or one containing job. Those roots can occupy
+different process groups, so daemon exit alone cannot prove cleanup.
+
+Direct provides no coordinator, supervisor, browser-run evidence, or
+performance evidence. Reports record the driver version, allowed hosts,
+execution mode, verifier-assigned scenario/context label, fresh `window new`
+command and result, tab inventories and close-attempt results, browser
+identity, and final close result.
 
 ## Treat the world as a seed
 
