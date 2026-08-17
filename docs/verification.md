@@ -17,9 +17,10 @@ proof of a substituted live system.
 
 ## Run one bounded local Chromium batch
 
-Direct is driver-neutral. It provides deterministic state and a browser bridge,
-not a browser launcher, driver, process coordinator, or cleanup supervisor. The
-product verifier owns browser commands and process policy.
+Direct's browser runtime is driver-neutral and never launches a process. The
+optional Bun/Node host tooling can invoke a consumer-installed agent-browser
+CLI, but it is not a bundled driver, process coordinator, or cleanup
+supervisor. The product verifier owns browser commands and process policy.
 
 The canonical local policy uses one task-owned agent-browser session and one
 Chromium process for a sequential batch of at most eight scenarios. Before each
@@ -47,6 +48,24 @@ admission or crash-safe cleanup also requires an external supervisor that owns
 both the agent-browser daemon and Chromium roots, or one containing job.
 agent-browser 0.32.3 may place those roots in different process groups, so
 daemon exit alone is not cleanup proof.
+
+### Reuse the host mechanics
+
+Import `createAgentBrowser`, `acquireVerificationServer`,
+`createArtifactRun`, and `readDirectBrowserContract` from
+`@hraness/direct/tooling/browser-verification`. The ready-bound reader uses
+Direct's exact bridge schema, session-manifest parser, and probe parser. Use
+`createDirectBrowserContractReader` to inject a different compatible protocol.
+
+Run this subpath with Bun 1.3.14 and Node type definitions. It uses Node
+filesystem, path, and crypto APIs plus Bun process, sleep, and file APIs.
+`createAgentBrowser` resolves the consumer's agent-browser 0.32.3 executable at
+`node_modules/.bin/agent-browser` and its task-owned configuration at
+`scripts/direct/agent-browser.verify.json` below `repositoryRoot`. The helper
+sanitizes inherited `AGENT_BROWSER_*` variables, bounds command and close
+deadlines, and rotates a namespace after an unresponsive process. The product
+still supplies allowed-domain launch flags, commands, semantic assertions,
+context inventory, and the final close decision.
 
 ### Isolate and run the session
 
@@ -226,6 +245,12 @@ Never report a fixture scenario as proof of the adapter, service, host, browser 
 ## Scan production output
 
 Build the production entry independently, then scan emitted JavaScript, source maps, HTML, CSS, native bundles, executables, or packaged assets as appropriate. Each product owns marker policy. Include the package name, wire schemas, reserved query keys, fixture identifiers, bridge globals, and product workbench markers. When a bundler removes import specifiers, inspect source-map module paths as structural evidence too.
+
+Use `checkBundleBoundary`, `DIRECT_WIRE_MARKERS`, and
+`inspectExactVersionedMarkers` from
+`@hraness/direct/tooling/bundle-boundary` for the shared deterministic scan.
+The product still owns the directory, included file patterns, exclusions,
+product markers, and required positive identity evidence.
 
 Fail when no expected executable and source-map files were scanned, and positively require stable markers for the intended production entry. An empty, metadata-only, or unrelated clean bundle is not evidence.
 

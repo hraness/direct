@@ -39,9 +39,10 @@ coverage snapshot. agent-browser, Playwright MCP, and other browser tools can
 read the same exact value through page evaluation. Direct does not own their
 browser sessions, selectors, navigation, screenshots, or action histories.
 
-Direct remains driver-neutral and has no browser launcher. The product
-verifier owns the driver, process lifetime, context policy, navigation, and
-evidence capture.
+Direct's browser runtime remains driver-neutral and never launches a process.
+The opt-in Bun/Node verification tooling can invoke the consumer's local
+agent-browser installation, while the product verifier owns the commands,
+process lifetime, context policy, navigation, and evidence capture.
 
 The canonical local policy uses one task-owned agent-browser session and one
 Chromium process for a sequential batch of at most eight scenarios. The
@@ -115,7 +116,7 @@ A clean marker scan is narrow evidence: the scanned files did not contain the co
 
 ## Keep optional surfaces isolated
 
-The default `@hraness/direct` export is the curated definition and activation path. Advanced JSON, fixture, catalog, store, runtime, effect, and resource mechanics live under `@hraness/direct/core`. React bindings live under `@hraness/direct/react`, sessions and scripted test utilities under `@hraness/direct/testing`, and browser installation under `@hraness/direct/web`. None of the default, core, or testing surfaces imports React or browser globals. The package runtime does not import React Native or Expo; the React Native example composes these surfaces from a platform-resolved web entry.
+The default `@hraness/direct` export is the curated definition and activation path. Advanced JSON, fixture, catalog, store, runtime, effect, and resource mechanics live under `@hraness/direct/core`. React bindings live under `@hraness/direct/react`, sessions and scripted test utilities under `@hraness/direct/testing`, and browser installation under `@hraness/direct/web`. Host-only verification and emitted-bundle scanning live under explicit `@hraness/direct/tooling/*` subpaths built for Bun with Node APIs. None of the default, core, testing, or web surfaces imports those host tools. The package runtime does not import React Native or Expo; the React Native example composes these surfaces from a platform-resolved web entry.
 
 `installDirectBrowser` enables the fetch firewall by default. It intercepts application calls to `fetch` in its JavaScript realm and denies a request unless the product's allow predicate accepts its parsed URL. It does not intercept WebSockets, EventSource, navigation, asset loading, native calls, or traffic in another realm. Use it only in a Direct browser entry. Pass `firewall: false` only when another checked boundary owns network containment.
 

@@ -3,7 +3,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const packageName = "@hraness/direct";
-const importSpecifiers = ["@hraness/direct","@hraness/direct/core","@hraness/direct/react","@hraness/direct/testing","@hraness/direct/web"];
+const runtimeImportSpecifiers = [
+  "@hraness/direct",
+  "@hraness/direct/core",
+  "@hraness/direct/react",
+  "@hraness/direct/testing",
+  "@hraness/direct/web",
+];
+const toolingImportSpecifiers = [
+  "@hraness/direct/tooling/browser-verification",
+  "@hraness/direct/tooling/bundle-boundary",
+];
+const importSpecifiers = [...runtimeImportSpecifiers, ...toolingImportSpecifiers];
 const binNames = [];
 const verificationPackages = ["@eslint/js@^9.39.2","@expo/metro-runtime@~57.0.6","@types/bun@^1.3.14","@types/node@^24.10.0","@types/react@^19.2.14","@types/react-dom@^19.2.3","@vitejs/plugin-react@^6.0.3","eslint@^9.39.2","expo@~57.0.9","fast-check@^4.8.0","react@19.2.3","react-dom@19.2.3","react-native@0.86.2","react-native-web@~0.21.2","typescript@^6.0.3","typescript-eslint@^8.53.0","vite@^8.1.5"];
 
@@ -11,6 +22,34 @@ async function run(command: string[], cwd: string): Promise<void> {
   const process = Bun.spawn(command, { cwd, stdout: "inherit", stderr: "inherit" });
   const exitCode = await process.exited;
   if (exitCode !== 0) throw new Error(`Command failed (${String(exitCode)}): ${command.join(" ")}`);
+}
+
+function typeImportSource(specifiers: readonly string[]): string {
+  return `${specifiers
+    .map((specifier, index) => `import * as surface${String(index)} from ${JSON.stringify(specifier)};`)
+    .join("\n")}\nvoid [${specifiers.map((_, index) => `surface${String(index)}`).join(", ")}];\n`;
+}
+
+function typeScriptConfig(options: {
+  readonly include: string;
+  readonly module: "NodeNext" | "Preserve";
+  readonly moduleResolution: "Bundler" | "NodeNext";
+  readonly tooling: boolean;
+}): string {
+  return `${JSON.stringify({
+    compilerOptions: {
+      target: "ES2023",
+      lib: ["ES2023", "DOM", "DOM.Iterable"],
+      jsx: "react-jsx",
+      strict: true,
+      noEmit: true,
+      skipLibCheck: options.tooling,
+      ...(options.tooling ? { types: ["bun", "node"] } : {}),
+      module: options.module,
+      moduleResolution: options.moduleResolution,
+    },
+    include: [options.include],
+  }, null, 2)}\n`;
 }
 
 const repository = process.cwd();
@@ -43,11 +82,112 @@ try {
     "-e",
     `await Promise.all(${JSON.stringify(importSpecifiers)}.map((specifier) => import(specifier)))`,
   ], consumer);
-  await writeFile(join(consumer, "index.ts"), "import * as surface0 from \"@hraness/direct\";\nimport * as surface1 from \"@hraness/direct/core\";\nimport * as surface2 from \"@hraness/direct/react\";\nimport * as surface3 from \"@hraness/direct/testing\";\nimport * as surface4 from \"@hraness/direct/web\";\nvoid [surface0, surface1, surface2, surface3, surface4];\n");
-  await writeFile(join(consumer, "tsconfig.bundler.json"), "{\n  \"compilerOptions\": {\n    \"target\": \"ES2023\",\n    \"lib\": [\n      \"ES2023\",\n      \"DOM\",\n      \"DOM.Iterable\"\n    ],\n    \"jsx\": \"react-jsx\",\n    \"strict\": true,\n    \"noEmit\": true,\n    \"skipLibCheck\": false,\n    \"module\": \"Preserve\",\n    \"moduleResolution\": \"Bundler\"\n  },\n  \"include\": [\n    \"index.ts\"\n  ]\n}");
+  await writeFile(join(consumer, "runtime-index.ts"), typeImportSource(runtimeImportSpecifiers));
+  await writeFile(join(consumer, "tooling-index.ts"), typeImportSource(toolingImportSpecifiers));
+  await writeFile(join(consumer, "tsconfig.bundler.json"), typeScriptConfig({
+    include: "runtime-index.ts",
+    module: "Preserve",
+    moduleResolution: "Bundler",
+    tooling: false,
+  }));
   await run([process.execPath, "x", "tsc", "-p", "./tsconfig.bundler.json"], consumer);
-  await writeFile(join(consumer, "tsconfig.nodenext.json"), "{\n  \"compilerOptions\": {\n    \"target\": \"ES2023\",\n    \"lib\": [\n      \"ES2023\",\n      \"DOM\",\n      \"DOM.Iterable\"\n    ],\n    \"jsx\": \"react-jsx\",\n    \"strict\": true,\n    \"noEmit\": true,\n    \"skipLibCheck\": false,\n    \"module\": \"NodeNext\",\n    \"moduleResolution\": \"NodeNext\"\n  },\n  \"include\": [\n    \"index.ts\"\n  ]\n}");
+  await writeFile(join(consumer, "tsconfig.nodenext.json"), typeScriptConfig({
+    include: "runtime-index.ts",
+    module: "NodeNext",
+    moduleResolution: "NodeNext",
+    tooling: false,
+  }));
   await run([process.execPath, "x", "tsc", "-p", "./tsconfig.nodenext.json"], consumer);
+  await writeFile(join(consumer, "tsconfig.tooling-bundler.json"), typeScriptConfig({
+    include: "tooling-index.ts",
+    module: "Preserve",
+    moduleResolution: "Bundler",
+    tooling: true,
+  }));
+  await run([process.execPath, "x", "tsc", "-p", "./tsconfig.tooling-bundler.json"], consumer);
+  await writeFile(join(consumer, "tsconfig.tooling-nodenext.json"), typeScriptConfig({
+    include: "tooling-index.ts",
+    module: "NodeNext",
+    moduleResolution: "NodeNext",
+    tooling: true,
+  }));
+  await run([process.execPath, "x", "tsc", "-p", "./tsconfig.tooling-nodenext.json"], consumer);
+  await writeFile(join(consumer, "installed-tooling-smoke.ts"), `
+    import {
+      normalizeRootHttpOrigin,
+      readDirectBrowserContract,
+    } from "@hraness/direct/tooling/browser-verification";
+    import { findForbiddenMarkers } from "@hraness/direct/tooling/bundle-boundary";
+
+    if (normalizeRootHttpOrigin("https://example.test/") !== "https://example.test") {
+      throw new Error("browser verification tooling did not normalize the origin");
+    }
+    const found = findForbiddenMarkers(
+      Buffer.from("prefix\\0direct.fixture/v1\\0suffix"),
+      ["direct.fixture/v1"],
+    );
+    if (found.length !== 1 || found[0] !== "direct.fixture/v1") {
+      throw new Error("bundle-boundary tooling did not find the marker");
+    }
+    if (typeof readDirectBrowserContract !== "function") {
+      throw new Error("the package-bound Direct browser reader is missing");
+    }
+  `);
+  await run([process.execPath, "run", "./installed-tooling-smoke.ts"], consumer);
+
+  await writeFile(join(consumer, "browser-runtime.ts"), `
+    import { defineDirect } from "@hraness/direct";
+    import { installDirectBrowser } from "@hraness/direct/web";
+    Object.defineProperty(globalThis, "__directPackageRuntimeSmoke", {
+      value: Object.freeze({ defineDirect, installDirectBrowser }),
+    });
+  `);
+  await run([
+    process.execPath,
+    "build",
+    "./browser-runtime.ts",
+    "--outdir",
+    "./browser-dist",
+    "--target",
+    "browser",
+    "--format",
+    "esm",
+  ], consumer);
+  await writeFile(join(consumer, "verify-runtime-boundary.ts"), `
+    import {
+      checkBundleBoundary,
+      inspectExactVersionedMarkers,
+    } from "@hraness/direct/tooling/bundle-boundary";
+
+    const result = await checkBundleBoundary({
+      directory: "./browser-dist",
+      markers: [
+        "@hraness/direct/tooling/",
+        "browser-verification",
+        "bundle-boundary",
+        "node:crypto",
+        "node:fs",
+        "node:path",
+        "Bun.Glob",
+        "Bun.spawn",
+      ],
+      patterns: ["**/*.js"],
+    });
+    if (result.scanned.length === 0) throw new Error("no browser output was scanned");
+    if (result.violations.length > 0) {
+      throw new Error(JSON.stringify(result.violations));
+    }
+    const markerEvidence = inspectExactVersionedMarkers(
+      await Promise.all(result.scanned.map(async (path) => (
+        new Uint8Array(await Bun.file(path).arrayBuffer())
+      ))),
+      ["direct.browser-bridge/v2", "direct.fixture/v1"],
+    );
+    if (markerEvidence.missing.length > 0 || markerEvidence.unexpected.length > 0) {
+      throw new Error(JSON.stringify(markerEvidence));
+    }
+  `);
+  await run([process.execPath, "run", "./verify-runtime-boundary.ts"], consumer);
 } finally {
   await rm(work, { recursive: true, force: true });
 }

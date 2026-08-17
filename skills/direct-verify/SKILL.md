@@ -30,9 +30,12 @@ complete manifest and every probe; bind `manifest.coverage` to the authored
 definition with `parseDefinitionCoverageSnapshot`. Do not accept compatibility
 or product-specific globals as equivalent evidence.
 
-The manifest is driver-neutral. Direct provides deterministic state and a
-browser bridge, not a browser launcher, driver, process coordinator, or cleanup
-supervisor. Keep those responsibilities in the product verifier.
+The manifest and browser runtime remain driver-neutral. Prefer the optional
+`@hraness/direct/tooling/browser-verification` Bun/Node helpers for exact
+package-bound bridge reads, bounded agent-browser commands, server leases, and
+artifacts when they fit the repository. They invoke the consumer's local
+agent-browser installation; they do not bundle a driver, coordinate parallel
+work, supervise cleanup, or own product commands and evidence.
 
 Use one task-owned local Chromium session and process for a sequential batch of
 at most eight scenarios. Before each scenario, call `window new` for a fresh
@@ -196,7 +199,7 @@ not crash-safe cleanup proof.
 
 ## Verify production exclusion
 
-Build the real production graph independently. Run its emitted-boundary scanner across every declared production surface. Require at least one executable bundle and reject package names, wire schemas, reserved query keys, fixtures, workbench strings, and browser bridge globals.
+Build the real production graph independently. Run its emitted-boundary scanner across every declared production surface. Prefer `@hraness/direct/tooling/bundle-boundary` for shared scan mechanics while keeping included paths, product markers, and positive production identity evidence product-owned. Require at least one executable bundle and reject package names, wire schemas, reserved query keys, fixtures, workbench strings, and browser bridge globals.
 
 When a bundler selects platform variants, require a paired source map for every executable and every production platform. Positively match the declared shared behavior, native composition, and production-adapter modules in each map; reject Direct and web-fixture paths. Verify the inverse selection for the fixture graph. A clean marker scan proves only absence of those markers in those files, and a clean unrelated bundle proves nothing. Source selection still does not prove native linkage, service behavior, runtime loading, or device behavior.
 
