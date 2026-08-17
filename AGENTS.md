@@ -20,6 +20,7 @@
 - Use Bun 1.3.14 for repository commands. Keep the published ESM runtime portable to modern Node.js and browsers according to each export's documented boundary.
 - Follow `WRITING.md` for internal prose and `STYLE.md` for public prose.
 - Apply unreasonably robust programming when agent work is cheap. Prefer coherent cross-file correctness and focused deterministic evidence to a knowingly weaker design.
+- Deliver changes to `main` through a current-head pull request. Keep the stable `Required` CI job green, resolve every review thread, and serialize merges. Human approval stays optional while one regular maintainer would otherwise self-review. Never force-push or bypass the gate.
 - Keep core code product-, platform-, and framework-neutral. Put React, browser globals, and Node-only tooling behind explicit subpaths.
 - Keep React Native and Expo imports in the reference example; `@hraness/direct/react` remains the platform-neutral React binding.
 - Keep `.js` extensions on relative TypeScript import and export specifiers; the published source type surface must compile under both Bundler and NodeNext resolution.
