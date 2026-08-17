@@ -23,6 +23,12 @@
       "@hraness/direct/testing": [
         "./src/testing/index.ts"
       ],
+      "@hraness/direct/tooling/browser-verification": [
+        "./src/tooling/browser-verification-entry.ts"
+      ],
+      "@hraness/direct/tooling/bundle-boundary": [
+        "./src/tooling/bundle-boundary.ts"
+      ],
       "@hraness/direct/web": [
         "./src/web.ts"
       ]

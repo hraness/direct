@@ -62,9 +62,13 @@ entry lives at that route or inside one wrapper URL.
 
 Display activation failures. Never fall back from malformed explicit activation to a nearby valid scenario.
 
-Keep browser process and session policy in the product verifier, outside
-Direct and the product composition. Direct remains driver-neutral and provides
-no browser launcher, driver, coordinator, or cleanup supervisor.
+Keep browser process and session policy in the product verifier, outside the
+product composition. Direct's browser runtime remains driver-neutral. Prefer
+the optional `@hraness/direct/tooling/browser-verification` Bun/Node helpers
+for atomic bridge reads, bounded agent-browser commands, server leases, and
+artifacts when they fit the repository. The helpers invoke the consumer's
+local agent-browser installation; they do not bundle a driver, coordinate
+parallel work, supervise cleanup, or own product commands and evidence.
 
 Use one task-owned local Chromium session and process for a sequential batch of
 at most eight scenarios. Call `window new` before every scenario to create a
@@ -112,7 +116,7 @@ Add focused tests for:
 - exact-script consumption and remaining work when scripts are used; and
 - emitted production output containing a forbidden marker.
 
-Build production and Direct separately. Scan emitted production assets for package names, wire schemas, reserved query keys, fixture and workbench markers, and browser globals. Fail a scan that inspects no executable files.
+Build production and Direct separately. Scan emitted production assets for package names, wire schemas, reserved query keys, fixture and workbench markers, and browser globals. Prefer `@hraness/direct/tooling/bundle-boundary` for the shared scan mechanics while keeping included paths, product markers, and positive production identity evidence product-owned. Fail a scan that inspects no executable files.
 
 For native bundles, emit a paired source map for each production platform. Positively require stable path suffixes for the shared screen and state, native composition, and production adapters in every map; reject the Direct package, `.web` composition, fixtures, and workbench sources. Apply the inverse positive selection to a web fixture map. An absence-only scan of an unrelated clean bundle is not proof.
 

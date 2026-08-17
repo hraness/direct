@@ -4,6 +4,8 @@ import * as root from "@hraness/direct";
 import * as core from "@hraness/direct/core";
 import { createDirectReactBindings } from "@hraness/direct/react";
 import * as testing from "@hraness/direct/testing";
+import * as browserVerification from "@hraness/direct/tooling/browser-verification";
+import * as bundleBoundary from "@hraness/direct/tooling/bundle-boundary";
 import * as web from "@hraness/direct/web";
 
 describe("public package exports", () => {
@@ -51,5 +53,17 @@ describe("public package exports", () => {
     expect(typeof bindings.Provider).toBe("function");
     expect(typeof bindings.useSnapshot).toBe("function");
     expect(bindings.Context).toBeDefined();
+  });
+
+  test("host tooling stays behind explicit subpaths", () => {
+    expect(typeof browserVerification.createAgentBrowser).toBe("function");
+    expect(typeof browserVerification.createDirectBrowserContractReader).toBe("function");
+    expect(typeof browserVerification.readDirectBrowserContract).toBe("function");
+    expect(typeof bundleBoundary.checkBundleBoundary).toBe("function");
+    expect(typeof bundleBoundary.findForbiddenMarkers).toBe("function");
+    expect("createAgentBrowser" in root).toBeFalse();
+    expect("checkBundleBoundary" in root).toBeFalse();
+    expect("createAgentBrowser" in web).toBeFalse();
+    expect("checkBundleBoundary" in testing).toBeFalse();
   });
 });

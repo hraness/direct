@@ -10,7 +10,7 @@ tags:
 
 # Repository agent context
 
-The root `AGENTS.md` is the repository's normative control plane. Its rules apply before deeper lookup. Direct is the product-neutral `@hraness/direct` package for deterministic application states, evidence, and development workbenches.
+The root `AGENTS.md` is the repository's normative control plane. Its rules apply before deeper lookup. Direct is the product-neutral `@hraness/direct` package for deterministic application states, evidence, development workbenches, and opt-in host verification mechanics.
 
 ## Authority and repository seams
 

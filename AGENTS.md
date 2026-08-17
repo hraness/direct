@@ -5,6 +5,7 @@
 - `src/testing/` – deterministic session, world-free manifest, evidence, activity, probe, and exact scripted-transport utilities.
 - `src/react.ts` – opt-in React bindings for a Direct store.
 - `src/web/` – atomic exact browser-session bridge installation plus low-level bridge and fail-closed application-fetch firewall.
+- `src/tooling/` – opt-in Bun/Node browser-verification and emitted-bundle scanning mechanics kept outside browser/runtime graphs.
 - `docs/` – architecture, adoption, verification, and wire-format reference.
 - `examples/todos/` – runnable React example with separate production and Direct entries.
 - `examples/react-native/` – runnable Expo example with platform-resolved native production and React Native Web Direct entries.
@@ -22,6 +23,7 @@
 - Apply unreasonably robust programming when agent work is cheap. Prefer coherent cross-file correctness and focused deterministic evidence to a knowingly weaker design.
 - Deliver changes to `main` through a current-head pull request. Keep the stable `Required` CI job green, resolve every review thread, and serialize merges. Human approval stays optional while one regular maintainer would otherwise self-review. Never force-push or bypass the gate.
 - Keep core code product-, platform-, and framework-neutral. Put React, browser globals, and Node-only tooling behind explicit subpaths.
+- Build `@hraness/direct/tooling/*` separately for Bun. Keep those host-only exports out of the default, core, React, testing, and web graphs, and prove the separation through the packed-consumer boundary gate.
 - Keep React Native and Expo imports in the reference example; `@hraness/direct/react` remains the platform-neutral React binding.
 - Keep `.js` extensions on relative TypeScript import and export specifiers; the published source type surface must compile under both Bundler and NodeNext resolution.
 - Treat this repository as the complete project. Files and Git prose may use only its public names, paths, commands, and examples; do not refer to or infer any non-public source, system, product, package, path, or implementation detail.

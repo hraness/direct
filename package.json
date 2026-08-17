@@ -1,6 +1,6 @@
 {
   "name": "@hraness/direct",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "A general harness for repeatable app states.",
   "license": "MIT",
   "type": "module",
@@ -48,6 +48,14 @@
     "./web": {
       "types": "./src/web.ts",
       "import": "./dist/web.js"
+    },
+    "./tooling/browser-verification": {
+      "types": "./src/tooling/browser-verification-entry.ts",
+      "import": "./dist/tooling/browser-verification-entry.js"
+    },
+    "./tooling/bundle-boundary": {
+      "types": "./src/tooling/bundle-boundary.ts",
+      "import": "./dist/tooling/bundle-boundary.js"
     }
   },
   "main": "./dist/index.js",
@@ -79,6 +87,9 @@
     "src/testing/probe.ts",
     "src/testing/scripted-transport.ts",
     "src/testing/session.ts",
+    "src/tooling/browser-verification-entry.ts",
+    "src/tooling/browser-verification.ts",
+    "src/tooling/bundle-boundary.ts",
     "src/web.ts",
     "src/web/browser.ts",
     "src/web/browser-bridge.ts",
@@ -88,7 +99,10 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "bun -e 'await (await import(\"node:fs/promises\")).rm(\"./dist\", { recursive: true, force: true })' && bun build ./src/index.ts ./src/core/index.ts ./src/react.ts ./src/testing/index.ts ./src/web.ts --outdir ./dist --root ./src --target browser --format esm --splitting --packages external",
+    "build": "bun run build:clean && bun run build:runtime && bun run build:tooling",
+    "build:clean": "bun -e 'await (await import(\"node:fs/promises\")).rm(\"./dist\", { recursive: true, force: true })'",
+    "build:runtime": "bun build ./src/index.ts ./src/core/index.ts ./src/react.ts ./src/testing/index.ts ./src/web.ts --outdir ./dist --root ./src --target browser --format esm --splitting --packages external",
+    "build:tooling": "bun build ./src/tooling/browser-verification-entry.ts ./src/tooling/bundle-boundary.ts --outdir ./dist/tooling --root ./src/tooling --target bun --format esm --splitting --packages external",
     "typecheck": "tsc --noEmit",
     "test": "bun test ./src",
     "example:build": "vite build --config examples/todos/vite.config.ts",
@@ -113,9 +127,13 @@
     "prepack": "bun run check"
   },
   "peerDependencies": {
+    "agent-browser": "0.32.3",
     "react": ">=18 <20"
   },
   "peerDependenciesMeta": {
+    "agent-browser": {
+      "optional": true
+    },
     "react": {
       "optional": true
     }

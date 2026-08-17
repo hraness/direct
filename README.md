@@ -9,7 +9,7 @@ state with predictable local stand-ins. it does not click through the browser
 or test the systems it replaces.
 
 ```sh
-bun add --dev github:hraness/direct#v0.6.2
+bun add --dev github:hraness/direct#v0.7.0
 ```
 
 [overview](https://hraness.com/direct)
@@ -31,7 +31,7 @@ Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
 Install hraness/direct and its bundled Agent Skills from
-https://github.com/hraness/direct at the immutable v0.6.2 tag. Follow the
+https://github.com/hraness/direct at the immutable v0.7.0 tag. Follow the
 repository README, add `@hraness/direct` to devDependencies only, copy or link
 `direct-setup` and `direct-verify` into this agent runner's configured
 skills directory, and verify that the production dependency graph excludes
@@ -47,7 +47,7 @@ Pin the public repository to an immutable version tag:
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "github:hraness/direct#v0.6.2"
+    "@hraness/direct": "github:hraness/direct#v0.7.0"
   }
 }
 ```
@@ -132,7 +132,10 @@ Retain one catalog hash across the run. Direct does not need a driver-specific
 plugin: agent-browser, Playwright MCP, and other tools can read the same page
 contract.
 
-Direct remains driver-neutral and provides no browser launcher. The canonical
+Direct's browser runtime remains driver-neutral and never launches a process.
+The opt-in host tooling can invoke a consumer-installed agent-browser CLI; the
+product verifier still owns its commands, process lifetime, and evidence. The
+canonical
 [verification workflow](./docs/verification.md#run-one-bounded-local-chromium-batch)
 uses one task-owned local Chromium session and process for a sequential batch
 of at most eight scenarios. It opens a fresh BrowserContext with `window new`
@@ -180,6 +183,20 @@ A quiet probe means the declared deterministic work settled. It does not prove t
 | `@hraness/direct/react` | Typed context, provider, and external-store hooks for React DOM or React Native | Optional React peer |
 | `@hraness/direct/testing` | Sessions, manifest and probe parsers, evidence classification, activity scopes, and exact scripted transports | Development and verification |
 | `@hraness/direct/web` | Atomic browser installation, with low-level bridge and firewall escape hatches | Browser only |
+| `@hraness/direct/tooling/browser-verification` | Protocol-bound bridge reads, bounded agent-browser commands, local server leases, and artifact writes | Bun 1.3.14 with Node APIs |
+| `@hraness/direct/tooling/bundle-boundary` | Deterministic emitted-file scans and exact versioned-wire evidence | Bun 1.3.14 with Node APIs |
+
+The tooling subpaths are development-only. They are built separately from the
+browser runtime and never enter the default, core, React, testing, or web
+graphs. Tooling type checks require Bun and Node type definitions.
+
+`readDirectBrowserContract` binds the exact package bridge schema and Direct's
+manifest and probe parsers. Use `createDirectBrowserContractReader` when a
+verifier supplies another compatible protocol. `createAgentBrowser` expects
+agent-browser 0.32.3 at `node_modules/.bin/agent-browser` below the supplied
+`repositoryRoot` and an empty task-owned config at
+`scripts/direct/agent-browser.verify.json`. The product supplies its explicit
+launch arguments, allowed domains, scenario commands, and final close policy.
 
 ## Activate scenarios
 
@@ -207,7 +224,7 @@ hybrid bridge shape.
 
 ## Repository scope
 
-This repository contains the deterministic kernel, browser bridge, production-exclusion pattern, agent skills, a small React example, and an Expo/React Native reference app. It does not contain a browser launcher or driver, process coordinator, cleanup supervisor, browser-worker pool, or browser benchmark. Use the browser tooling that fits your product and require external evidence for browser or performance claims.
+This repository contains the deterministic kernel, browser bridge, production-exclusion scanner, bounded host-verification helpers, agent skills, a small React example, and an Expo/React Native reference app. It does not bundle a browser driver or provide a process coordinator, cleanup supervisor, browser-worker pool, or browser benchmark. The optional helper invokes the consumer's local agent-browser installation; the product owns commands and evidence, and external proof remains required for browser or performance claims.
 
 <!-- article:direct-a-harness-for-your-frontend:start -->
 ## [Direct gives browser agents deterministic app states](<https://hraness.com/direct>)
