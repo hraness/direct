@@ -12,7 +12,7 @@ This Git-backed Markdown vault is durable memory for Direct. Open `kb/` itself a
 Start repository work with the pinned KB release, then expand through bounded links, exact metadata, text search, or history only when needed:
 
 ```sh
-bunx --bun github:hraness/kb#v0.15.1 context <repository-path> --root kb --repo .
+bunx --bun github:hraness/kb#v0.15.2 context <repository-path> --root kb --repo .
 ```
 
 ## Record boundaries
