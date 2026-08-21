@@ -1,9 +1,4 @@
----
-name: direct-setup
-description: Add or revise a Direct deterministic development composition around product-owned ports, strict JSON worlds, scenarios, coverage claims, probes, and separate production-safe entries. Use when asked to adopt Direct, build a deterministic UI workbench, replace slow frontend dependencies with fixtures, or repair a Direct setup that leaks into production.
----
-
-# Direct setup
+# Adopt Direct
 
 ## Inspect the product boundary
 

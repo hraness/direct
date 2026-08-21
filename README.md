@@ -1,5 +1,7 @@
 # direct
 
+[![skills.sh](https://skills.sh/b/hraness/direct)](https://skills.sh/hraness/direct)
+
 a general harness for repeatable app states.
 
 name signed-in, empty, error, and other hard-to-reach app states once, then let
@@ -25,22 +27,37 @@ real interface and feature state
 
 ## Install
 
+### Install the Agent Skill
+
+Install Direct's single bundled skill from the public repository:
+
+```sh
+npx skills add hraness/direct
+# or
+bunx skills add hraness/direct
+```
+
+The skill is invoked as `$direct`. It routes installation, adoption, and
+verification work while keeping the development-only production boundary
+visible. Restart or reload an agent runner that does not discover newly
+installed skills during the current session.
+
 ### Tell your coding agent to install it
 
 Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
-Install hraness/direct and its bundled Agent Skills from
+Use $direct to install hraness/direct from
 https://github.com/hraness/direct at the immutable v0.7.0 tag. Follow the
-repository README, add `@hraness/direct` to devDependencies only, copy or link
-`direct-setup` and `direct-verify` into this agent runner's configured
-skills directory, and verify that the production dependency graph excludes
-Direct. Do not add a fixture composition until I ask.
+repository README, add `@hraness/direct` to devDependencies only, and verify
+that the production dependency graph excludes Direct. Do not add a fixture
+composition until I ask.
 ```
 
-The tagged package and repository carry the same skill directories. Package
-installation leaves them inert until an agent places them in its
-runner-specific discovery path.
+The repository carries the skill independently from the released library.
+Installing the skill does not add Direct to a consumer project. The current
+`v0.7.0` runtime tag predates this single-skill layout, so use the skills CLI
+for runner discovery until a later tagged package includes it.
 
 Pin the public repository to an immutable version tag:
 
@@ -62,9 +79,18 @@ Keep Direct in `devDependencies`. A production entry must not import Direct, its
 
 ## Agent skills
 
-The packed package includes two Agent Skills under `node_modules/@hraness/direct/skills/`. `direct-setup` guides a product-owned port, deterministic composition, and production-exclusion proof. `direct-verify` audits scenario behavior, quiescence, coverage claims, cleanup, and emitted production boundaries.
+Packages built from this source include one Agent Skill under
+`node_modules/@hraness/direct/skills/direct/`. `$direct` guides a product-owned
+port and deterministic composition, then audits scenario behavior,
+quiescence, coverage claims, cleanup, and emitted production boundaries. The
+package smoke test keeps that future packaged copy byte-identical to the
+repository skill.
 
-Agent runners do not share one discovery directory. Copy or link the desired skill directory into the location configured by your runner, then invoke `$direct-setup` or `$direct-verify`. Package installation leaves the skills inert: it does not run a `postinstall` hook or edit repository or user configuration.
+Prefer `npx skills add hraness/direct` or `bunx skills add hraness/direct` for
+runner discovery. You can also copy or link that one skill directory into a
+runner's configured location, then invoke `$direct`. Package installation
+leaves the skill inert: it does not run a `postinstall` hook or edit repository
+or user configuration.
 
 ## A complete browser composition
 

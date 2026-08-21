@@ -9,11 +9,12 @@ each claim. Parse `window.__direct.manifest` with
 definition with `parseDefinitionCoverageSnapshot` so a valid but stale catalog
 cannot be mistaken for the catalog under review.
 
-The installed package carries the `direct-verify` Agent Skill under
-`skills/direct-verify`. Copy or link that directory into your agent runner's
-discovery location and invoke `$direct-verify` for the workflow below. The
-skill structures the audit; it does not turn deterministic evidence into
-proof of a substituted live system.
+The repository carries one `$direct` Agent Skill under `skills/direct`.
+Install it with `npx skills add hraness/direct` or
+`bunx skills add hraness/direct`, or copy that directory into the runner's
+discovery location. Invoke `$direct` for the workflow below. The skill is
+independent from library package installation and structures the audit; it
+does not turn deterministic evidence into proof of a substituted live system.
 
 ## Run one bounded local Chromium batch
 

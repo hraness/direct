@@ -1,0 +1,4 @@
+interface:
+  display_name: "Direct"
+  short_description: "Build and verify deterministic UI states"
+  default_prompt: "Use $direct to add or verify a deterministic UI composition while keeping Direct out of production."
