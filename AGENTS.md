@@ -9,7 +9,7 @@
 - `docs/` – architecture, adoption, verification, and wire-format reference.
 - `examples/todos/` – runnable React example with separate production and Direct entries.
 - `examples/react-native/` – runnable Expo example with platform-resolved native production and React Native Web Direct entries.
-- `skills/` – agent workflows for adding and verifying a Direct composition.
+- `skills/direct/` – one installable Agent Skill for Direct installation, adoption, verification, and production exclusion.
 - `kb/` – authored repository rationale, maintained synthesis, and durable plans.
 - `.agents/skills/` – portable KB and phased-execution workflows.
 - `WRITING.md` and `STYLE.md` – internal and public prose contracts.

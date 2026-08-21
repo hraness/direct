@@ -1,9 +1,4 @@
----
-name: direct-verify
-description: Verify an existing Direct composition, including strict activation, deterministic settlement, semantic scenario behavior, coverage truthfulness, cleanup, and exclusion from production output. Use when asked to test, audit, validate, review, or report the proof boundary of a Direct workbench or frontend verification run.
----
-
-# Direct verification
+# Verify Direct
 
 ## Discover the declared contract
 

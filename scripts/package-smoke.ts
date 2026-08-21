@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,6 +22,67 @@ async function run(command: string[], cwd: string): Promise<void> {
   const process = Bun.spawn(command, { cwd, stdout: "inherit", stderr: "inherit" });
   const exitCode = await process.exited;
   if (exitCode !== 0) throw new Error(`Command failed (${String(exitCode)}): ${command.join(" ")}`);
+}
+
+async function verifyPackagedSkill(
+  consumer: string,
+  packageVersion: string,
+): Promise<void> {
+  const skillsRoot = join(
+    consumer,
+    "node_modules",
+    "@hraness",
+    "direct",
+    "skills",
+  );
+  const skillRoot = join(skillsRoot, "direct");
+  const skillPath = join(skillRoot, "SKILL.md");
+  const installedSkillDirectories = (await readdir(skillsRoot, {
+    withFileTypes: true,
+  }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+
+  if (installedSkillDirectories.join(",") !== "direct") {
+    throw new Error(
+      `Expected one packaged Direct skill, received ${installedSkillDirectories.join(", ")}`,
+    );
+  }
+
+  await access(skillPath);
+  const skill = await readFile(skillPath, "utf8");
+  if (!skill.includes("name: direct")) {
+    throw new Error("Packaged skill frontmatter does not declare Direct");
+  }
+
+  const referenceLinks = [...skill.matchAll(/\]\((references\/[^)#]+)(?:#[^)]*)?\)/g)]
+    .map((match) => match[1]);
+  const requiredReferences = [
+    "references/adoption.md",
+    "references/install.md",
+    "references/verification.md",
+  ];
+  for (const reference of requiredReferences) {
+    if (!referenceLinks.includes(reference)) {
+      throw new Error(`Packaged skill does not route to ${reference}`);
+    }
+    await access(join(skillRoot, reference));
+  }
+
+  const install = await readFile(join(skillRoot, "references", "install.md"), "utf8");
+  const immutablePin = `github:hraness/direct#v${packageVersion}`;
+  if (!install.includes(immutablePin)) {
+    throw new Error(`Packaged skill install guide is missing ${immutablePin}`);
+  }
+
+  const interfaceMetadata = await readFile(
+    join(skillRoot, "agents", "openai.yaml"),
+    "utf8",
+  );
+  if (!interfaceMetadata.includes("$direct")) {
+    throw new Error("Packaged skill UI metadata does not invoke $direct");
+  }
 }
 
 function typeImportSource(specifiers: readonly string[]): string {
@@ -53,6 +114,15 @@ function typeScriptConfig(options: {
 }
 
 const repository = process.cwd();
+const packageManifest = await Bun.file(join(repository, "package.json")).json();
+if (
+  typeof packageManifest !== "object"
+  || packageManifest === null
+  || !("version" in packageManifest)
+  || typeof packageManifest.version !== "string"
+) {
+  throw new Error("package.json must declare a string version");
+}
 const work = await mkdtemp(join(tmpdir(), "hraness-package-smoke-"));
 try {
   const archive = join(work, "package.tgz");
@@ -69,6 +139,7 @@ try {
   ], repository);
   await writeFile(join(consumer, "package.json"), JSON.stringify({ private: true, type: "module" }));
   await run([process.execPath, "add", archive, "--ignore-scripts"], consumer);
+  await verifyPackagedSkill(consumer, packageManifest.version);
   await run(["node", "--input-type=module", "-e", `await import(${JSON.stringify(packageName)})`], consumer);
   for (const binName of binNames) {
     await run([join(consumer, "node_modules", ".bin", binName), "--help"], consumer);

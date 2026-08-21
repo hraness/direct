@@ -2,11 +2,12 @@
 
 Add Direct after identifying the product behavior and external boundary under review. Do not begin by designing fixtures around a provider SDK.
 
-The installed package carries the `direct-setup` Agent Skill under
-`skills/direct-setup`. Copy or link that directory into your agent runner's
-discovery location and invoke `$direct-setup` to apply this workflow from a
-coding-agent task. Package installation does not activate the skill
-automatically.
+The repository carries one `$direct` Agent Skill under `skills/direct`.
+Install it with `npx skills add hraness/direct` or
+`bunx skills add hraness/direct`, or copy that directory into the runner's
+discovery location. Invoke `$direct` for installation, adoption, and
+verification work. Skill installation is independent from library package
+installation and does not activate Direct in a product.
 
 ## 1. Define the product port
 
