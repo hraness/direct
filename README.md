@@ -11,7 +11,7 @@ state with predictable local stand-ins. it does not click through the browser
 or test the systems it replaces.
 
 ```sh
-bun add --dev github:hraness/direct#v0.7.0
+bun add --dev github:hraness/direct#v0.7.1
 ```
 
 [overview](https://hraness.com/direct)
@@ -48,23 +48,23 @@ Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
 Use $direct to install hraness/direct from
-https://github.com/hraness/direct at the immutable v0.7.0 tag. Follow the
+https://github.com/hraness/direct at the immutable v0.7.1 tag. Follow the
 repository README, add `@hraness/direct` to devDependencies only, and verify
 that the production dependency graph excludes Direct. Do not add a fixture
 composition until I ask.
 ```
 
-The repository carries the skill independently from the released library.
-Installing the skill does not add Direct to a consumer project. The current
-`v0.7.0` runtime tag predates this single-skill layout, so use the skills CLI
-for runner discovery until a later tagged package includes it.
+The repository and tagged package carry the same skill. Installing the skill
+does not add Direct to a consumer project. The skills CLI remains the preferred
+way to let runners discover it; the packaged copy supports runners and tools
+that read skills from installed development dependencies.
 
 Pin the public repository to an immutable version tag:
 
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "github:hraness/direct#v0.7.0"
+    "@hraness/direct": "github:hraness/direct#v0.7.1"
   }
 }
 ```
