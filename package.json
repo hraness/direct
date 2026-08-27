@@ -1,6 +1,6 @@
 {
   "name": "@hraness/direct",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "description": "A general harness for repeatable app states.",
   "license": "MIT",
   "type": "module",
@@ -127,12 +127,13 @@
     "example:typecheck": "tsc -p examples/todos/tsconfig.json --noEmit",
     "example:verify": "bun run examples/todos/verify.ts",
     "lint": "eslint src examples scripts",
+    "test:npm-release": "bun test ./scripts/npm-stage-workflow.test.ts",
     "test:package": "bun run ./scripts/package-smoke.ts",
     "kb:refresh": "bunx --bun github:hraness/kb#v0.15.2 refresh --root kb",
     "kb:check:lane": "bunx --bun github:hraness/kb#v0.15.2 check --root kb --no-catalog",
     "kb:check": "bunx --bun github:hraness/kb#v0.15.2 check --root kb && bunx --bun github:hraness/kb#v0.15.2 agents check --root kb --repo .",
     "kb:catalog": "bunx --bun github:hraness/kb#v0.15.2 catalog --root kb",
-    "check": "bun run typecheck && bun run build && bun run test:package && bun run test && bun run lint && bun run example:test && bun run example:typecheck && bun run example:verify && bun run example:react-native:test && bun run example:react-native:typecheck && bun run example:react-native:verify",
+    "check": "bun run typecheck && bun run test:npm-release && bun run build && bun run test:package && bun run test && bun run lint && bun run example:test && bun run example:typecheck && bun run example:verify && bun run example:react-native:test && bun run example:react-native:typecheck && bun run example:react-native:verify",
     "prepack": "bun run check"
   },
   "peerDependencies": {
@@ -172,6 +173,7 @@
     "vite": "^8.1.5"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   }
 }

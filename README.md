@@ -11,7 +11,9 @@ state with predictable local stand-ins. it does not click through the browser
 or test the systems it replaces.
 
 ```sh
-bun add --dev github:hraness/direct#v0.7.4
+bun add --dev @hraness/direct@0.7.5
+# or
+npm install --save-dev @hraness/direct@0.7.5
 ```
 
 [overview](https://hraness.com/direct)
@@ -48,10 +50,10 @@ Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
 Use $direct to install hraness/direct from
-https://github.com/hraness/direct at the immutable v0.7.4 tag. Follow the
-repository README, add `@hraness/direct` to devDependencies only, and verify
-that the production dependency graph excludes Direct. Do not add a fixture
-composition until I ask.
+the npm registry at the exact 0.7.5 version. Follow the repository README, add
+`@hraness/direct` to devDependencies only, and verify that the production
+dependency graph excludes Direct. Do not add a fixture composition until I
+ask.
 ```
 
 The repository and tagged package carry the same skill. Installing the skill
@@ -59,20 +61,22 @@ does not add Direct to a consumer project. The skills CLI remains the preferred
 way to let runners discover it; the packaged copy supports runners and tools
 that read skills from installed development dependencies.
 
-Pin the public repository to an immutable version tag:
+Pin the public npm package to an exact immutable version:
 
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "github:hraness/direct#v0.7.4"
+    "@hraness/direct": "0.7.5"
   }
 }
 ```
 
-Then install with Bun:
+Then install with the package manager already used by the project:
 
 ```sh
 bun install
+# or, in an npm project
+npm install
 ```
 
 Keep Direct in `devDependencies`. A production entry must not import Direct, its fixture worlds, or its workbench.
