@@ -1,6 +1,8 @@
 import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
+
+import { inspectPackageArtifact } from "./package-artifact.js";
 
 const packageName = "@hraness/direct";
 const runtimeImportSpecifiers = [
@@ -20,11 +22,22 @@ const toolingTypeImportSpecifiers = [
   "@hraness/direct/tooling/bombadil-campaign",
 ];
 const importSpecifiers = [...runtimeImportSpecifiers, ...toolingRuntimeImportSpecifiers];
-const binNames = [];
+const binNames: readonly string[] = [];
 const verificationPackages = ["@antithesishq/bombadil@0.7.2","@eslint/js@^9.39.2","@expo/metro-runtime@~57.0.6","@types/bun@^1.3.14","@types/node@^24.10.0","@types/react@^19.2.14","@types/react-dom@^19.2.3","@vitejs/plugin-react@^6.0.3","eslint@^9.39.2","expo@~57.0.9","fast-check@^4.8.0","react@19.2.3","react-dom@19.2.3","react-native@0.86.2","react-native-web@~0.21.2","typescript@^6.0.3","typescript-eslint@^8.53.0","vite@^8.1.5"];
 
-async function run(command: string[], cwd: string): Promise<void> {
-  const process = Bun.spawn(command, { cwd, stdout: "inherit", stderr: "inherit" });
+async function run(
+  command: string[],
+  cwd: string,
+  env?: Readonly<Record<string, string>>,
+): Promise<void> {
+  const process = Bun.spawn(command, env === undefined
+    ? { cwd, stdout: "inherit", stderr: "inherit" }
+    : {
+        cwd,
+        env: { ...globalThis.process.env, ...env },
+        stdout: "inherit",
+        stderr: "inherit",
+      });
   const exitCode = await process.exited;
   if (exitCode !== 0) throw new Error(`Command failed (${String(exitCode)}): ${command.join(" ")}`);
 }
@@ -76,7 +89,7 @@ async function verifyPackagedSkill(
   }
 
   const install = await readFile(join(skillRoot, "references", "install.md"), "utf8");
-  const immutablePin = `github:hraness/direct#v${packageVersion}`;
+  const immutablePin = `@hraness/direct@${packageVersion}`;
   if (!install.includes(immutablePin)) {
     throw new Error(`Packaged skill install guide is missing ${immutablePin}`);
   }
@@ -87,6 +100,48 @@ async function verifyPackagedSkill(
   );
   if (!interfaceMetadata.includes("$direct")) {
     throw new Error("Packaged skill UI metadata does not invoke $direct");
+  }
+}
+
+async function verifyInstalledManifest(
+  consumer: string,
+  packageVersion: string,
+): Promise<void> {
+  const value = JSON.parse(await readFile(
+    join(consumer, "node_modules", "@hraness", "direct", "package.json"),
+    "utf8",
+  )) as unknown;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Installed Direct package manifest is not an object");
+  }
+  const manifest = value as Record<string, unknown>;
+  const repository = manifest.repository;
+  const bugs = manifest.bugs;
+  const publishConfig = manifest.publishConfig;
+  if (
+    manifest.name !== packageName
+    || manifest.version !== packageVersion
+    || manifest.license !== "MIT"
+    || manifest.homepage !== "https://hraness.com/direct"
+    || typeof repository !== "object"
+    || repository === null
+    || Array.isArray(repository)
+    || (repository as Record<string, unknown>).type !== "git"
+    || (repository as Record<string, unknown>).url
+      !== "git+https://github.com/hraness/direct.git"
+    || typeof bugs !== "object"
+    || bugs === null
+    || Array.isArray(bugs)
+    || (bugs as Record<string, unknown>).url
+      !== "https://github.com/hraness/direct/issues"
+    || typeof publishConfig !== "object"
+    || publishConfig === null
+    || Array.isArray(publishConfig)
+    || (publishConfig as Record<string, unknown>).access !== "public"
+    || (publishConfig as Record<string, unknown>).registry
+      !== "https://registry.npmjs.org"
+  ) {
+    throw new Error("Installed Direct package manifest does not match the public contract");
   }
 }
 
@@ -131,20 +186,34 @@ if (
 }
 const work = await mkdtemp(join(tmpdir(), "hraness-package-smoke-"));
 try {
-  const archive = join(work, "package.tgz");
+  const archiveArguments = process.argv.slice(2);
+  if (archiveArguments.length > 1) {
+    throw new Error("Usage: bun run scripts/package-smoke.ts [package.tgz]");
+  }
+  const suppliedArchive = archiveArguments[0];
+  const archive = suppliedArchive === undefined
+    ? join(work, "package.tgz")
+    : isAbsolute(suppliedArchive)
+      ? suppliedArchive
+      : resolve(repository, suppliedArchive);
   const consumer = join(work, "consumer");
+  const npmConsumer = join(work, "npm-consumer");
   await mkdir(consumer);
-  await run([
-    process.execPath,
-    "pm",
-    "pack",
-    "--filename",
-    archive,
-    "--ignore-scripts",
-    "--quiet",
-  ], repository);
+  if (suppliedArchive === undefined) {
+    await run([
+      process.execPath,
+      "pm",
+      "pack",
+      "--filename",
+      archive,
+      "--ignore-scripts",
+      "--quiet",
+    ], repository);
+  }
+  await inspectPackageArtifact(archive);
   await writeFile(join(consumer, "package.json"), JSON.stringify({ private: true, type: "module" }));
   await run([process.execPath, "add", archive, "--ignore-scripts"], consumer);
+  await verifyInstalledManifest(consumer, packageManifest.version);
   await verifyPackagedSkill(consumer, packageManifest.version);
   await run(["node", "--input-type=module", "-e", `await import(${JSON.stringify(packageName)})`], consumer);
   for (const binName of binNames) {
@@ -299,6 +368,33 @@ try {
     }
   `);
   await run([process.execPath, "run", "./verify-runtime-boundary.ts"], consumer);
+
+  if (suppliedArchive !== undefined) {
+    await mkdir(npmConsumer);
+    await writeFile(
+      join(npmConsumer, "package.json"),
+      JSON.stringify({ private: true, type: "module" }),
+    );
+    await run([
+      "npm",
+      "install",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      archive,
+    ], npmConsumer, {
+      NPM_CONFIG_CACHE: join(work, "npm-cache"),
+      NPM_CONFIG_UPDATE_NOTIFIER: "false",
+    });
+    await verifyInstalledManifest(npmConsumer, packageManifest.version);
+    await verifyPackagedSkill(npmConsumer, packageManifest.version);
+    await run([
+      "node",
+      "--input-type=module",
+      "-e",
+      `await import(${JSON.stringify(packageName)})`,
+    ], npmConsumer);
+  }
 } finally {
   await rm(work, { recursive: true, force: true });
 }

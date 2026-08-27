@@ -6,7 +6,7 @@
 - `src/react.ts` – opt-in React bindings for a Direct store.
 - `src/web/` – atomic exact browser-session bridge installation plus low-level bridge and fail-closed application-fetch firewall.
 - `src/tooling/` – opt-in Bun/Node verification, Bombadil campaign and host lifecycle, and emitted-bundle scanning mechanics kept outside production runtime graphs.
-- `docs/` – architecture, adoption, verification, and wire-format reference.
+- `docs/` – architecture, adoption, verification, publishing, and wire-format reference.
 - `examples/todos/` – runnable React example with separate production and Direct entries.
 - `examples/react-native/` – runnable Expo example with platform-resolved native production and React Native Web Direct entries.
 - `skills/direct/` – one installable Agent Skill for Direct installation, adoption, verification, and production exclusion.
@@ -47,4 +47,4 @@
 - State proof limits precisely. Fixture evidence does not prove the live adapter, service, host, operating system, or device behavior that the composition replaces.
 - Run `bun run check` before handing off a change. Run the todo example's production build and marker scan when changing the example or package boundaries.
 - Run the React Native example's iOS, Android, and web export gate when changing mobile integration or production boundaries.
-- Treat a `v*` tag as a release request, not a completed release. Before tagging, confirm repository-level immutable releases are enabled; use a strictly increasing stable package version, keep the tag equal to `v<package.json version>` on `main`, and let the read-only verification job complete before its write-scoped publisher creates the Release. Do not create the next tag until that workflow and Release are verified because GitHub concurrency is not a durable queue. After tagging, verify the matching non-draft immutable Release is Latest.
+- Follow `docs/publishing.md` for the interactive npm bootstrap and later stage-only trusted publishing. Treat a `v*` tag as a release request after the exact package version is public on npm, not a completed release. Before tagging, confirm repository-level immutable releases are enabled; use a strictly increasing stable package version, keep the tag equal to `v<package.json version>` on `main`, and let the read-only verification job compare the npm artifact before its write-scoped publisher creates the Release. Do not create the next tag until that workflow and Release are verified because GitHub concurrency is not a durable queue. After tagging, verify the matching non-draft immutable Release is Latest.
