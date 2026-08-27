@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,40 @@ const agentGuideUrl = new URL("../AGENTS.md", import.meta.url);
 const npmRegistry = "https://registry.npmjs.org";
 const repository = fileURLToPath(new URL("../", import.meta.url));
 const firstPublicSourceCommit = "c6aa5a49c531b45216e3fb043b6e0ab8a392c13d";
+
+function workflowStepScript(workflow: string, name: string): string {
+  const stepMarker = `      - name: ${name}\n`;
+  const stepStart = workflow.indexOf(stepMarker);
+  if (stepStart < 0) throw new Error(`Workflow step not found: ${name}`);
+  const runMarker = "        run: |\n";
+  const runStart = workflow.indexOf(runMarker, stepStart);
+  if (runStart < 0) throw new Error(`Workflow step has no run script: ${name}`);
+  const lines = workflow.slice(runStart + runMarker.length).split("\n");
+  const script: string[] = [];
+  for (const line of lines) {
+    if (!line.startsWith("          ")) break;
+    script.push(line.slice(10));
+  }
+  return script.join("\n");
+}
+
+async function runWorkflowScript(
+  script: string,
+  environment: Readonly<Record<string, string>>,
+): Promise<Readonly<{ exitCode: number; stderr: string; stdout: string }>> {
+  const child = Bun.spawn(["/bin/bash", "-c", script], {
+    cwd: repository,
+    env: { ...process.env, ...environment },
+    stderr: "pipe",
+    stdout: "pipe",
+  });
+  const [exitCode, stderr, stdout] = await Promise.all([
+    child.exited,
+    new Response(child.stderr).text(),
+    new Response(child.stdout).text(),
+  ]);
+  return Object.freeze({ exitCode, stderr, stdout });
+}
 
 async function run(command: readonly string[], cwd: string): Promise<void> {
   const child = Bun.spawn([...command], { cwd, stderr: "inherit", stdout: "inherit" });
@@ -196,6 +230,13 @@ describe("npm release workflows", () => {
       "Downloaded files differ from the independent SHA-256 manifest",
       'git init --quiet --bare "$current_main"',
       '"https://github.com/$GITHUB_REPOSITORY.git"',
+      "EXPECTED_VERSION: ${{ needs.verify.outputs.package_version }}",
+      "Verified package version is not stable semantic version",
+      'release_tag="v$EXPECTED_VERSION"',
+      "git ls-remote --exit-code --refs",
+      '"refs/tags/$release_tag"',
+      "Tag $release_tag was created after package verification",
+      "Could not prove that tag $release_tag is still absent from origin",
       'current_archive_sha256="$(sha256sum "$TARBALL"',
       'current_metadata_sha256="$(sha256sum "$METADATA"',
       'current_digest_sha256="$(sha256sum "$DIGEST"',
@@ -221,12 +262,14 @@ describe("npm release workflows", () => {
     const downloadIndex = stageJob.indexOf("Download reviewed package");
     const rebindIndex = stageJob.indexOf("Rebind downloaded package");
     const fetchIndex = stageJob.lastIndexOf('git --git-dir="$current_main" fetch');
+    const tagLookupIndex = stageJob.lastIndexOf("git ls-remote --exit-code --refs");
     const rehashIndex = stageJob.lastIndexOf('current_archive_sha256="$(sha256sum "$TARBALL"');
     const stageIndex = stageJob.indexOf('npm stage publish "$TARBALL"');
     expect(bindIndex).toBeLessThan(downloadIndex);
     expect(downloadIndex).toBeLessThan(rebindIndex);
     expect(rebindIndex).toBeLessThan(fetchIndex);
-    expect(fetchIndex).toBeLessThan(rehashIndex);
+    expect(fetchIndex).toBeLessThan(tagLookupIndex);
+    expect(tagLookupIndex).toBeLessThan(rehashIndex);
     expect(rehashIndex).toBeLessThan(stageIndex);
 
     expect(workflow).not.toContain("secrets.NPM_TOKEN");
@@ -237,6 +280,85 @@ describe("npm release workflows", () => {
       .toHaveLength(2);
     expect(new Set(workflow.match(/--registry=[^\s"']+/gu) ?? []))
       .toEqual(new Set([`--registry=${npmRegistry}`]));
+  });
+
+  test("rechecks exact remote-tag absence at the terminal staging boundary", async () => {
+    const workflow = await readFile(stageWorkflowUrl, "utf8");
+    const script = workflowStepScript(workflow, "Revalidate current main and stage exact package");
+    const directory = await mkdtemp(join(tmpdir(), "direct-stage-tag-"));
+    const binaryDirectory = join(directory, "bin");
+    const commandLog = join(directory, "commands.log");
+    const publishMarker = join(directory, "published.txt");
+    const tarball = join(directory, "hraness-direct-0.7.5.tgz");
+    const metadata = join(directory, "npm-pack.json");
+    const digest = join(directory, "npm-package.sha256");
+    const sourceSha = "b".repeat(40);
+    const archiveSha256 = "c".repeat(64);
+    const metadataSha256 = "d".repeat(64);
+    const digestSha256 = "e".repeat(64);
+    const gitStub = join(binaryDirectory, "git");
+    const npmStub = join(binaryDirectory, "npm");
+    const sha256Stub = join(binaryDirectory, "sha256sum");
+
+    try {
+      await mkdir(binaryDirectory, { recursive: true });
+      await Promise.all([
+        writeFile(tarball, "reviewed tarball fixture\n", "utf8"),
+        writeFile(metadata, "reviewed metadata fixture\n", "utf8"),
+        writeFile(digest, "reviewed digest fixture\n", "utf8"),
+      ]);
+      await writeFile(gitStub, `#!/bin/bash\nset -euo pipefail\nprintf 'git %s\\n' "$*" >> "$COMMAND_LOG"\nif [[ "\${1-}" == "ls-remote" ]]; then\n  case "$GIT_TAG_STATUS" in\n    absent) exit 2 ;;\n    present) printf '%s\\trefs/tags/v0.7.5\\n' "$GITHUB_SHA"; exit 0 ;;\n    ambiguous) printf '%s\\trefs/tags/v0.7.5\\n' "$GITHUB_SHA"; exit 2 ;;\n    failure) echo 'simulated remote lookup failure' >&2; exit 128 ;;\n  esac\nfi\nif [[ "$*" == *"rev-parse FETCH_HEAD"* ]]; then\n  printf '%s\\n' "$GITHUB_SHA"\nfi\n`, "utf8");
+      await writeFile(sha256Stub, `#!/bin/bash\nset -euo pipefail\nprintf 'sha256sum %s\\n' "$*" >> "$COMMAND_LOG"\ncase "$1" in\n  "$TARBALL") value="$EXPECTED_ARCHIVE_SHA256" ;;\n  "$METADATA") value="$EXPECTED_METADATA_SHA256" ;;\n  "$DIGEST") value="$EXPECTED_DIGEST_SHA256" ;;\n  *) echo "unexpected hash target: $1" >&2; exit 1 ;;\nesac\nprintf '%s  %s\\n' "$value" "$1"\n`, "utf8");
+      await writeFile(npmStub, `#!/bin/bash\nset -euo pipefail\nprintf 'npm %s\\n' "$*" >> "$COMMAND_LOG"\nprintf 'published\\n' > "$PUBLISH_MARKER"\n`, "utf8");
+      await Promise.all([chmod(gitStub, 0o755), chmod(npmStub, 0o755), chmod(sha256Stub, 0o755)]);
+
+      const baseEnvironment = Object.freeze({
+        COMMAND_LOG: commandLog,
+        DEFAULT_BRANCH: "main",
+        DIGEST: digest,
+        EXPECTED_ARCHIVE_SHA256: archiveSha256,
+        EXPECTED_DIGEST_SHA256: digestSha256,
+        EXPECTED_METADATA_SHA256: metadataSha256,
+        EXPECTED_SOURCE_SHA: sourceSha,
+        EXPECTED_VERSION: "0.7.5",
+        GITHUB_REF: "refs/heads/main",
+        GITHUB_REPOSITORY: "hraness/direct",
+        GITHUB_SHA: sourceSha,
+        METADATA: metadata,
+        PATH: `${binaryDirectory}:${process.env.PATH ?? ""}`,
+        PUBLISH_MARKER: publishMarker,
+        RUNNER_TEMP: directory,
+        TARBALL: tarball,
+      });
+
+      const absent = await runWorkflowScript(script, { ...baseEnvironment, GIT_TAG_STATUS: "absent" });
+      expect(absent.exitCode).toBe(0);
+      expect(await readFile(publishMarker, "utf8")).toBe("published\n");
+      const commands = await readFile(commandLog, "utf8");
+      const fetchIndex = commands.indexOf("fetch --quiet --no-tags --depth=1");
+      const tagIndex = commands.indexOf("git ls-remote --exit-code --refs");
+      const hashIndex = commands.indexOf("sha256sum");
+      const publishIndex = commands.indexOf("npm stage publish");
+      expect(fetchIndex).toBeGreaterThan(-1);
+      expect(tagIndex).toBeGreaterThan(fetchIndex);
+      expect(hashIndex).toBeGreaterThan(tagIndex);
+      expect(publishIndex).toBeGreaterThan(hashIndex);
+
+      for (const tagStatus of ["present", "ambiguous", "failure"] as const) {
+        await rm(commandLog, { force: true });
+        await rm(publishMarker, { force: true });
+        const rejected = await runWorkflowScript(script, { ...baseEnvironment, GIT_TAG_STATUS: tagStatus });
+        expect(rejected.exitCode).not.toBe(0);
+        expect(`${rejected.stdout}${rejected.stderr}`).toContain(
+          tagStatus === "present"
+            ? "Tag v0.7.5 was created after package verification"
+            : "Could not prove that tag v0.7.5 is still absent from origin",
+        );
+        expect(await Bun.file(publishMarker).exists()).toBe(false);
+      }
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 
   test("gates immutable releases on canonical package content and supports bounded recovery", async () => {
