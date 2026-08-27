@@ -62,12 +62,24 @@ Start from the current `main` commit after its required checks pass. Use Node
    Git, a workflow, a task file, or chat.
 
 6. Confirm that `@hraness/direct@0.7.5` is public, `latest` names `0.7.5`, and
-   the registry metadata and tarball match the reviewed artifact. Install the
-   registry package in another clean consumer before creating `v0.7.5`.
+   the registry metadata and canonical package contents match the reviewed
+   artifact. Install the registry package in another clean consumer before
+   creating `v0.7.5`.
 
 The tag workflow verifies the public npm artifact before it creates the
 immutable GitHub Release. A missing or different registry version stops that
 release.
+
+The source and registry `.tgz` files do not need identical transport bytes.
+gzip and tar metadata can vary across operating systems even when every package
+file is the same. The release gate verifies each tarball's own npm SHA-1 and
+SHA-512, then compares the complete extracted package identity: entry type,
+safe path, mode, size, and SHA-256 and SHA-512 of every regular file. It rejects
+links, unsafe paths, unexpected files, inventory drift, and npm metadata that
+does not describe the inspected archive. Registry `dist` integrity, shasum,
+file count, unpacked size, and canonical tarball URL must also match. Filename
+comparison or raw compressed-byte comparison is not a substitute for this
+proof.
 
 ## Configure trusted publishing
 
@@ -110,6 +122,42 @@ checks out no source and runs no repository code. It downloads and revalidates
 the three exact files, fetches the current default-branch head into a new bare
 Git directory, rehashes all three files, and only then stages the reviewed
 tarball through `https://registry.npmjs.org`.
+
+## Recover a failed tag release
+
+Use recovery only when npm delivery and the stable tag already succeeded but
+the tag workflow failed before it created the GitHub Release. Never move or
+delete the tag, and never republish the npm version.
+
+First merge the release-workflow fix to `main`. Then dispatch **Release** from
+the current `main` branch and enter the exact existing stable tag. For example:
+
+```sh
+gh workflow run release.yml --ref main -f tag=v0.7.5
+```
+
+The recovery path accepts only the newest stable repository tag. It freshly
+resolves that tag from GitHub, requires its commit to remain reachable from
+current `main`, reads the name and version from the tagged `package.json`, and
+checks and builds the tagged source in a detached worktree. This explicit
+tagged `bun run check` is the only source-build boundary. Afterward, the
+workflow rebinds the release helpers to their reviewed Git blobs in the current
+workflow checkout and invokes those files by absolute path while retaining the
+tagged tree as the package working directory. Bun is given no tag-owned config
+or environment file while it loads the current helpers. The package step uses
+`npm pack --ignore-scripts`, so it consumes the checked build without running
+the tag's `prepack` or another tagged lifecycle script. The current helpers
+import their current core-only archive inspector. They do not import a script
+from the tagged tree. They download the public npm artifact and apply the same
+canonical package-identity and clean-consumer gates used by future tag pushes.
+
+Immediately before creating the Release, the write-scoped job resolves the tag
+and default branch again, checks stable tag and published Release ordering, and
+requires recovery to still be running from the verified current `main` commit.
+Any tag movement, branch advance, newer stable tag, newer stable Release, npm
+metadata drift, or package-content difference stops recovery. A successful run
+creates and validates the immutable, asset-free, Latest GitHub Release. It does
+not write to npm or Git tags.
 
 See npm's documentation for [trusted
 publishing](https://docs.npmjs.com/trusted-publishers/) and [staged
