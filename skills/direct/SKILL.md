@@ -1,6 +1,6 @@
 ---
 name: direct
-description: Use Hraness Direct to install, adopt, test, audit, or troubleshoot deterministic frontend and UI testing workbenches for web, React, React Native, and Expo. Trigger for repeatable signed-in, empty, loading, and error states; frontend fixtures and scenario URLs; strict JSON worlds; product-owned ports and adapters; logical time; fail-closed network boundaries; agent-browser or Playwright verification; quiescence probes; coverage claims; property tests; and proving @hraness/direct stays out of production bundles.
+description: Use Hraness Direct to install, adopt, test, audit, or troubleshoot deterministic frontend and UI testing workbenches for web, React, React Native, and Expo. Trigger for repeatable signed-in, empty, loading, and error states; frontend fixtures and scenario URLs; strict JSON worlds; product-owned ports and adapters; logical time; fail-closed network boundaries; agent-browser, Playwright, or Bombadil verification; quiescence probes; coverage claims; property tests; and proving @hraness/direct stays out of production bundles.
 ---
 
 # Direct

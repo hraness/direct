@@ -26,6 +26,12 @@
       "@hraness/direct/tooling/browser-verification": [
         "./src/tooling/browser-verification-entry.ts"
       ],
+      "@hraness/direct/tooling/bombadil": [
+        "./src/tooling/bombadil.ts"
+      ],
+      "@hraness/direct/tooling/bombadil-campaign": [
+        "./src/tooling/bombadil-campaign.ts"
+      ],
       "@hraness/direct/tooling/bundle-boundary": [
         "./src/tooling/bundle-boundary.ts"
       ],

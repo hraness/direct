@@ -32,7 +32,20 @@ artifacts when they fit the repository. They invoke the consumer's local
 agent-browser installation; they do not bundle a driver, coordinate parallel
 work, supervise cleanup, or own product commands and evidence.
 
-Use one task-owned local Chromium session and process for a sequential batch of
+When a product already has a Bombadil campaign, prefer the shared
+`@hraness/direct/tooling/bombadil-campaign` factories and
+`@hraness/direct/tooling/bombadil` host runner instead of copying Direct
+extractors, temporal formulas, trace parsers, server leases, process-group
+cleanup, or artifact code. Pin `@antithesishq/bombadil@0.7.2` directly in the
+consumer. Keep the default browser properties, exported Direct formulas, and
+conservative Direct action generator in the campaign; keep product-specific
+actions and assertions local. Random runs must be 12 to 300 seconds. Require
+the runner's canonical post-run trace attestation even when Bombadil exits
+zero, and retain raw trace, process log, server log, and failure artifacts.
+Treat the result as diagnostic fuzz evidence, not as a semantic product check
+or proof of any replaced system.
+
+For the agent-browser path, use one task-owned local Chromium session and process for a sequential batch of
 at most eight scenarios. Before each scenario, call `window new` for a fresh
 BrowserContext. Inventory its tabs and attempt to close scenario-owned tabs,
 retaining each command result and the post-attempt inventory. agent-browser

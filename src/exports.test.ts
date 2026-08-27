@@ -5,6 +5,8 @@ import * as core from "@hraness/direct/core";
 import { createDirectReactBindings } from "@hraness/direct/react";
 import * as testing from "@hraness/direct/testing";
 import * as browserVerification from "@hraness/direct/tooling/browser-verification";
+import * as bombadil from "@hraness/direct/tooling/bombadil";
+import type { DirectBombadilProperties } from "@hraness/direct/tooling/bombadil-campaign";
 import * as bundleBoundary from "@hraness/direct/tooling/bundle-boundary";
 import * as web from "@hraness/direct/web";
 
@@ -56,14 +58,28 @@ describe("public package exports", () => {
   });
 
   test("host tooling stays behind explicit subpaths", () => {
+    expect(Object.keys(bombadil).toSorted()).toEqual([
+      "attestDirectBombadilTrace",
+      "runDirectBombadilFuzz",
+    ]);
     expect(typeof browserVerification.createAgentBrowser).toBe("function");
     expect(typeof browserVerification.createDirectBrowserContractReader).toBe("function");
     expect(typeof browserVerification.readDirectBrowserContract).toBe("function");
+    expect(typeof bombadil.runDirectBombadilFuzz).toBe("function");
+    expect(typeof bombadil.attestDirectBombadilTrace).toBe("function");
     expect(typeof bundleBoundary.checkBundleBoundary).toBe("function");
     expect(typeof bundleBoundary.findForbiddenMarkers).toBe("function");
     expect("createAgentBrowser" in root).toBeFalse();
     expect("checkBundleBoundary" in root).toBeFalse();
     expect("createAgentBrowser" in web).toBeFalse();
     expect("checkBundleBoundary" in testing).toBeFalse();
+    type PublicRunnerArity = Parameters<typeof bombadil.runDirectBombadilFuzz>["length"];
+    const supportedRunnerArities: readonly PublicRunnerArity[] = [1, 2];
+    // @ts-expect-error Dependency injection stays internal to package tests.
+    const unsupportedRunnerArity: PublicRunnerArity = 3;
+    expect(supportedRunnerArities).toEqual([1, 2]);
+    void unsupportedRunnerArity;
+    type CampaignProperties = DirectBombadilProperties;
+    void (undefined as unknown as CampaignProperties);
   });
 });

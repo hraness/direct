@@ -41,8 +41,10 @@ browser sessions, selectors, navigation, screenshots, or action histories.
 
 Direct's browser runtime remains driver-neutral and never launches a process.
 The opt-in Bun/Node verification tooling can invoke the consumer's local
-agent-browser installation, while the product verifier owns the commands,
-process lifetime, context policy, navigation, and evidence capture.
+agent-browser installation. Its optional Bombadil runner owns one bounded
+native fuzzing invocation and one explicitly configured local server. The
+product verifier owns semantic commands, context policy, navigation intent,
+evidence claims, and host-wide admission.
 
 The canonical local policy uses one task-owned agent-browser session and one
 Chromium process for a sequential batch of at most eight scenarios. The
@@ -76,8 +78,10 @@ cleanup claims require an external supervisor that owns both the agent-browser
 daemon and Chromium roots, or one containing job. Those roots can occupy
 different process groups, so daemon exit alone cannot prove cleanup.
 
-Direct provides no coordinator, supervisor, browser-run evidence, or
-performance evidence. Reports record the driver version, allowed hosts,
+Direct provides no shared coordinator, browser pool, crash-safe host
+supervisor, browser-run proof, or performance evidence. The Bombadil helper
+supervises only its owned invocation and records diagnostic trace attestation.
+Reports record the driver version, allowed hosts,
 execution mode, verifier-assigned scenario/context label, fresh `window new`
 command and result, tab inventories and close-attempt results, browser
 identity, and final close result.
@@ -116,7 +120,7 @@ A clean marker scan is narrow evidence: the scanned files did not contain the co
 
 ## Keep optional surfaces isolated
 
-The default `@hraness/direct` export is the curated definition and activation path. Advanced JSON, fixture, catalog, store, runtime, effect, and resource mechanics live under `@hraness/direct/core`. React bindings live under `@hraness/direct/react`, sessions and scripted test utilities under `@hraness/direct/testing`, and browser installation under `@hraness/direct/web`. Host-only verification and emitted-bundle scanning live under explicit `@hraness/direct/tooling/*` subpaths built for Bun with Node APIs. None of the default, core, testing, or web surfaces imports those host tools. The package runtime does not import React Native or Expo; the React Native example composes these surfaces from a platform-resolved web entry.
+The default `@hraness/direct` export is the curated definition and activation path. Advanced JSON, fixture, catalog, store, runtime, effect, and resource mechanics live under `@hraness/direct/core`. React bindings live under `@hraness/direct/react`, sessions and scripted test utilities under `@hraness/direct/testing`, and browser installation under `@hraness/direct/web`. Host verification, Bombadil integration, and emitted-bundle scanning live under explicit `@hraness/direct/tooling/*` subpaths built separately from the runtime. The Bombadil campaign subpath contains no filesystem or process APIs because the 0.7.2 specification compiler loads it into a browser campaign. None of the default, core, testing, or web surfaces imports these tools. The package runtime does not import React Native or Expo; the React Native example composes these surfaces from a platform-resolved web entry.
 
 `installDirectBrowser` enables the fetch firewall by default. It intercepts application calls to `fetch` in its JavaScript realm and denies a request unless the product's allow predicate accepts its parsed URL. It does not intercept WebSockets, EventSource, navigation, asset loading, native calls, or traffic in another realm. Use it only in a Direct browser entry. Pass `firewall: false` only when another checked boundary owns network containment.
 
