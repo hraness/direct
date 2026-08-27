@@ -29,18 +29,21 @@ Start from the current `main` commit after its required checks pass. Use Node
 
    Continue only when this command produces no output.
 
-4. Create one npm tarball in a new temporary directory.
+4. Create one npm tarball and preserve its exact npm metadata in a new temporary
+   directory.
 
    ```sh
    direct_npm_artifact="$(mktemp -d)"
    bun run ./scripts/prepare-npm-package.ts "$direct_npm_artifact"
    bun run ./scripts/package-smoke.ts \
-     "$direct_npm_artifact/hraness-direct-0.7.5.tgz"
+     --archive "$direct_npm_artifact/hraness-direct-0.7.5.tgz" \
+     --pack-json "$direct_npm_artifact/npm-pack.json"
    ```
 
-   Read the complete inventory and its file-count, packed-size, and
-   unpacked-size result before continuing. The smoke installs this exact file
-   into a clean consumer and exercises every supported package surface.
+   Read the complete inventory, file-count, packed-size, unpacked-size, SHA-1,
+   and SHA-512 result before continuing. The smoke binds those reported values
+   to this exact tarball, installs it with Bun and npm in clean consumers, and
+   exercises every supported package surface.
 
 5. Publish the reviewed file with the signed-in maintainer session.
 
@@ -90,17 +93,23 @@ staged release.
 2. Dispatch **Stage npm package** from the current `main` branch. The workflow
    rejects a tag, another branch, or a commit behind the current default-branch
    head.
-3. Download or inspect the uploaded tarball and the npm staged package. Compare
-   its version, inventory, integrity, and source commit with the workflow run.
+3. Inspect the uniquely named artifact from the read-only verification job. It
+   contains exactly the tarball, `npm-pack.json`, and `npm-package.sha256`.
+   Compare its source commit, name, version, inventory, modes, sizes, SHA-1,
+   SHA-512, and independent SHA-256 values with the workflow run.
 4. Approve the staged package through npm with two-factor authentication.
 5. Verify the public registry package in a clean consumer.
 6. Create and push the matching `v<version>` tag on the same `main` commit. The
    existing tag workflow verifies npm delivery, then creates the immutable
    GitHub Release.
 
-The stage workflow uses a GitHub-hosted runner, Node 24, npm 11.19.0, Bun
-1.3.14, disabled package-manager caching, and no stored npm token. It uploads
-the exact tarball that it submits to npm.
+The read-only verification job uses a GitHub-hosted runner, Node 24, npm
+11.19.0, Bun 1.3.14, disabled package-manager caching, and no stored npm token.
+The dependent terminal staging job is the only job with OIDC authority. It
+checks out no source and runs no repository code. It downloads and revalidates
+the three exact files, fetches the current default-branch head into a new bare
+Git directory, rehashes all three files, and only then stages the reviewed
+tarball through `https://registry.npmjs.org`.
 
 See npm's documentation for [trusted
 publishing](https://docs.npmjs.com/trusted-publishers/) and [staged

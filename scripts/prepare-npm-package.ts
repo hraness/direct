@@ -1,10 +1,12 @@
-import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
 import { inspectPackageArtifact } from "./package-artifact.js";
 
 const packageName = "@hraness/direct";
+const npmRegistry = "https://registry.npmjs.org";
 const requiredNpmVersion = "11.19.0";
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -137,7 +139,10 @@ const manifestVersion = verifyPublicManifest(manifest);
 
 const work = await mkdtemp(join(tmpdir(), "direct-npm-pack-"));
 try {
-  const npmEnvironment = { NPM_CONFIG_CACHE: join(work, "npm-cache") };
+  const npmEnvironment = {
+    NPM_CONFIG_CACHE: join(work, "npm-cache"),
+    NPM_CONFIG_REGISTRY: npmRegistry,
+  };
   const npmVersion = await capture(["npm", "--version"], repository, npmEnvironment);
   if (npmVersion !== requiredNpmVersion) {
     throw new Error(`npm ${requiredNpmVersion} is required, received ${npmVersion}`);
@@ -155,6 +160,7 @@ try {
     "--json",
     "--pack-destination",
     outputDirectory,
+    `--registry=${npmRegistry}`,
   ], repository, npmEnvironment);
   const parsed = JSON.parse(packOutput) as unknown;
   if (!Array.isArray(parsed) || parsed.length !== 1) {
@@ -178,6 +184,7 @@ try {
   }
 
   const archive = join(outputDirectory, filename);
+  const archiveBytes = await readFile(archive);
   const inventory = await inspectPackageArtifact(archive);
   const reportedFileCount = integerField(result, "entryCount", "npm pack result");
   const reportedPackedBytes = integerField(result, "size", "npm pack result");
@@ -190,7 +197,55 @@ try {
     throw new Error("npm pack summary does not match the inspected tar archive");
   }
 
-  console.log(`npm integrity: ${stringField(result, "integrity", "npm pack result")}`);
+  if (stringField(result, "id", "npm pack result") !== `${manifestName}@${manifestVersion}`) {
+    throw new Error("npm pack identity does not match the public package contract");
+  }
+  const integrity = stringField(result, "integrity", "npm pack result");
+  const shasum = stringField(result, "shasum", "npm pack result");
+  const actualIntegrity = `sha512-${createHash("sha512").update(archiveBytes).digest("base64")}`;
+  const actualShasum = createHash("sha1").update(archiveBytes).digest("hex");
+  if (integrity !== actualIntegrity || shasum !== actualShasum) {
+    throw new Error("npm pack SHA-1 or SHA-512 does not match the exact archive bytes");
+  }
+
+  if (!Array.isArray(result.files) || result.files.length !== reportedFileCount) {
+    throw new Error("npm pack file inventory does not match entryCount");
+  }
+  const reportedFiles = new Map<string, number>();
+  for (const [index, value] of result.files.entries()) {
+    const file = record(value, `npm pack result file ${String(index + 1)}`);
+    const path = stringField(file, "path", `npm pack result file ${String(index + 1)}`);
+    const size = integerField(file, "size", `npm pack result file ${String(index + 1)}`);
+    const mode = integerField(file, "mode", `npm pack result file ${String(index + 1)}`);
+    if (path.includes("\\") || path.startsWith("/") || path.split("/").some((part) => (
+      part === "" || part === "." || part === ".."
+    ))) {
+      throw new Error(`npm pack file inventory contains an unsafe path: ${path}`);
+    }
+    if (mode !== 0o644 && mode !== 0o755) {
+      throw new Error(`npm pack file inventory contains an unsafe mode for ${path}`);
+    }
+    if (reportedFiles.has(path)) {
+      throw new Error(`npm pack file inventory contains a duplicate path: ${path}`);
+    }
+    reportedFiles.set(path, size);
+  }
+  for (const file of inventory.files) {
+    if (reportedFiles.get(file.path) !== file.size) {
+      throw new Error(`npm pack file inventory differs from the tar archive for ${file.path}`);
+    }
+  }
+  if (reportedFiles.size !== inventory.files.length) {
+    throw new Error("npm pack file inventory contains a path absent from the tar archive");
+  }
+
+  const outputEntries = await readdir(outputDirectory);
+  if (outputEntries.length !== 1 || outputEntries[0] !== filename) {
+    throw new Error("npm pack produced an unexpected output entry");
+  }
+  await writeFile(join(outputDirectory, "npm-pack.json"), `${packOutput}\n`, { flag: "wx" });
+
+  console.log(`npm integrity: ${integrity}`);
   console.log(`Prepared npm package: ${archive}`);
 } finally {
   await rm(work, { force: true, recursive: true });
