@@ -1527,7 +1527,7 @@ function validateTargetQuery(value) {
     throw new Error("targetQuery may contain at most 16 parameters");
   }
   const validated = {};
-  for (const [name, queryValue] of entries.toSorted(([left], [right]) => left.localeCompare(right))) {
+  for (const [name, queryValue] of [...entries].sort(([left], [right]) => left.localeCompare(right))) {
     if (name.length === 0 || name.length > 128 || !QUERY_PARAMETER_NAME_PATTERN.test(name) || PROTOTYPE_PROPERTY_NAMES.has(name) || hasControlCharacters3(name) || name === SCENARIO_QUERY_KEY2 || name === FIXTURE_QUERY_KEY2) {
       throw new Error("targetQuery contains an invalid or reserved parameter name");
     }

@@ -688,7 +688,7 @@ function validateTargetQuery(value: unknown): Readonly<Record<string, string>> {
     throw new Error("targetQuery may contain at most 16 parameters");
   }
   const validated: Record<string, string> = {};
-  for (const [name, queryValue] of entries.toSorted(([left], [right]) =>
+  for (const [name, queryValue] of [...entries].sort(([left], [right]) =>
     left.localeCompare(right)
   )) {
     if (

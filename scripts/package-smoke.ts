@@ -105,8 +105,8 @@ function typeScriptConfig(options: {
 }): string {
   return `${JSON.stringify({
     compilerOptions: {
-      target: "ES2023",
-      lib: ["ES2023", "DOM", "DOM.Iterable"],
+      target: "ES2022",
+      lib: ["ES2022", "DOM", "DOM.Iterable"],
       jsx: "react-jsx",
       strict: true,
       noEmit: true,

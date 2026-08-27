@@ -11,7 +11,7 @@ state with predictable local stand-ins. it does not click through the browser
 or test the systems it replaces.
 
 ```sh
-bun add --dev github:hraness/direct#v0.7.2
+bun add --dev github:hraness/direct#v0.7.3
 ```
 
 [overview](https://hraness.com/direct)
@@ -48,7 +48,7 @@ Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
 Use $direct to install hraness/direct from
-https://github.com/hraness/direct at the immutable v0.7.2 tag. Follow the
+https://github.com/hraness/direct at the immutable v0.7.3 tag. Follow the
 repository README, add `@hraness/direct` to devDependencies only, and verify
 that the production dependency graph excludes Direct. Do not add a fixture
 composition until I ask.
@@ -64,7 +64,7 @@ Pin the public repository to an immutable version tag:
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "github:hraness/direct#v0.7.2"
+    "@hraness/direct": "github:hraness/direct#v0.7.3"
   }
 }
 ```
