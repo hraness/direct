@@ -108,7 +108,7 @@ async function checkBundleBoundary(options) {
   }
   return {
     scanned: Object.freeze([...scanned].sort()),
-    violations: Object.freeze(violations.toSorted((left, right) => left.file.localeCompare(right.file)))
+    violations: Object.freeze([...violations].sort((left, right) => left.file.localeCompare(right.file)))
   };
 }
 export {
