@@ -21,7 +21,7 @@ global `direct` CLI.
 For a new installation, pin the reviewed public release:
 
 ```sh
-bun add --dev github:hraness/direct#v0.7.3
+bun add --dev github:hraness/direct#v0.7.4
 ```
 
 The equivalent manifest entry is:
@@ -29,7 +29,7 @@ The equivalent manifest entry is:
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "github:hraness/direct#v0.7.3"
+    "@hraness/direct": "github:hraness/direct#v0.7.4"
   }
 }
 ```

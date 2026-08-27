@@ -1,4 +1,5 @@
 node_modules/
+/artifacts/
 .next/
 next-env.d.ts
 *.tsbuildinfo

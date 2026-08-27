@@ -11,7 +11,7 @@ state with predictable local stand-ins. it does not click through the browser
 or test the systems it replaces.
 
 ```sh
-bun add --dev github:hraness/direct#v0.7.3
+bun add --dev github:hraness/direct#v0.7.4
 ```
 
 [overview](https://hraness.com/direct)
@@ -48,7 +48,7 @@ Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
 Use $direct to install hraness/direct from
-https://github.com/hraness/direct at the immutable v0.7.3 tag. Follow the
+https://github.com/hraness/direct at the immutable v0.7.4 tag. Follow the
 repository README, add `@hraness/direct` to devDependencies only, and verify
 that the production dependency graph excludes Direct. Do not add a fixture
 composition until I ask.
@@ -64,7 +64,7 @@ Pin the public repository to an immutable version tag:
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "github:hraness/direct#v0.7.3"
+    "@hraness/direct": "github:hraness/direct#v0.7.4"
   }
 }
 ```
@@ -234,11 +234,11 @@ launch arguments, allowed domains, scenario commands, and final close policy.
 
 ### Fuzz one Direct scenario
 
-Bombadil can explore a rendered Direct scenario while checking four shared
-properties: an exact bridge contract after a bounded startup handshake, one
-stable scenario, route, activation identity and nonempty catalog, zero declared
-violation counters, and recurring bounded quiescence. Install the supported
-release directly in the consumer:
+Bombadil can explore a rendered Direct scenario with four recurring bounded
+health properties. The host then attests the complete trace for one stable
+scenario, route, activation identity and catalog, exact contracts, zero
+declared violation counters, and final quiescence. Install the supported release
+directly in the consumer:
 
 ```sh
 bun add --dev @antithesishq/bombadil@0.7.2

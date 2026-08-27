@@ -253,41 +253,28 @@ export function createDirectBombadilProperties(): DirectBombadilProperties {
     readDirectBombadilObservation(state.window)
   ).named("direct");
 
-  const exactContract = eventually(() => {
-    if (
-      !direct.current.contractValid
-      || direct.current.activeSource !== "scenario"
-      || direct.current.activeScenario.length === 0
-      || direct.current.activeRoute.length === 0
-      || direct.current.activationHash.length === 0
-    ) {
-      return false;
-    }
-    const initialScenario = direct.current.activeScenario;
-    const initialRoute = direct.current.activeRoute;
-    const initialActivationHash = direct.current.activationHash;
-    return always(() =>
+  const exactContract = always(
+    eventually(() =>
       direct.current.contractValid
       && direct.current.activeSource === "scenario"
-      && direct.current.activeScenario === initialScenario
-      && direct.current.activeRoute === initialRoute
-      && direct.current.activationHash === initialActivationHash
-    );
-  }).within(10, "seconds");
-  const stableCatalog = eventually(() => {
-    if (!direct.current.contractValid) return false;
-    const initialCatalogHash = direct.current.catalogHash;
-    return always(() =>
-      initialCatalogHash.length > 0
-      && direct.current.catalogHash === initialCatalogHash
-    );
-  }).within(10, "seconds");
-  const noDeclaredViolations = eventually(() =>
-    always(() =>
-      direct.current.violationsValid
+      && direct.current.activeScenario.length > 0
+      && direct.current.activeRoute.length > 0
+      && direct.current.activationHash.length > 0
+    ).within(10, "seconds"),
+  );
+  const stableCatalog = always(
+    eventually(() =>
+      direct.current.contractValid
+      && direct.current.catalogHash.length > 0
+    ).within(10, "seconds"),
+  );
+  const noDeclaredViolations = always(
+    eventually(() =>
+      direct.current.contractValid
+      && direct.current.violationsValid
       && direct.current.violations.every((value: number) => value === 0)
-    )
-  ).within(10, "seconds");
+    ).within(10, "seconds"),
+  );
   const eventualQuiescence = always(
     eventually(() => direct.current.isQuiescent).within(10, "seconds"),
   );

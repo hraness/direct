@@ -340,12 +340,13 @@ run. The native runner supports Bombadil 0.7.2 on Apple silicon macOS and x64
 or arm64 Linux. Unsupported platform and architecture pairs fail before a
 server starts.
 
-The browser formulas permit at most ten seconds for initial bridge
-installation. After that handshake they require the exact contract, initial
-scenario, route, activation hash, catalog, and violation state continuously.
-Quiescence must recur within ten seconds. A formula result and Bombadil exit
-status are not sufficient evidence because a short or incomplete trace could
-otherwise pass vacuously.
+The browser formulas require an exact scenario contract, a nonempty catalog,
+zero declared violations, and quiescence to recur within ten seconds from every
+observed state. Bombadil's temporal engine cannot decide an unbounded `always`
+inside a bounded `eventually`, so continuous identity and catalog binding stay
+in the host attestation below. A formula result and Bombadil exit status are not
+sufficient evidence because a short or incomplete trace could otherwise pass
+vacuously.
 
 After every random run or replay, the host runner streams the bounded 0.7.2
 JSONL trace from foreign input and requires one named `direct` observation per
