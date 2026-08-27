@@ -211,7 +211,7 @@ try {
   if (!Array.isArray(result.files) || result.files.length !== reportedFileCount) {
     throw new Error("npm pack file inventory does not match entryCount");
   }
-  const reportedFiles = new Map<string, number>();
+  const reportedFiles = new Map<string, Readonly<{ mode: number; size: number }>>();
   for (const [index, value] of result.files.entries()) {
     const file = record(value, `npm pack result file ${String(index + 1)}`);
     const path = stringField(file, "path", `npm pack result file ${String(index + 1)}`);
@@ -228,11 +228,12 @@ try {
     if (reportedFiles.has(path)) {
       throw new Error(`npm pack file inventory contains a duplicate path: ${path}`);
     }
-    reportedFiles.set(path, size);
+    reportedFiles.set(path, Object.freeze({ mode, size }));
   }
   for (const file of inventory.files) {
-    if (reportedFiles.get(file.path) !== file.size) {
-      throw new Error(`npm pack file inventory differs from the tar archive for ${file.path}`);
+    const reported = reportedFiles.get(file.path);
+    if (reported?.size !== file.size || reported.mode !== file.mode) {
+      throw new Error(`npm pack file inventory differs from the tar archive mode or size for ${file.path}`);
     }
   }
   if (reportedFiles.size !== inventory.files.length) {

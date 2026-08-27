@@ -1,14 +1,114 @@
 import { describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { gunzipSync, gzipSync } from "node:zlib";
+
+import {
+  inspectPackageArtifact,
+  type PackageArtifactInventory,
+} from "./package-artifact.js";
+import { verifyNpmPackageIdentity } from "./npm-package-identity.js";
 
 const stageWorkflowUrl = new URL("../.github/workflows/npm-stage.yml", import.meta.url);
 const releaseWorkflowUrl = new URL("../.github/workflows/release.yml", import.meta.url);
 const manifestUrl = new URL("../package.json", import.meta.url);
 const packageSmokeUrl = new URL("./package-smoke.ts", import.meta.url);
 const packagePreparationUrl = new URL("./prepare-npm-package.ts", import.meta.url);
+const packageArtifactUrl = new URL("./package-artifact.ts", import.meta.url);
+const packageIdentityUrl = new URL("./npm-package-identity.ts", import.meta.url);
 const publishingGuideUrl = new URL("../docs/publishing.md", import.meta.url);
 const agentGuideUrl = new URL("../AGENTS.md", import.meta.url);
 const npmRegistry = "https://registry.npmjs.org";
+const repository = fileURLToPath(new URL("../", import.meta.url));
+
+async function run(command: readonly string[], cwd: string): Promise<void> {
+  const child = Bun.spawn([...command], { cwd, stderr: "inherit", stdout: "inherit" });
+  const exitCode = await child.exited;
+  if (exitCode !== 0) throw new Error(`Command failed (${String(exitCode)}): ${command.join(" ")}`);
+}
+
+function sha1(bytes: Uint8Array): string {
+  return createHash("sha1").update(bytes).digest("hex");
+}
+
+function integrity(bytes: Uint8Array): string {
+  return `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+}
+
+function packJson(
+  bytes: Uint8Array,
+  inventory: PackageArtifactInventory,
+  name: string,
+  version: string,
+  reverseFiles = false,
+): string {
+  const files = reverseFiles ? [...inventory.files].reverse() : inventory.files;
+  return `${JSON.stringify([{
+    bundled: [],
+    entryCount: inventory.fileCount,
+    filename: `hraness-direct-${version}.tgz`,
+    files: files.map((file) => ({
+      mode: file.mode,
+      path: file.path,
+      size: file.size,
+    })),
+    id: `${name}@${version}`,
+    integrity: integrity(bytes),
+    name,
+    shasum: sha1(bytes),
+    size: bytes.byteLength,
+    unpackedSize: inventory.unpackedBytes,
+    version,
+  }], null, 2)}\n`;
+}
+
+function registryView(
+  bytes: Uint8Array,
+  inventory: PackageArtifactInventory,
+  name: string,
+  version: string,
+): string {
+  return `${JSON.stringify({
+    dist: {
+      fileCount: inventory.fileCount,
+      integrity: integrity(bytes),
+      shasum: sha1(bytes),
+      tarball: `${npmRegistry}/${name}/-/direct-${version}.tgz`,
+      unpackedSize: inventory.unpackedBytes,
+    },
+    name,
+    version,
+  }, null, 2)}\n`;
+}
+
+function readTarOctal(tar: Buffer, offset: number): number {
+  const value = tar.subarray(offset, offset + 12).toString("ascii").replace(/\0.*$/u, "").trim();
+  return Number.parseInt(value, 8);
+}
+
+function firstRegularHeader(tar: Buffer): Readonly<{ offset: number; size: number }> {
+  let offset = 0;
+  while (offset + 512 <= tar.length) {
+    const header = tar.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) break;
+    const size = readTarOctal(tar, offset + 124);
+    const type = tar[offset + 156] ?? 0;
+    if ((type === 0 || type === 48) && size > 0) return Object.freeze({ offset, size });
+    offset += 512 + Math.ceil(size / 512) * 512;
+  }
+  throw new Error("Test package contains no non-empty regular file");
+}
+
+function writeHeaderChecksum(tar: Buffer, offset: number): void {
+  tar.fill(32, offset + 148, offset + 156);
+  let checksum = 0;
+  for (let index = offset; index < offset + 512; index += 1) checksum += tar[index] ?? 0;
+  const field = `${checksum.toString(8).padStart(6, "0")}\0 `;
+  tar.write(field, offset + 148, 8, "ascii");
+}
 
 describe("npm release workflows", () => {
   test("separates read-only verification from the exact terminal OIDC stage", async () => {
@@ -137,14 +237,67 @@ describe("npm release workflows", () => {
       .toEqual(new Set([`--registry=${npmRegistry}`]));
   });
 
-  test("gates immutable GitHub releases on the exact public npm artifact", async () => {
-    const workflow = await readFile(releaseWorkflowUrl, "utf8");
+  test("gates immutable releases on canonical package content and supports bounded recovery", async () => {
+    const [workflow, artifact, identity] = await Promise.all([
+      readFile(releaseWorkflowUrl, "utf8"),
+      readFile(packageArtifactUrl, "utf8"),
+      readFile(packageIdentityUrl, "utf8"),
+    ]);
 
-    expect(workflow).toContain("Verify exact npm delivery");
-    expect(workflow).toContain("scripts/prepare-npm-package.ts");
-    expect(workflow).toContain('npm pack "$package_spec"');
-    expect(workflow).toContain(`--registry=${npmRegistry}`);
-    expect(workflow).toContain('cmp "$source_archive" "$registry_archive"');
+    for (const required of [
+      "workflow_dispatch:",
+      "Existing stable tag to recover after npm delivery succeeded",
+      "RECOVERY_TAG: ${{ inputs.tag }}",
+      "Recovery must run from current $DEFAULT_BRANCH head",
+      'release_ref="refs/direct-release-tags/$release_tag"',
+      'git merge-base --is-ancestor "$tag_commit" "$default_head"',
+      "Tag $release_tag is not the newest stable tag",
+      'git worktree add --detach "$source_tree" "$SOURCE_SHA"',
+      "Verify canonical npm delivery",
+      "scripts/prepare-npm-package.ts",
+      'npm pack "$package_spec"',
+      'npm view "$package_spec" name version dist',
+      "scripts/npm-package-identity.ts",
+      '--source-archive "$source_archive"',
+      '--source-pack-json "$source_pack_json"',
+      '--registry-archive "$registry_archive"',
+      '--registry-pack-json "$registry_pack_json"',
+      '--registry-view-json "$registry_view_json"',
+      "scripts/package-smoke.ts",
+      'current_tag_sha="$(gh api',
+      'compare/$VERIFIED_SOURCE_SHA...$current_default_sha',
+      '"$EVENT_MODE" == recovery && "$current_default_sha" != "$WORKFLOW_SHA"',
+      '"/repos/$GITHUB_REPOSITORY/tags?per_page=100"',
+      '"/repos/$GITHUB_REPOSITORY/releases?per_page=100"',
+      `--registry=${npmRegistry}`,
+    ] as const) {
+      expect(workflow).toContain(required);
+    }
+    expect(workflow).not.toContain('cmp "$source_archive" "$registry_archive"');
+    expect(workflow).not.toMatch(/\bnpm (?:publish|stage publish)\b/u);
+    expect(workflow.match(/contents: write/gu) ?? []).toHaveLength(1);
+
+    for (const required of [
+      "contentSha256",
+      "contentSha512",
+      "Unsupported package tar entry type",
+      "Package tar contains data after its zero trailer",
+      "maxOutputLength",
+      "actual.mode !== file.mode",
+    ] as const) {
+      expect(`${artifact}\n${identity}`).toContain(required);
+    }
+    for (const required of [
+      "Source and registry package content differ at canonical entry",
+      "Source and registry npm pack file metadata differ",
+      "npm registry metadata differs from the downloaded canonical package",
+      "canonicalRegistryTarball",
+      'createHash("sha1")',
+      'createHash("sha256")',
+      'createHash("sha512")',
+    ] as const) {
+      expect(identity).toContain(required);
+    }
   });
 
   test("pins public publication to the canonical npm registry", async () => {
@@ -208,5 +361,146 @@ describe("npm release workflows", () => {
     expect(guide).toMatch(/new bare\s+Git directory/u);
     expect(agents).toContain("only its minimal dependent staging job may request OIDC");
     expect(agents).toContain("rebind the downloaded exact artifact and current `main`");
+  });
+});
+
+describe("canonical npm package identity", () => {
+  test("accepts transport drift and rejects content, mode, and link drift", async () => {
+    const manifest = JSON.parse(await readFile(manifestUrl, "utf8")) as {
+      readonly name: string;
+      readonly version: string;
+    };
+    const filename = `hraness-direct-${manifest.version}.tgz`;
+    const work = await mkdtemp(join(tmpdir(), "direct-package-identity-test-"));
+    try {
+      const sourceDirectory = join(work, "source");
+      const registryDirectory = join(work, "registry");
+      await mkdir(sourceDirectory);
+      await mkdir(registryDirectory);
+      const sourceArchive = join(sourceDirectory, filename);
+      const registryArchive = join(registryDirectory, filename);
+      await run([
+        process.execPath,
+        "pm",
+        "pack",
+        "--filename",
+        sourceArchive,
+        "--ignore-scripts",
+        "--quiet",
+      ], repository);
+
+      const sourceBytes = await readFile(sourceArchive);
+      const transportVariant = Buffer.from(sourceBytes);
+      transportVariant[9] = transportVariant[9] === 3 ? 0 : 3;
+      expect(transportVariant.equals(sourceBytes)).toBe(false);
+      expect(gunzipSync(transportVariant).equals(gunzipSync(sourceBytes))).toBe(true);
+      await writeFile(registryArchive, transportVariant);
+
+      const [sourceInventory, registryInventory] = await Promise.all([
+        inspectPackageArtifact(sourceArchive),
+        inspectPackageArtifact(registryArchive),
+      ]);
+      const sourcePackJson = join(sourceDirectory, "npm-pack.json");
+      const registryPackJson = join(registryDirectory, "npm-pack.json");
+      const registryViewJson = join(registryDirectory, "npm-view.json");
+      await Promise.all([
+        writeFile(
+          sourcePackJson,
+          packJson(sourceBytes, sourceInventory, manifest.name, manifest.version),
+        ),
+        writeFile(
+          registryPackJson,
+          packJson(transportVariant, registryInventory, manifest.name, manifest.version, true),
+        ),
+        writeFile(
+          registryViewJson,
+          registryView(transportVariant, registryInventory, manifest.name, manifest.version),
+        ),
+      ]);
+      const validInput = Object.freeze({
+        expectedName: manifest.name,
+        expectedVersion: manifest.version,
+        registryArchive,
+        registryPackJson,
+        registryViewJson,
+        sourceArchive,
+        sourcePackJson,
+      });
+      const verified = await verifyNpmPackageIdentity(validInput);
+      expect(verified.fileCount).toBe(sourceInventory.fileCount);
+      expect(verified.sourceArchiveSha512).not.toBe(verified.registryArchiveSha512);
+
+      const originalTar = gunzipSync(sourceBytes);
+      const first = firstRegularHeader(originalTar);
+
+      const modeDirectory = join(work, "mode");
+      await mkdir(modeDirectory);
+      const modeArchive = join(modeDirectory, filename);
+      const modeTar = Buffer.from(originalTar);
+      modeTar.write("0000755\0", first.offset + 100, 8, "ascii");
+      writeHeaderChecksum(modeTar, first.offset);
+      const modeBytes = gzipSync(modeTar, { level: 9 });
+      await writeFile(modeArchive, modeBytes);
+      const modeInventory = await inspectPackageArtifact(modeArchive);
+      const modePackJson = join(modeDirectory, "npm-pack.json");
+      const modeViewJson = join(modeDirectory, "npm-view.json");
+      await Promise.all([
+        writeFile(
+          modePackJson,
+          packJson(modeBytes, modeInventory, manifest.name, manifest.version),
+        ),
+        writeFile(
+          modeViewJson,
+          registryView(modeBytes, modeInventory, manifest.name, manifest.version),
+        ),
+      ]);
+      await expect(verifyNpmPackageIdentity({
+        ...validInput,
+        registryArchive: modeArchive,
+        registryPackJson: modePackJson,
+        registryViewJson: modeViewJson,
+      })).rejects.toThrow("Source and registry npm pack file metadata differ");
+
+      const contentDirectory = join(work, "content");
+      await mkdir(contentDirectory);
+      const contentArchive = join(contentDirectory, filename);
+      const contentTar = Buffer.from(originalTar);
+      contentTar[first.offset + 512] = (contentTar[first.offset + 512] ?? 0) ^ 0xff;
+      const contentBytes = gzipSync(contentTar, { level: 9 });
+      await writeFile(contentArchive, contentBytes);
+      const contentInventory = await inspectPackageArtifact(contentArchive);
+      const contentPackJson = join(contentDirectory, "npm-pack.json");
+      const contentViewJson = join(contentDirectory, "npm-view.json");
+      await Promise.all([
+        writeFile(
+          contentPackJson,
+          packJson(contentBytes, contentInventory, manifest.name, manifest.version),
+        ),
+        writeFile(
+          contentViewJson,
+          registryView(contentBytes, contentInventory, manifest.name, manifest.version),
+        ),
+      ]);
+      await expect(verifyNpmPackageIdentity({
+        ...validInput,
+        registryArchive: contentArchive,
+        registryPackJson: contentPackJson,
+        registryViewJson: contentViewJson,
+      })).rejects.toThrow("Source and registry package content differ at canonical entry");
+
+      const linkDirectory = join(work, "link");
+      await mkdir(linkDirectory);
+      const linkArchive = join(linkDirectory, filename);
+      const linkTar = Buffer.from(originalTar);
+      linkTar[first.offset + 156] = 50;
+      writeHeaderChecksum(linkTar, first.offset);
+      await writeFile(linkArchive, gzipSync(linkTar, { level: 9 }));
+      await expect(verifyNpmPackageIdentity({
+        ...validInput,
+        registryArchive: linkArchive,
+      })).rejects.toThrow("Unsupported package tar entry type");
+    } finally {
+      await rm(work, { force: true, recursive: true });
+    }
   });
 });
