@@ -1,10 +1,15 @@
+import { createHash } from "node:crypto";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 
-import { inspectPackageArtifact } from "./package-artifact.js";
+import {
+  inspectPackageArtifact,
+  type PackageArtifactInventory,
+} from "./package-artifact.js";
 
 const packageName = "@hraness/direct";
+const npmRegistry = "https://registry.npmjs.org";
 const runtimeImportSpecifiers = [
   "@hraness/direct",
   "@hraness/direct/core",
@@ -24,6 +29,143 @@ const toolingTypeImportSpecifiers = [
 const importSpecifiers = [...runtimeImportSpecifiers, ...toolingRuntimeImportSpecifiers];
 const binNames: readonly string[] = [];
 const verificationPackages = ["@antithesishq/bombadil@0.7.2","@eslint/js@^9.39.2","@expo/metro-runtime@~57.0.6","@types/bun@^1.3.14","@types/node@^24.10.0","@types/react@^19.2.14","@types/react-dom@^19.2.3","@vitejs/plugin-react@^6.0.3","eslint@^9.39.2","expo@~57.0.9","fast-check@^4.8.0","react@19.2.3","react-dom@19.2.3","react-native@0.86.2","react-native-web@~0.21.2","typescript@^6.0.3","typescript-eslint@^8.53.0","vite@^8.1.5"];
+
+type PackageInput = Readonly<{
+  archive?: string;
+  packJson?: string;
+}>;
+
+function record(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function stringField(value: Record<string, unknown>, key: string, label: string): string {
+  const field = value[key];
+  if (typeof field !== "string" || field.length === 0) {
+    throw new Error(`${label}.${key} must be a non-empty string`);
+  }
+  return field;
+}
+
+function integerField(value: Record<string, unknown>, key: string, label: string): number {
+  const field = value[key];
+  if (!Number.isSafeInteger(field) || (field as number) < 0) {
+    throw new Error(`${label}.${key} must be a non-negative safe integer`);
+  }
+  return field as number;
+}
+
+function resolveInputPath(repository: string, path: string): string {
+  return isAbsolute(path) ? path : resolve(repository, path);
+}
+
+function parsePackageInput(args: readonly string[], repository: string): PackageInput {
+  if (args.length === 0) return {};
+  if (args.length === 1 && args[0] !== undefined && !args[0].startsWith("--")) {
+    return { archive: resolveInputPath(repository, args[0]) };
+  }
+  if (args.length !== 4) {
+    throw new Error(
+      "Usage: bun run scripts/package-smoke.ts [package.tgz] | --archive <package.tgz> --pack-json <npm-pack.json>",
+    );
+  }
+  const values = new Map<string, string>();
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index];
+    const value = args[index + 1];
+    if ((flag !== "--archive" && flag !== "--pack-json") || value === undefined || values.has(flag)) {
+      throw new Error(
+        "Usage: bun run scripts/package-smoke.ts [package.tgz] | --archive <package.tgz> --pack-json <npm-pack.json>",
+      );
+    }
+    values.set(flag, resolveInputPath(repository, value));
+  }
+  const archive = values.get("--archive");
+  const packJson = values.get("--pack-json");
+  if (archive === undefined || packJson === undefined) {
+    throw new Error(
+      "Usage: bun run scripts/package-smoke.ts [package.tgz] | --archive <package.tgz> --pack-json <npm-pack.json>",
+    );
+  }
+  return { archive, packJson };
+}
+
+async function verifyExactNpmPackMetadata(
+  archive: string,
+  packJson: string,
+  packageVersion: string,
+  inventory: PackageArtifactInventory,
+): Promise<void> {
+  const value = JSON.parse(await readFile(packJson, "utf8")) as unknown;
+  if (!Array.isArray(value) || value.length !== 1) {
+    throw new Error("npm-pack.json must contain exactly one package");
+  }
+  const result = record(value[0], "npm pack result");
+  const expectedFilename = `hraness-direct-${packageVersion}.tgz`;
+  if (
+    stringField(result, "id", "npm pack result") !== `${packageName}@${packageVersion}`
+    || stringField(result, "name", "npm pack result") !== packageName
+    || stringField(result, "version", "npm pack result") !== packageVersion
+    || stringField(result, "filename", "npm pack result") !== expectedFilename
+    || basename(archive) !== expectedFilename
+  ) {
+    throw new Error("npm pack identity does not match the exact Direct archive");
+  }
+  const entryCount = integerField(result, "entryCount", "npm pack result");
+  const packedBytes = integerField(result, "size", "npm pack result");
+  const unpackedBytes = integerField(result, "unpackedSize", "npm pack result");
+  if (
+    entryCount !== inventory.fileCount
+    || packedBytes !== inventory.packedBytes
+    || unpackedBytes !== inventory.unpackedBytes
+  ) {
+    throw new Error("npm pack metrics do not match the exact Direct archive");
+  }
+
+  if (!Array.isArray(result.files) || result.files.length !== entryCount) {
+    throw new Error("npm pack file inventory does not match entryCount");
+  }
+  const reportedFiles = new Map<string, number>();
+  for (const [index, value] of result.files.entries()) {
+    const file = record(value, `npm pack result file ${String(index + 1)}`);
+    const path = stringField(file, "path", `npm pack result file ${String(index + 1)}`);
+    const size = integerField(file, "size", `npm pack result file ${String(index + 1)}`);
+    const mode = integerField(file, "mode", `npm pack result file ${String(index + 1)}`);
+    if (
+      path.includes("\\")
+      || path.startsWith("/")
+      || path.split("/").some((part) => part === "" || part === "." || part === "..")
+      || reportedFiles.has(path)
+    ) {
+      throw new Error(`npm pack file inventory contains an unsafe or duplicate path: ${path}`);
+    }
+    if (mode !== 0o644 && mode !== 0o755) {
+      throw new Error(`npm pack file inventory contains an unsafe mode for ${path}`);
+    }
+    reportedFiles.set(path, size);
+  }
+  for (const file of inventory.files) {
+    if (reportedFiles.get(file.path) !== file.size) {
+      throw new Error(`npm pack file inventory differs from the exact archive for ${file.path}`);
+    }
+  }
+  if (reportedFiles.size !== inventory.files.length) {
+    throw new Error("npm pack file inventory contains a path absent from the exact archive");
+  }
+
+  const archiveBytes = await readFile(archive);
+  const actualIntegrity = `sha512-${createHash("sha512").update(archiveBytes).digest("base64")}`;
+  const actualShasum = createHash("sha1").update(archiveBytes).digest("hex");
+  if (
+    stringField(result, "integrity", "npm pack result") !== actualIntegrity
+    || stringField(result, "shasum", "npm pack result") !== actualShasum
+  ) {
+    throw new Error("npm pack SHA-1 or SHA-512 does not match the exact Direct archive");
+  }
+}
 
 async function run(
   command: string[],
@@ -186,16 +328,11 @@ if (
 }
 const work = await mkdtemp(join(tmpdir(), "hraness-package-smoke-"));
 try {
-  const archiveArguments = process.argv.slice(2);
-  if (archiveArguments.length > 1) {
-    throw new Error("Usage: bun run scripts/package-smoke.ts [package.tgz]");
-  }
-  const suppliedArchive = archiveArguments[0];
+  const packageInput = parsePackageInput(process.argv.slice(2), repository);
+  const suppliedArchive = packageInput.archive;
   const archive = suppliedArchive === undefined
     ? join(work, "package.tgz")
-    : isAbsolute(suppliedArchive)
-      ? suppliedArchive
-      : resolve(repository, suppliedArchive);
+    : suppliedArchive;
   const consumer = join(work, "consumer");
   const npmConsumer = join(work, "npm-consumer");
   await mkdir(consumer);
@@ -210,7 +347,15 @@ try {
       "--quiet",
     ], repository);
   }
-  await inspectPackageArtifact(archive);
+  const inventory = await inspectPackageArtifact(archive);
+  if (packageInput.packJson !== undefined) {
+    await verifyExactNpmPackMetadata(
+      archive,
+      packageInput.packJson,
+      packageManifest.version,
+      inventory,
+    );
+  }
   await writeFile(join(consumer, "package.json"), JSON.stringify({ private: true, type: "module" }));
   await run([process.execPath, "add", archive, "--ignore-scripts"], consumer);
   await verifyInstalledManifest(consumer, packageManifest.version);
@@ -381,9 +526,11 @@ try {
       "--ignore-scripts",
       "--no-audit",
       "--no-fund",
+      `--registry=${npmRegistry}`,
       archive,
     ], npmConsumer, {
       NPM_CONFIG_CACHE: join(work, "npm-cache"),
+      NPM_CONFIG_REGISTRY: npmRegistry,
       NPM_CONFIG_UPDATE_NOTIFIER: "false",
     });
     await verifyInstalledManifest(npmConsumer, packageManifest.version);
