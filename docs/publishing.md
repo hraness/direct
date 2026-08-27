@@ -139,9 +139,17 @@ gh workflow run release.yml --ref main -f tag=v0.7.5
 The recovery path accepts only the newest stable repository tag. It freshly
 resolves that tag from GitHub, requires its commit to remain reachable from
 current `main`, reads the name and version from the tagged `package.json`, and
-checks the tagged source in a detached worktree. It downloads the public npm
-artifact and applies the same canonical package-identity and clean-consumer
-gates used by future tag pushes.
+checks and builds the tagged source in a detached worktree. This explicit
+tagged `bun run check` is the only source-build boundary. Afterward, the
+workflow rebinds the release helpers to their reviewed Git blobs in the current
+workflow checkout and invokes those files by absolute path while retaining the
+tagged tree as the package working directory. Bun is given no tag-owned config
+or environment file while it loads the current helpers. The package step uses
+`npm pack --ignore-scripts`, so it consumes the checked build without running
+the tag's `prepack` or another tagged lifecycle script. The current helpers
+import their current core-only archive inspector. They do not import a script
+from the tagged tree. They download the public npm artifact and apply the same
+canonical package-identity and clean-consumer gates used by future tag pushes.
 
 Immediately before creating the Release, the write-scoped job resolves the tag
 and default branch again, checks stable tag and published Release ordering, and

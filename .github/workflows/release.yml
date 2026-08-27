@@ -194,6 +194,7 @@ jobs:
           EXPECTED_NAME: "@hraness/direct"
           EXPECTED_VERSION: ${{ steps.identity.outputs.tag }}
           SOURCE_TREE: ${{ steps.source.outputs.tree }}
+          WORKFLOW_SHA: ${{ steps.identity.outputs.workflow_sha }}
         run: |
           set -euo pipefail
           package_version="${EXPECTED_VERSION#v}"
@@ -212,9 +213,37 @@ jobs:
           registry_pack_json="$registry_directory/npm-pack.json"
           registry_view_json="$registry_directory/npm-view.json"
 
+          if [[ "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" != "$WORKFLOW_SHA" ]]; then
+            echo "::error::Reviewed workflow checkout changed before package verification"
+            exit 1
+          fi
+          current_tools=(
+            scripts/package-artifact.ts
+            scripts/npm-package-identity.ts
+            scripts/package-smoke.ts
+            scripts/prepare-npm-package.ts
+          )
+          for relative_tool in "${current_tools[@]}"; do
+            current_tool="$GITHUB_WORKSPACE/$relative_tool"
+            if [[ ! -f "$current_tool" || -L "$current_tool" ]]; then
+              echo "::error::Reviewed current workflow tool is missing or linked: $relative_tool"
+              exit 1
+            fi
+            expected_blob="$(git -C "$GITHUB_WORKSPACE" rev-parse "$WORKFLOW_SHA:$relative_tool")"
+            actual_blob="$(git hash-object "$current_tool")"
+            if [[ "$actual_blob" != "$expected_blob" ]]; then
+              echo "::error::Reviewed current workflow tool changed: $relative_tool"
+              exit 1
+            fi
+          done
+          current_prepare="$GITHUB_WORKSPACE/scripts/prepare-npm-package.ts"
+          current_identity="$GITHUB_WORKSPACE/scripts/npm-package-identity.ts"
+          current_smoke="$GITHUB_WORKSPACE/scripts/package-smoke.ts"
+
           (
             cd "$SOURCE_TREE"
-            bun run ./scripts/prepare-npm-package.ts "$source_directory"
+            bun --no-env-file --config=/dev/null run \
+              "$current_prepare" "$source_directory"
           )
           mkdir -p "$registry_directory"
           npm pack "$package_spec" \
@@ -227,7 +256,7 @@ jobs:
             --json \
             --registry=https://registry.npmjs.org \
             > "$registry_view_json"
-          bun run ./scripts/npm-package-identity.ts \
+          bun --no-env-file --config=/dev/null run "$current_identity" \
             --expected-name "$EXPECTED_NAME" \
             --expected-version "$package_version" \
             --source-archive "$source_archive" \
@@ -237,7 +266,7 @@ jobs:
             --registry-view-json "$registry_view_json"
           (
             cd "$SOURCE_TREE"
-            bun run ./scripts/package-smoke.ts \
+            bun --no-env-file --config=/dev/null run "$current_smoke" \
               --archive "$registry_archive" \
               --pack-json "$registry_pack_json"
           )

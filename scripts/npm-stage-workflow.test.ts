@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,7 @@ import { verifyNpmPackageIdentity } from "./npm-package-identity.js";
 
 const stageWorkflowUrl = new URL("../.github/workflows/npm-stage.yml", import.meta.url);
 const releaseWorkflowUrl = new URL("../.github/workflows/release.yml", import.meta.url);
+const ciWorkflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
 const manifestUrl = new URL("../package.json", import.meta.url);
 const packageSmokeUrl = new URL("./package-smoke.ts", import.meta.url);
 const packagePreparationUrl = new URL("./prepare-npm-package.ts", import.meta.url);
@@ -23,6 +24,7 @@ const publishingGuideUrl = new URL("../docs/publishing.md", import.meta.url);
 const agentGuideUrl = new URL("../AGENTS.md", import.meta.url);
 const npmRegistry = "https://registry.npmjs.org";
 const repository = fileURLToPath(new URL("../", import.meta.url));
+const firstPublicSourceCommit = "c6aa5a49c531b45216e3fb043b6e0ab8a392c13d";
 
 async function run(command: readonly string[], cwd: string): Promise<void> {
   const child = Bun.spawn([...command], { cwd, stderr: "inherit", stdout: "inherit" });
@@ -254,7 +256,15 @@ describe("npm release workflows", () => {
       "Tag $release_tag is not the newest stable tag",
       'git worktree add --detach "$source_tree" "$SOURCE_SHA"',
       "Verify canonical npm delivery",
-      "scripts/prepare-npm-package.ts",
+      'current_prepare="$GITHUB_WORKSPACE/scripts/prepare-npm-package.ts"',
+      'current_identity="$GITHUB_WORKSPACE/scripts/npm-package-identity.ts"',
+      'current_smoke="$GITHUB_WORKSPACE/scripts/package-smoke.ts"',
+      'git -C "$GITHUB_WORKSPACE" rev-parse "$WORKFLOW_SHA:$relative_tool"',
+      'git hash-object "$current_tool"',
+      "bun --no-env-file --config=/dev/null run",
+      '"$current_prepare" "$source_directory"',
+      'run "$current_identity"',
+      'run "$current_smoke"',
       'npm pack "$package_spec"',
       'npm view "$package_spec" name version dist',
       "scripts/npm-package-identity.ts",
@@ -274,6 +284,8 @@ describe("npm release workflows", () => {
       expect(workflow).toContain(required);
     }
     expect(workflow).not.toContain('cmp "$source_archive" "$registry_archive"');
+    expect(workflow).not.toContain("bun run ./scripts/prepare-npm-package.ts");
+    expect(workflow).not.toContain("bun run ./scripts/package-smoke.ts");
     expect(workflow).not.toMatch(/\bnpm (?:publish|stage publish)\b/u);
     expect(workflow.match(/contents: write/gu) ?? []).toHaveLength(1);
 
@@ -297,6 +309,21 @@ describe("npm release workflows", () => {
       'createHash("sha512")',
     ] as const) {
       expect(identity).toContain(required);
+    }
+  });
+
+  test("provisions the exact recovery-history and npm toolchain in CI", async () => {
+    const workflow = await readFile(ciWorkflowUrl, "utf8");
+    for (const required of [
+      "fetch-depth: 0",
+      "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38",
+      'node-version: "24"',
+      "package-manager-cache: false",
+      "npm@11.19.0",
+      'test "$(npm --version)" = "11.19.0"',
+      '[[ "$(node --version)" == v24.* ]]',
+    ] as const) {
+      expect(workflow).toContain(required);
     }
   });
 
@@ -359,8 +386,19 @@ describe("npm release workflows", () => {
       expect(guide).toContain(required);
     }
     expect(guide).toMatch(/new bare\s+Git directory/u);
+    for (const required of [
+      "rebinds the release helpers to their reviewed Git blobs",
+      "invokes those files by absolute path",
+      "no tag-owned config",
+      "`npm pack --ignore-scripts`",
+    ] as const) {
+      expect(guide).toContain(required);
+    }
+    expect(guide).toMatch(/do not import a script\s+from the tagged tree/u);
     expect(agents).toContain("only its minimal dependent staging job may request OIDC");
     expect(agents).toContain("rebind the downloaded exact artifact and current `main`");
+    expect(agents).toContain("bind the current workflow helpers to reviewed Git blobs");
+    expect(agents).toContain("recovery never depends on or reruns a historical `prepack`");
   });
 });
 
@@ -503,4 +541,74 @@ describe("canonical npm package identity", () => {
       await rm(work, { force: true, recursive: true });
     }
   });
+
+  test("current tools prepare and smoke the exact v0.7.5 source without tagged helpers", async () => {
+    const work = await mkdtemp(join(tmpdir(), "direct-release-recovery-test-"));
+    try {
+      const sourceArchive = join(work, "v0.7.5-source.tar");
+      const sourceTree = join(work, "source");
+      const packageOutput = join(work, "package");
+      await mkdir(sourceTree);
+      await run([
+        "git",
+        "cat-file",
+        "-e",
+        `${firstPublicSourceCommit}^{commit}`,
+      ], repository);
+      await run([
+        "git",
+        "archive",
+        "--format=tar",
+        `--output=${sourceArchive}`,
+        firstPublicSourceCommit,
+      ], repository);
+      await run(["tar", "-xf", sourceArchive, "-C", sourceTree], repository);
+
+      const manifest = JSON.parse(await readFile(join(sourceTree, "package.json"), "utf8")) as {
+        readonly name?: unknown;
+        readonly scripts?: Readonly<Record<string, unknown>>;
+        readonly version?: unknown;
+      };
+      expect(manifest.name).toBe("@hraness/direct");
+      expect(manifest.version).toBe("0.7.5");
+      expect(manifest.scripts?.prepack).toBe("bun run check");
+
+      await rm(join(sourceTree, "scripts"), { recursive: true });
+      expect(await readdir(sourceTree)).not.toContain("node_modules");
+      await run([
+        process.execPath,
+        "--no-env-file",
+        "--config=/dev/null",
+        "run",
+        fileURLToPath(packagePreparationUrl),
+        packageOutput,
+      ], sourceTree);
+
+      const filename = "hraness-direct-0.7.5.tgz";
+      expect(new Set(await readdir(packageOutput))).toEqual(new Set([
+        filename,
+        "npm-pack.json",
+      ]));
+      const inventory = await inspectPackageArtifact(join(packageOutput, filename));
+      expect(inventory.fileCount).toBe(56);
+      expect(inventory.unpackedBytes).toBe(697_651);
+
+      await run([
+        process.execPath,
+        "--no-env-file",
+        "--config=/dev/null",
+        "run",
+        fileURLToPath(packageSmokeUrl),
+        "--archive",
+        join(packageOutput, filename),
+        "--pack-json",
+        join(packageOutput, "npm-pack.json"),
+      ], sourceTree);
+      const finalSourceEntries = await readdir(sourceTree);
+      expect(finalSourceEntries).not.toContain("scripts");
+      expect(finalSourceEntries).not.toContain("node_modules");
+    } finally {
+      await rm(work, { force: true, recursive: true });
+    }
+  }, 180_000);
 });
