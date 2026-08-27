@@ -156,11 +156,6 @@ function evaluate(body: unknown): boolean {
   return (body as () => boolean)();
 }
 
-function evaluateIntoFormula(body: unknown): boolean | FakeFormula {
-  if (typeof body !== "function") throw new Error("Expected a formula callback");
-  return (body as () => boolean | FakeFormula)();
-}
-
 function requireFormula(value: boolean | FakeFormula): FakeFormula {
   if (typeof value === "boolean") throw new Error("Expected a nested formula");
   return value;
@@ -330,7 +325,7 @@ describe("Direct Bombadil actions", () => {
 });
 
 describe("Direct Bombadil formulas", () => {
-  test("returns the four named formulas with stable-catalog and bounded-quiet semantics", () => {
+  test("returns four recurring bounded health formulas", () => {
     const properties = createDirectBombadilProperties() as unknown as Record<string, FakeFormula>;
     const cell = cells.at(-1);
     if (cell === undefined) throw new Error("Expected one Direct extractor cell");
@@ -344,42 +339,42 @@ describe("Direct Bombadil formulas", () => {
       "stableCatalog",
     ]);
     const exactContract = properties.exactContract;
-    expect(exactContract?.kind).toBe("eventually");
-    expect(exactContract?.milliseconds).toBe(10_000);
-    const exactAlways = requireFormula(evaluateIntoFormula(exactContract?.body));
-    expect(exactAlways.kind).toBe("always");
-    expect(evaluate(exactAlways.body)).toBeTrue();
+    expect(exactContract?.kind).toBe("always");
+    const exactEventually = requireFormula(exactContract?.body as FakeFormula);
+    expect(exactEventually.kind).toBe("eventually");
+    expect(exactEventually.milliseconds).toBe(10_000);
+    expect(evaluate(exactEventually.body)).toBeTrue();
     const initial = cell.current as Readonly<Record<string, unknown>>;
     for (const [key, value] of [
-      ["activeScenario", "surface.other"],
-      ["activeRoute", "/other"],
-      ["activationHash", "fnv1a-64:aaaaaaaaaaaaaaaa"],
+      ["activeScenario", ""],
+      ["activeRoute", ""],
+      ["activationHash", ""],
       ["activeSource", "fixture"],
     ] as const) {
       cell.current = { ...initial, [key]: value };
-      expect(evaluate(exactAlways.body), key).toBeFalse();
+      expect(evaluate(exactEventually.body), key).toBeFalse();
     }
     cell.current = initial;
 
     const noDeclaredViolations = properties.noDeclaredViolations;
-    expect(noDeclaredViolations?.kind).toBe("eventually");
-    expect(noDeclaredViolations?.milliseconds).toBe(10_000);
-    const violationsAlways = requireFormula(
-      evaluateIntoFormula(noDeclaredViolations?.body),
+    expect(noDeclaredViolations?.kind).toBe("always");
+    const violationsEventually = requireFormula(
+      noDeclaredViolations?.body as FakeFormula,
     );
-    expect(violationsAlways.kind).toBe("always");
-    expect(evaluate(violationsAlways.body)).toBeTrue();
+    expect(violationsEventually.kind).toBe("eventually");
+    expect(violationsEventually.milliseconds).toBe(10_000);
+    expect(evaluate(violationsEventually.body)).toBeTrue();
 
-    const stableEventually = properties.stableCatalog;
-    expect(stableEventually?.kind).toBe("eventually");
-    expect(stableEventually?.milliseconds).toBe(10_000);
-    const stableAlways = requireFormula(evaluateIntoFormula(stableEventually?.body));
-    expect(stableAlways.kind).toBe("always");
-    expect(evaluate(stableAlways.body)).toBeTrue();
+    const stableAlways = properties.stableCatalog;
+    expect(stableAlways?.kind).toBe("always");
+    const stableEventually = requireFormula(stableAlways?.body as FakeFormula);
+    expect(stableEventually.kind).toBe("eventually");
+    expect(stableEventually.milliseconds).toBe(10_000);
+    expect(evaluate(stableEventually.body)).toBeTrue();
     cell.current = readDirectBombadilObservation(contractFixture({
-      catalogHash: "fnv1a-64:4444444444444444",
+      catalogHash: "",
     }));
-    expect(evaluate(stableAlways.body)).toBeFalse();
+    expect(evaluate(stableEventually.body)).toBeFalse();
 
     const outerAlways = properties.eventualQuiescence;
     expect(outerAlways?.kind).toBe("always");
@@ -388,40 +383,36 @@ describe("Direct Bombadil formulas", () => {
     expect(boundedEventually.milliseconds).toBe(10_000);
   });
 
-  test("permits bootstrap absence before locking the contract, catalog, and counters", () => {
+  test("permits bootstrap absence before recurring exact health", () => {
     const properties = createDirectBombadilProperties() as unknown as Record<string, FakeFormula>;
     const cell = cells.at(-1);
     if (cell === undefined) throw new Error("Expected one Direct extractor cell");
     cell.current = readDirectBombadilObservation({});
 
-    const violationsAlways = requireFormula(
-      evaluateIntoFormula(properties.noDeclaredViolations?.body),
+    const exactEventually = requireFormula(properties.exactContract?.body as FakeFormula);
+    const violationsEventually = requireFormula(
+      properties.noDeclaredViolations?.body as FakeFormula,
     );
-    expect(evaluateIntoFormula(properties.exactContract?.body)).toBeFalse();
-    expect(evaluate(violationsAlways.body)).toBeFalse();
-    expect(evaluateIntoFormula(properties.stableCatalog?.body)).toBeFalse();
+    const stableEventually = requireFormula(properties.stableCatalog?.body as FakeFormula);
+    expect(evaluate(exactEventually.body)).toBeFalse();
+    expect(evaluate(violationsEventually.body)).toBeFalse();
+    expect(evaluate(stableEventually.body)).toBeFalse();
 
     const eventual = properties.eventualQuiescence?.body as FakeFormula;
     expect(evaluate(eventual.body)).toBeFalse();
 
     cell.current = readDirectBombadilObservation(contractFixture());
-    const exactAlways = requireFormula(
-      evaluateIntoFormula(properties.exactContract?.body),
-    );
-    expect(evaluate(exactAlways.body)).toBeTrue();
-    expect(evaluate(violationsAlways.body)).toBeTrue();
-    const stableAlways = requireFormula(
-      evaluateIntoFormula(properties.stableCatalog?.body),
-    );
-    expect(evaluate(stableAlways.body)).toBeTrue();
+    expect(evaluate(exactEventually.body)).toBeTrue();
+    expect(evaluate(violationsEventually.body)).toBeTrue();
+    expect(evaluate(stableEventually.body)).toBeTrue();
     expect(evaluate(eventual.body)).toBeTrue();
 
     cell.current = readDirectBombadilObservation(contractFixture({
-      catalogHash: "fnv1a-64:5555555555555555",
+      catalogHash: "",
       violations: { console: 1 },
     }));
-    expect(evaluate(exactAlways.body)).toBeTrue();
-    expect(evaluate(stableAlways.body)).toBeFalse();
-    expect(evaluate(violationsAlways.body)).toBeFalse();
+    expect(evaluate(exactEventually.body)).toBeFalse();
+    expect(evaluate(stableEventually.body)).toBeFalse();
+    expect(evaluate(violationsEventually.body)).toBeFalse();
   });
 });

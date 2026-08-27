@@ -1,6 +1,6 @@
 {
   "name": "@hraness/direct",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "description": "A general harness for repeatable app states.",
   "license": "MIT",
   "type": "module",
