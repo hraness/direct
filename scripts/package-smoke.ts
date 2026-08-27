@@ -10,13 +10,18 @@ const runtimeImportSpecifiers = [
   "@hraness/direct/testing",
   "@hraness/direct/web",
 ];
-const toolingImportSpecifiers = [
+const toolingRuntimeImportSpecifiers = [
   "@hraness/direct/tooling/browser-verification",
+  "@hraness/direct/tooling/bombadil",
   "@hraness/direct/tooling/bundle-boundary",
 ];
-const importSpecifiers = [...runtimeImportSpecifiers, ...toolingImportSpecifiers];
+const toolingTypeImportSpecifiers = [
+  ...toolingRuntimeImportSpecifiers,
+  "@hraness/direct/tooling/bombadil-campaign",
+];
+const importSpecifiers = [...runtimeImportSpecifiers, ...toolingRuntimeImportSpecifiers];
 const binNames = [];
-const verificationPackages = ["@eslint/js@^9.39.2","@expo/metro-runtime@~57.0.6","@types/bun@^1.3.14","@types/node@^24.10.0","@types/react@^19.2.14","@types/react-dom@^19.2.3","@vitejs/plugin-react@^6.0.3","eslint@^9.39.2","expo@~57.0.9","fast-check@^4.8.0","react@19.2.3","react-dom@19.2.3","react-native@0.86.2","react-native-web@~0.21.2","typescript@^6.0.3","typescript-eslint@^8.53.0","vite@^8.1.5"];
+const verificationPackages = ["@antithesishq/bombadil@0.7.2","@eslint/js@^9.39.2","@expo/metro-runtime@~57.0.6","@types/bun@^1.3.14","@types/node@^24.10.0","@types/react@^19.2.14","@types/react-dom@^19.2.3","@vitejs/plugin-react@^6.0.3","eslint@^9.39.2","expo@~57.0.9","fast-check@^4.8.0","react@19.2.3","react-dom@19.2.3","react-native@0.86.2","react-native-web@~0.21.2","typescript@^6.0.3","typescript-eslint@^8.53.0","vite@^8.1.5"];
 
 async function run(command: string[], cwd: string): Promise<void> {
   const process = Bun.spawn(command, { cwd, stdout: "inherit", stderr: "inherit" });
@@ -95,6 +100,7 @@ function typeScriptConfig(options: {
   readonly include: string;
   readonly module: "NodeNext" | "Preserve";
   readonly moduleResolution: "Bundler" | "NodeNext";
+  readonly skipLibCheck?: boolean;
   readonly tooling: boolean;
 }): string {
   return `${JSON.stringify({
@@ -104,7 +110,7 @@ function typeScriptConfig(options: {
       jsx: "react-jsx",
       strict: true,
       noEmit: true,
-      skipLibCheck: options.tooling,
+      skipLibCheck: options.skipLibCheck ?? options.tooling,
       ...(options.tooling ? { types: ["bun", "node"] } : {}),
       module: options.module,
       moduleResolution: options.moduleResolution,
@@ -154,7 +160,13 @@ try {
     `await Promise.all(${JSON.stringify(importSpecifiers)}.map((specifier) => import(specifier)))`,
   ], consumer);
   await writeFile(join(consumer, "runtime-index.ts"), typeImportSource(runtimeImportSpecifiers));
-  await writeFile(join(consumer, "tooling-index.ts"), typeImportSource(toolingImportSpecifiers));
+  await writeFile(join(consumer, "tooling-index.ts"), `${typeImportSource(toolingTypeImportSpecifiers)}
+    type BombadilRunnerArity = Parameters<typeof surface1.runDirectBombadilFuzz>["length"];
+    const supportedBombadilRunnerArities: readonly BombadilRunnerArity[] = [1, 2];
+    // @ts-expect-error Public tooling does not expose dependency injection.
+    const unsupportedBombadilRunnerArity: BombadilRunnerArity = 3;
+    void [supportedBombadilRunnerArities, unsupportedBombadilRunnerArity];
+  `);
   await writeFile(join(consumer, "tsconfig.bundler.json"), typeScriptConfig({
     include: "runtime-index.ts",
     module: "Preserve",
@@ -183,11 +195,32 @@ try {
     tooling: true,
   }));
   await run([process.execPath, "x", "tsc", "-p", "./tsconfig.tooling-nodenext.json"], consumer);
+  await writeFile(join(consumer, "campaign-index.ts"), `
+    import {
+      createDirectBombadilActions,
+      createDirectBombadilProperties,
+    } from "@hraness/direct/tooling/bombadil-campaign";
+    void [createDirectBombadilActions, createDirectBombadilProperties];
+  `);
+  await writeFile(join(consumer, "tsconfig.campaign.json"), typeScriptConfig({
+    include: "campaign-index.ts",
+    module: "NodeNext",
+    moduleResolution: "NodeNext",
+    skipLibCheck: false,
+    tooling: false,
+  }));
+  await run([process.execPath, "x", "tsc", "-p", "./tsconfig.campaign.json"], consumer);
   await writeFile(join(consumer, "installed-tooling-smoke.ts"), `
+    import type {
+      DirectBombadilProperties,
+    } from "@hraness/direct/tooling/bombadil-campaign";
     import {
       normalizeRootHttpOrigin,
       readDirectBrowserContract,
     } from "@hraness/direct/tooling/browser-verification";
+    import {
+      runDirectBombadilFuzz,
+    } from "@hraness/direct/tooling/bombadil";
     import { findForbiddenMarkers } from "@hraness/direct/tooling/bundle-boundary";
 
     if (normalizeRootHttpOrigin("https://example.test/") !== "https://example.test") {
@@ -203,6 +236,11 @@ try {
     if (typeof readDirectBrowserContract !== "function") {
       throw new Error("the package-bound Direct browser reader is missing");
     }
+    if (typeof runDirectBombadilFuzz !== "function") {
+      throw new Error("Bombadil host tooling runner is missing");
+    }
+    type CampaignProperties = DirectBombadilProperties;
+    void (undefined as unknown as CampaignProperties);
   `);
   await run([process.execPath, "run", "./installed-tooling-smoke.ts"], consumer);
 
@@ -235,6 +273,8 @@ try {
       markers: [
         "@hraness/direct/tooling/",
         "browser-verification",
+        "@antithesishq/bombadil",
+        "direct.bombadil-run/v1",
         "bundle-boundary",
         "node:crypto",
         "node:fs",

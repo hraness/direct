@@ -11,7 +11,7 @@ state with predictable local stand-ins. it does not click through the browser
 or test the systems it replaces.
 
 ```sh
-bun add --dev github:hraness/direct#v0.7.1
+bun add --dev github:hraness/direct#v0.7.2
 ```
 
 [overview](https://hraness.com/direct)
@@ -48,7 +48,7 @@ Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
 Use $direct to install hraness/direct from
-https://github.com/hraness/direct at the immutable v0.7.1 tag. Follow the
+https://github.com/hraness/direct at the immutable v0.7.2 tag. Follow the
 repository README, add `@hraness/direct` to devDependencies only, and verify
 that the production dependency graph excludes Direct. Do not add a fixture
 composition until I ask.
@@ -64,7 +64,7 @@ Pin the public repository to an immutable version tag:
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "github:hraness/direct#v0.7.1"
+    "@hraness/direct": "github:hraness/direct#v0.7.2"
   }
 }
 ```
@@ -210,11 +210,19 @@ A quiet probe means the declared deterministic work settled. It does not prove t
 | `@hraness/direct/testing` | Sessions, manifest and probe parsers, evidence classification, activity scopes, and exact scripted transports | Development and verification |
 | `@hraness/direct/web` | Atomic browser installation, with low-level bridge and firewall escape hatches | Browser only |
 | `@hraness/direct/tooling/browser-verification` | Protocol-bound bridge reads, bounded agent-browser commands, local server leases, and artifact writes | Bun 1.3.14 with Node APIs |
+| `@hraness/direct/tooling/bombadil-campaign` | Direct property and conservative action factories for a Bombadil specification | Bombadil 0.7.2 specification compiler |
+| `@hraness/direct/tooling/bombadil` | Local server ownership, native Bombadil lifecycle, trace attestation, replay, and diagnostic artifacts | Bun 1.3.14 with Node APIs |
 | `@hraness/direct/tooling/bundle-boundary` | Deterministic emitted-file scans and exact versioned-wire evidence | Bun 1.3.14 with Node APIs |
 
 The tooling subpaths are development-only. They are built separately from the
 browser runtime and never enter the default, core, React, testing, or web
-graphs. Tooling type checks require Bun and Node type definitions.
+graphs. Tooling type checks require Bun and Node type definitions. The
+Bombadil subpaths require a consumer-installed exact
+`@antithesishq/bombadil@0.7.2` development dependency. That peer stays
+optional for Direct consumers that do not use fuzzing. The campaign export
+points to its shipped TypeScript source because Bombadil 0.7.2 resolves package
+exports without standard `import` or `types` conditions; use it only from a
+Bombadil specification.
 
 `readDirectBrowserContract` binds the exact package bridge schema and Direct's
 manifest and probe parsers. Use `createDirectBrowserContractReader` when a
@@ -223,6 +231,46 @@ agent-browser 0.32.3 at `node_modules/.bin/agent-browser` below the supplied
 `repositoryRoot` and an empty task-owned config at
 `scripts/direct/agent-browser.verify.json`. The product supplies its explicit
 launch arguments, allowed domains, scenario commands, and final close policy.
+
+### Fuzz one Direct scenario
+
+Bombadil can explore a rendered Direct scenario while checking four shared
+properties: an exact bridge contract after a bounded startup handshake, one
+stable scenario, route, activation identity and nonempty catalog, zero declared
+violation counters, and recurring bounded quiescence. Install the supported
+release directly in the consumer:
+
+```sh
+bun add --dev @antithesishq/bombadil@0.7.2
+```
+
+A product campaign re-exports Bombadil's browser properties, then names the
+Direct formulas and conservative action generator:
+
+```ts
+import {
+  createDirectBombadilActions,
+  createDirectBombadilProperties,
+} from "@hraness/direct/tooling/bombadil-campaign";
+
+export * from "@antithesishq/bombadil/browser/defaults/properties";
+
+const direct = createDirectBombadilProperties();
+export const direct_safe_actions = createDirectBombadilActions();
+export const direct_exact_contract = direct.exactContract;
+export const direct_stable_catalog = direct.stableCatalog;
+export const direct_no_declared_violations = direct.noDeclaredViolations;
+export const direct_eventual_quiescence = direct.eventualQuiescence;
+```
+
+The product keeps its own scenario, semantic assertions, server command, entry
+path, and any additional safe actions. Call `runDirectBombadilFuzz` from
+`@hraness/direct/tooling/bombadil` in a small Bun wrapper. The runner accepts
+only an explicit local HTTP origin, starts an argv-only server command, invokes
+the exact native 0.7.2 binary, attests the bounded trace with Direct's canonical
+parsers, writes pass or failure artifacts, and releases its owned processes.
+See [Verification](./docs/verification.md#run-a-bounded-bombadil-campaign) for
+the complete configuration and proof limits.
 
 ## Activate scenarios
 
@@ -250,7 +298,7 @@ hybrid bridge shape.
 
 ## Repository scope
 
-This repository contains the deterministic kernel, browser bridge, production-exclusion scanner, bounded host-verification helpers, agent skills, a small React example, and an Expo/React Native reference app. It does not bundle a browser driver or provide a process coordinator, cleanup supervisor, browser-worker pool, or browser benchmark. The optional helper invokes the consumer's local agent-browser installation; the product owns commands and evidence, and external proof remains required for browser or performance claims.
+This repository contains the deterministic kernel, browser bridge, production-exclusion scanner, bounded host-verification helpers, agent skills, a small React example, and an Expo/React Native reference app. It does not bundle a browser driver, shared process coordinator, browser-worker pool, or browser benchmark. The optional agent-browser helper invokes the consumer's local installation. The optional Bombadil helper supervises one explicitly configured local server and native Bombadil process tree, but does not coordinate concurrent repositories or turn diagnostic fuzzing into product-specific proof. The product owns semantic assertions and evidence claims, and external proof remains required for replaced systems, browser custody, or performance.
 
 <!-- article:direct-a-harness-for-your-frontend:start -->
 ## [Direct gives browser agents deterministic app states](<https://hraness.com/direct>)

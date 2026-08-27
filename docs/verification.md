@@ -20,8 +20,10 @@ does not turn deterministic evidence into proof of a substituted live system.
 
 Direct's browser runtime is driver-neutral and never launches a process. The
 optional Bun/Node host tooling can invoke a consumer-installed agent-browser
-CLI, but it is not a bundled driver, process coordinator, or cleanup
-supervisor. The product verifier owns browser commands and process policy.
+CLI. A separate Bombadil helper can own one explicitly configured local server
+and native fuzzing process tree. Neither path bundles a driver or coordinates
+work across repositories. The product verifier still owns semantic commands,
+proof claims, and any host-wide scheduling policy.
 
 The canonical local policy uses one task-owned agent-browser session and one
 Chromium process for a sequential batch of at most eight scenarios. Before each
@@ -226,6 +228,152 @@ not claim context disposal or performance evidence. Remove only the temporary
 directories created by the task, and only after close succeeds. The idle
 timeout is an orphan backstop, not crash-safe cleanup proof. Direct contains no
 browser-run or performance evidence for this policy.
+
+## Run a bounded Bombadil campaign
+
+Use Bombadil for diagnostic browser exploration when the product already has
+an exact Direct scenario and wants generated interactions in addition to its
+deterministic checks. This path does not replace product-owned semantic or
+accessibility assertions. It also does not prove a substituted service,
+adapter, browser host, operating system, or device.
+
+Install the one supported release directly in the consumer. Direct declares
+it as an exact optional peer so products that do not use fuzzing do not install
+a browser tool:
+
+```sh
+bun add --dev @antithesishq/bombadil@0.7.2
+```
+
+Bombadil 0.7.2 resolves specification dependencies without standard package
+export conditions. Direct therefore exposes the campaign subpath as shipped
+TypeScript source. Import it only from a Bombadil specification; use the built
+`@hraness/direct/tooling/bombadil` subpath for the Bun host wrapper.
+
+Create a specification such as `direct/bombadil-campaign.ts`:
+
+```ts
+import {
+  createDirectBombadilActions,
+  createDirectBombadilProperties,
+} from "@hraness/direct/tooling/bombadil-campaign";
+
+export * from "@antithesishq/bombadil/browser/defaults/properties";
+
+const direct = createDirectBombadilProperties();
+
+export const direct_safe_actions = createDirectBombadilActions();
+export const direct_exact_contract = direct.exactContract;
+export const direct_stable_catalog = direct.stableCatalog;
+export const direct_no_declared_violations = direct.noDeclaredViolations;
+export const direct_eventual_quiescence = direct.eventualQuiescence;
+```
+
+The Direct action generator deliberately excludes reload, history traversal,
+visible links, anchors, href targets, form submission, reset controls, and the
+Enter key. It retains ordinary buttons, text input, scrolling, and an
+always-eligible low-weight wait. This preserves the post-handshake contract
+within one document. Add product actions only when their navigation and form
+effects are understood, and keep product-specific assertions in the campaign.
+
+Create a Bun wrapper such as `direct/fuzz-browser.ts`:
+
+```ts
+#!/usr/bin/env bun
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { runDirectBombadilFuzz } from "@hraness/direct/tooling/bombadil";
+
+const directRoot = fileURLToPath(new URL(".", import.meta.url));
+const repositoryRoot = resolve(directRoot, "../../..");
+
+await runDirectBombadilFuzz({
+  artifactName: "todos",
+  baseUrl: "http://127.0.0.1:5173",
+  entryPath: "/direct/",
+  expectedRoute: "/",
+  label: "Todo Direct Bombadil fuzzing",
+  repositoryRoot,
+  scenario: "todos.populated",
+  specificationPath: resolve(directRoot, "bombadil-campaign.ts"),
+  server: {
+    command: [
+      process.execPath,
+      "run",
+      "example:direct",
+      "--",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "{port}",
+      "--strictPort",
+    ],
+    cwd: repositoryRoot,
+    env: { CI: "1" },
+    readinessPath: "/direct/",
+    startupTimeoutMs: 30_000,
+  },
+}, process.argv.slice(2));
+```
+
+`baseUrl` must be an HTTP root origin on `127.0.0.1` or `localhost` with an
+explicit port. `entryPath` locates the Direct page while `expectedRoute`
+states the semantic product route published by the active manifest. The
+server command is an argv array with exactly one literal `{port}` token. The
+runner refuses to reuse a process already listening on that local port. Use
+the optional `targetQuery` object only for bounded product-owned query state;
+the runner rejects Direct's reserved scenario and fixture keys there because
+it binds the requested scenario itself. The repository root, campaign path,
+server working directory, and replay trace are resolved canonically before use;
+a symlink that escapes the configured repository is rejected.
+
+Run random exploration for 12 to 300 seconds. The default is 20 seconds:
+
+```sh
+bun direct/fuzz-browser.ts --time-limit 20s
+```
+
+Use `--base-url` to select another local root origin. Use `--replay` with a
+repository-local `.jsonl` trace instead of `--time-limit` to reproduce a prior
+run. The native runner supports Bombadil 0.7.2 on Apple silicon macOS and x64
+or arm64 Linux. Unsupported platform and architecture pairs fail before a
+server starts.
+
+The browser formulas permit at most ten seconds for initial bridge
+installation. After that handshake they require the exact contract, initial
+scenario, route, activation hash, catalog, and violation state continuously.
+Quiescence must recur within ten seconds. A formula result and Bombadil exit
+status are not sufficient evidence because a short or incomplete trace could
+otherwise pass vacuously.
+
+After every random run or replay, the host runner streams the bounded 0.7.2
+JSONL trace from foreign input and requires one named `direct` observation per
+line. Bridge absence is allowed only before the first exact observation. The
+first exact observation must be a scenario activation matching `scenario` and
+`expectedRoute`. Every exact observation is parsed with Direct's canonical
+manifest and probe parsers, must retain the initial scenario, route, activation
+hash, and catalog hash, and must report zero declared violations. Any later
+missing or invalid bridge fails the run. The final observation must remain
+exact, use the bound activation and catalog, have zero violations, and be
+quiescent.
+
+The runner invokes the exact native binary at the consumer repository root
+with headless mode, JavaScript instrumentation disabled, a bounded output
+directory, and exit-on-violation for random exploration. An outer wall-clock
+deadline covers the native process. Timeout, interruption, or exit triggers
+bounded process-group cleanup; timeout and interruption use TERM then KILL,
+while a completed leader cannot leave descendants holding output pipes. The
+configured local server is always stopped through the shared
+browser-verification lease helpers, and its output drain remains bounded even
+when cleanup itself fails.
+
+Each attempt writes `run.json`, `bombadil.log`, and `server.log` below
+`artifacts/direct-bombadil/<artifactName>/<run>/`, including failures. The
+rolling `manifest.json` points to the latest record. `rawTracePath` reports a
+regular nonempty trace even if attestation fails; `tracePath` is present only
+after exact attestation. Keep these diagnostic artifacts out of source control
+unless the consumer explicitly reviews them as fixtures.
 
 ## Report coverage without promotion
 

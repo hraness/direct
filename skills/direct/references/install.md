@@ -21,7 +21,7 @@ global `direct` CLI.
 For a new installation, pin the reviewed public release:
 
 ```sh
-bun add --dev github:hraness/direct#v0.7.1
+bun add --dev github:hraness/direct#v0.7.2
 ```
 
 The equivalent manifest entry is:
@@ -29,7 +29,7 @@ The equivalent manifest entry is:
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "github:hraness/direct#v0.7.1"
+    "@hraness/direct": "github:hraness/direct#v0.7.2"
   }
 }
 ```
@@ -62,6 +62,18 @@ Playwright MCP or another browser driver can instead read the same exact
 `window.__direct` contract when it independently establishes the required
 containment, fresh-context, and cleanup evidence. Do not install a browser
 driver for an adoption-only task.
+
+Install Bombadil only when the product requests bounded diagnostic fuzzing
+through Direct's optional campaign and host-runner subpaths. The integration
+supports one exact release:
+
+```sh
+bun add --dev @antithesishq/bombadil@0.7.2
+```
+
+Bombadil is an optional Direct peer. Keep the direct development dependency in
+the consumer root because the host runner resolves and validates that root
+package and its native platform binary.
 
 ## Verify the boundary
 
