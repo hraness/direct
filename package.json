@@ -1,7 +1,7 @@
 {
   "name": "@hraness/direct",
-  "version": "0.7.5",
-  "description": "A general harness for repeatable app states.",
+  "version": "0.7.6",
+  "description": "A TypeScript harness for deterministic frontend development with repeatable scenarios, local fixtures, and browser verification for coding agents.",
   "license": "MIT",
   "type": "module",
   "sideEffects": [
@@ -21,12 +21,14 @@
     "url": "https://github.com/hraness/direct/issues"
   },
   "keywords": [
-    "typescript",
+    "frontend-development",
     "frontend-testing",
     "deterministic-testing",
-    "fixtures",
+    "browser-testing",
     "scenario-testing",
-    "property-testing"
+    "fixtures",
+    "coding-agents",
+    "typescript"
   ],
   "exports": {
     ".": {
