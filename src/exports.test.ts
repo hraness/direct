@@ -61,12 +61,16 @@ describe("public package exports", () => {
     expect(Object.keys(bombadil).toSorted()).toEqual([
       "attestDirectBombadilTrace",
       "runDirectBombadilFuzz",
+      "runDirectBombadilFuzzMatrix",
+      "summarizeDirectBombadilTrace",
     ]);
     expect(typeof browserVerification.createAgentBrowser).toBe("function");
     expect(typeof browserVerification.createDirectBrowserContractReader).toBe("function");
     expect(typeof browserVerification.readDirectBrowserContract).toBe("function");
     expect(typeof bombadil.runDirectBombadilFuzz).toBe("function");
     expect(typeof bombadil.attestDirectBombadilTrace).toBe("function");
+    expect(typeof bombadil.runDirectBombadilFuzzMatrix).toBe("function");
+    expect(typeof bombadil.summarizeDirectBombadilTrace).toBe("function");
     expect(typeof bundleBoundary.checkBundleBoundary).toBe("function");
     expect(typeof bundleBoundary.findForbiddenMarkers).toBe("function");
     expect("createAgentBrowser" in root).toBeFalse();

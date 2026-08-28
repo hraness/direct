@@ -730,6 +730,68 @@ describe("server leases", () => {
     expect(fixture.calls).toEqual(["terminate"]);
   });
 
+  test("aborts a pending readiness probe and terminates the owned server", async () => {
+    const fixture = fakeServer();
+    const controller = new AbortController();
+    let markPendingProbe!: () => void;
+    const pendingProbe = new Promise<void>((resolve) => {
+      markPendingProbe = resolve;
+    });
+    const neverReachable = new Promise<boolean>(() => undefined);
+    let probes = 0;
+    const acquisition = acquireVerificationServer({
+      abortSignal: controller.signal,
+      baseUrl: "http://localhost:8080",
+      label: "Fixture server",
+      startupTimeoutMs: 120_000,
+      startServer: () => fixture.server,
+      isReachable: () => {
+        probes += 1;
+        if (probes === 1) return false;
+        markPendingProbe();
+        return neverReachable;
+      },
+    });
+    await pendingProbe;
+    controller.abort();
+    const failure = await rejection(acquisition);
+    expect(failure.message).toBe("Verification server acquisition was aborted");
+    expect(fixture.calls).toEqual(["terminate"]);
+  }, 1_000);
+
+  test("does not return a lease when cancellation follows readiness", async () => {
+    const fixture = fakeServer();
+    const controller = new AbortController();
+    let markPendingProbe!: () => void;
+    const pendingProbe = new Promise<void>((resolve) => {
+      markPendingProbe = resolve;
+    });
+    let resolveReachability!: (reachable: boolean) => void;
+    const reachability = new Promise<boolean>((resolve) => {
+      resolveReachability = resolve;
+    });
+    let probes = 0;
+    const acquisition = acquireVerificationServer({
+      abortSignal: controller.signal,
+      baseUrl: "http://localhost:8080",
+      label: "Fixture server",
+      startupTimeoutMs: 120_000,
+      startServer: () => fixture.server,
+      isReachable: () => {
+        probes += 1;
+        if (probes === 1) return false;
+        markPendingProbe();
+        return reachability;
+      },
+    });
+    await pendingProbe;
+    resolveReachability(true);
+    queueMicrotask(() => controller.abort());
+    const failure = await rejection(acquisition);
+    expect(failure.message).toBe("Verification server acquisition was aborted");
+    expect(fixture.calls).toEqual(["terminate"]);
+  });
+
   test("bounds cleanup when a server never exits after SIGKILL", async () => {
     const calls: string[] = [];
     const never = new Promise<never>(() => undefined);

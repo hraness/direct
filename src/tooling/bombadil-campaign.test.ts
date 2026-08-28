@@ -1,6 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
+import type { JSON as BombadilJson } from "@antithesishq/bombadil";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { defineDirect } from "@hraness/direct";
 import { createDirectSession } from "@hraness/direct/testing";
+
+import { summarizeDirectBombadilTrace } from "./bombadil-runner.js";
 
 interface FakeFormula {
   readonly body: unknown;
@@ -13,7 +19,10 @@ interface FakeCell {
   current: unknown;
   name: string | null;
   readonly named: (name: string) => FakeCell;
-  readonly read: (state: { readonly window: unknown }) => unknown;
+  readonly read: (state: {
+    readonly resources?: Readonly<Record<string, number>>;
+    readonly window: unknown;
+  }) => unknown;
 }
 
 interface FakeActionGenerator {
@@ -68,7 +77,9 @@ void mock.module("@antithesishq/bombadil/browser/defaults/actions", () => ({
 
 const {
   createDirectBombadilActions,
+  createDirectBombadilNamedSnapshot,
   createDirectBombadilProperties,
+  createDirectBombadilResourceLeakProperty,
   readDirectBombadilObservation,
 } = await import("./bombadil-campaign.js");
 
@@ -156,9 +167,12 @@ function evaluate(body: unknown): boolean {
   return (body as () => boolean)();
 }
 
-function requireFormula(value: boolean | FakeFormula): FakeFormula {
-  if (typeof value === "boolean") throw new Error("Expected a nested formula");
-  return value;
+function acceptBombadilJson(value: BombadilJson): value is BombadilJson {
+  return value !== undefined;
+}
+
+function rejectBombadilJson(value: BombadilJson): value is never {
+  return value === undefined;
 }
 
 describe("Direct Bombadil observation", () => {
@@ -229,6 +243,214 @@ describe("Direct Bombadil observation", () => {
   });
 });
 
+describe("Direct Bombadil named snapshots", () => {
+  test("names bounded JSON and fails closed around hostile or oversized page values", () => {
+    const snapshot = createDirectBombadilNamedSnapshot({
+      fallback: { status: "unavailable" },
+      name: "product.phase",
+      read: (state) => Reflect.get(state.window, "phase"),
+      validate: (value): value is { readonly status: string } => (
+        typeof value === "object"
+        && value !== null
+        && !Array.isArray(value)
+        && typeof Reflect.get(value, "status") === "string"
+      ),
+    }) as unknown as FakeCell;
+    expect(snapshot.name).toBe("product.phase");
+    expect(snapshot.read({ window: { phase: { status: "ready" } } })).toEqual({
+      status: "ready",
+    });
+
+    const hostile = {};
+    Object.defineProperty(hostile, "phase", {
+      get: () => {
+        throw new Error("hostile getter");
+      },
+    });
+    expect(snapshot.read({ window: hostile })).toEqual({ status: "unavailable" });
+    expect(snapshot.read({
+      window: { phase: { status: "é".repeat(1_100_000) } },
+    })).toEqual({ status: "unavailable" });
+    expect(snapshot.read({ window: { phase: null } })).toEqual({
+      status: "unavailable",
+    });
+  });
+
+  test("produces a named value accepted by the host summary contract", async () => {
+    class MutablePageValue {
+      status = "ready";
+
+      toJSON() {
+        return { status: "é".repeat(1_100_000) };
+      }
+    }
+    const pageValue = new MutablePageValue();
+    const snapshot = createDirectBombadilNamedSnapshot({
+      fallback: { status: "unavailable" },
+      name: "product.compat",
+      read: () => pageValue,
+      validate: (value): value is { readonly status: string } => (
+        typeof value === "object"
+        && value !== null
+        && !Array.isArray(value)
+        && typeof Reflect.get(value, "status") === "string"
+      ),
+    }) as unknown as FakeCell;
+    const value = snapshot.read({
+      window: { phase: { status: "ready" } },
+    }) as { status: string };
+    expect(value).toEqual({ status: "ready" });
+    expect(value).not.toBe(pageValue);
+    expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
+    pageValue.status = "mutated";
+    expect(value).toEqual({ status: "ready" });
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-helper-summary-"));
+    const tracePath = join(directory, "trace.jsonl");
+    try {
+      await writeFile(tracePath, `${JSON.stringify({
+        action: null,
+        snapshots: [
+          {
+            index: 0,
+            name: "direct",
+            time: 1,
+            value: readDirectBombadilObservation(contractFixture()),
+          },
+          { index: 1, name: snapshot.name, time: 1, value },
+        ],
+        state: {
+          hash_current: 1,
+          hash_previous: null,
+          resources: {
+            documents: 1,
+            dom_nodes: 1,
+            js_event_listeners: 1,
+            js_heap_total: 1,
+            js_heap_used: 1,
+            layout_objects: 1,
+            script_duration: 0,
+            task_duration: 0,
+            thread_time: 0,
+            timestamp: 1,
+          },
+          screenshot: "1.png",
+          url: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+        },
+        timestamp: 1,
+        violations: [],
+      })}\n`, "utf8");
+      const summary = await summarizeDirectBombadilTrace({
+        targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+        tracePath,
+      });
+      expect(summary.namedSnapshots.find(({ name }) => name === snapshot.name))
+        .toMatchObject({ distinctValueCount: 1, observationCount: 1 });
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  test("matches the host name, UTF-8 size, and JSON depth boundary", () => {
+    for (const name of [
+      "direct",
+      "__proto__",
+      "constructor",
+      "prototype",
+      "unsafe name",
+    ]) {
+      expect(() => createDirectBombadilNamedSnapshot<BombadilJson>({
+        fallback: null,
+        name,
+        read: () => null,
+        validate: acceptBombadilJson,
+      })).toThrow("safe, unreserved");
+    }
+
+    const snapshot = createDirectBombadilNamedSnapshot<BombadilJson>({
+      fallback: null,
+      name: "safe",
+      read: (state) => Reflect.get(state.window, "phase"),
+      validate: acceptBombadilJson,
+    }) as unknown as FakeCell;
+    let atLimit: BombadilJson = null;
+    for (let index = 0; index < 64; index += 1) atLimit = [atLimit];
+    expect(snapshot.read({ window: { phase: atLimit } })).toEqual(atLimit);
+    const beyondLimit: BombadilJson = [atLimit];
+    expect(snapshot.read({ window: { phase: beyondLimit } })).toBeNull();
+  });
+
+  test("rejects non-JSON or predicate-invalid fallbacks before registering an extractor", () => {
+    expect(() => createDirectBombadilNamedSnapshot({
+      fallback: null,
+      name: "safe",
+      read: () => null,
+      validate: rejectBombadilJson,
+    })).toThrow("accepted by validate");
+    expect(() => createDirectBombadilNamedSnapshot<BombadilJson>({
+      fallback: undefined as never,
+      name: "safe",
+      read: () => null,
+      validate: acceptBombadilJson,
+    })).toThrow("fallback must be bounded JSON accepted by validate");
+  });
+});
+
+describe("Direct Bombadil resource properties", () => {
+  const resources = (timestamp: number, domNodes: number) => ({
+    documents: 1,
+    dom_nodes: domNodes,
+    js_event_listeners: 2,
+    js_heap_total: 2_000,
+    js_heap_used: 1_000,
+    layout_objects: 10,
+    script_duration: 0,
+    task_duration: 0,
+    thread_time: 0,
+    timestamp,
+  });
+
+  test("detects excessive growth across a bounded sliding resource window", () => {
+    const property = createDirectBombadilResourceLeakProperty({
+      growthLimit: 10,
+      metric: "dom_nodes",
+      windowMillis: 1_000,
+    }) as unknown as FakeFormula;
+    const cell = cells.at(-1);
+    if (cell === undefined) throw new Error("resource extractor was not registered");
+
+    cell.current = cell.read({ resources: resources(1, 100), window: {} });
+    expect(evaluate(property.body)).toBeTrue();
+    cell.current = cell.read({ resources: resources(1.5, 105), window: {} });
+    expect(evaluate(property.body)).toBeTrue();
+    cell.current = cell.read({ resources: resources(1.75, 120), window: {} });
+    expect(evaluate(property.body)).toBeFalse();
+  });
+
+  test("rejects unknown fields, metrics, and unsafe numeric bounds", () => {
+    expect(() => createDirectBombadilResourceLeakProperty({
+      growthLimit: 1,
+      metric: "dom_nodes",
+      windowMillis: 1_000,
+      extra: true,
+    } as never)).toThrow("must contain metric");
+    expect(() => createDirectBombadilResourceLeakProperty({
+      growthLimit: 1,
+      metric: "documents" as never,
+      windowMillis: 1_000,
+    })).toThrow("metric is unsupported");
+    expect(() => createDirectBombadilResourceLeakProperty({
+      growthLimit: Number.POSITIVE_INFINITY,
+      metric: "dom_nodes",
+      windowMillis: 1_000,
+    })).toThrow("positive finite safe number");
+    expect(() => createDirectBombadilResourceLeakProperty({
+      growthLimit: 1,
+      metric: "dom_nodes",
+      windowMillis: 300_001,
+    })).toThrow("between 1 and 300000");
+  });
+});
+
 function clickAction(overrides: Readonly<Record<string, string | null>> = {}): unknown {
   return {
     Click: {
@@ -252,7 +474,7 @@ function clickAction(overrides: Readonly<Record<string, string | null>> = {}): u
 }
 
 describe("Direct Bombadil actions", () => {
-  test("prunes nested visible navigation and submission clicks", () => {
+  test("prunes nested navigation, submission, and destructive clicks", () => {
     fakeClicks.generate = () => ({
       branches: [
         [7, { value: clickAction() }],
@@ -266,10 +488,16 @@ describe("Direct Bombadil actions", () => {
         [2, { value: clickAction({ textContent: "ReSeT" }) }],
         [2, { value: clickAction({ accessibleName: "RESET", textContent: "Again" }) }],
         [2, { value: clickAction({ accessibleName: "", textContent: "Reset" }) }],
+        [2, { value: clickAction({ textContent: "Delete track" }) }],
+        [2, { value: clickAction({ accessibleName: "Close editor", textContent: "Done" }) }],
+        [2, { value: clickAction({ textContent: "Sign-out" }) }],
+        [2, { value: clickAction({ textContent: "Remove from playlist" }) }],
+        [2, { value: clickAction({ textContent: "Unclear status" }) }],
         [1, {
           branches: [
             [9, { value: clickAction({ tag: "input", inputType: "text" }) }],
             [8, { value: clickAction({ tag: "A" }) }],
+            [7, { value: clickAction({ tag: "label", textContent: "Continue" }) }],
           ],
         }],
       ],
@@ -284,6 +512,7 @@ describe("Direct Bombadil actions", () => {
     expect(filtered?.generate()).toEqual({
       branches: [
         [7, { value: clickAction() }],
+        [2, { value: clickAction({ textContent: "Unclear status" }) }],
         [1, {
           branches: [
             [9, { value: clickAction({ tag: "input", inputType: "text" }) }],
@@ -325,25 +554,38 @@ describe("Direct Bombadil actions", () => {
 });
 
 describe("Direct Bombadil formulas", () => {
-  test("returns four recurring bounded health formulas", () => {
+  test("splits bounded startup from strict recurring health", () => {
     const properties = createDirectBombadilProperties() as unknown as Record<string, FakeFormula>;
     const cell = cells.at(-1);
     if (cell === undefined) throw new Error("Expected one Direct extractor cell");
     expect(cell.name).toBe("direct");
-    cell.current = readDirectBombadilObservation(contractFixture());
+    const sample = (window: unknown): void => {
+      cell.current = cell.read({ window });
+    };
+    sample({});
 
     expect(Object.keys(properties).sort()).toEqual([
       "eventualQuiescence",
       "exactContract",
       "noDeclaredViolations",
       "stableCatalog",
+      "startupContract",
     ]);
-    const exactContract = properties.exactContract;
-    expect(exactContract?.kind).toBe("always");
-    const exactEventually = requireFormula(exactContract?.body as FakeFormula);
-    expect(exactEventually.kind).toBe("eventually");
-    expect(exactEventually.milliseconds).toBe(10_000);
-    expect(evaluate(exactEventually.body)).toBeTrue();
+    expect(properties.startupContract?.kind).toBe("eventually");
+    expect(properties.startupContract?.milliseconds).toBe(10_000);
+    expect(evaluate(properties.startupContract?.body)).toBeFalse();
+    expect(properties.exactContract?.kind).toBe("always");
+    expect(properties.stableCatalog?.kind).toBe("always");
+    expect(properties.noDeclaredViolations?.kind).toBe("always");
+    expect(evaluate(properties.exactContract?.body)).toBeTrue();
+    expect(evaluate(properties.stableCatalog?.body)).toBeTrue();
+    expect(evaluate(properties.noDeclaredViolations?.body)).toBeTrue();
+
+    sample(contractFixture());
+    expect(evaluate(properties.startupContract?.body)).toBeTrue();
+    expect(evaluate(properties.exactContract?.body)).toBeTrue();
+    expect(evaluate(properties.stableCatalog?.body)).toBeTrue();
+    expect(evaluate(properties.noDeclaredViolations?.body)).toBeTrue();
     const initial = cell.current as Readonly<Record<string, unknown>>;
     for (const [key, value] of [
       ["activeScenario", ""],
@@ -352,29 +594,18 @@ describe("Direct Bombadil formulas", () => {
       ["activeSource", "fixture"],
     ] as const) {
       cell.current = { ...initial, [key]: value };
-      expect(evaluate(exactEventually.body), key).toBeFalse();
+      expect(evaluate(properties.exactContract?.body), key).toBeFalse();
     }
     cell.current = initial;
 
-    const noDeclaredViolations = properties.noDeclaredViolations;
-    expect(noDeclaredViolations?.kind).toBe("always");
-    const violationsEventually = requireFormula(
-      noDeclaredViolations?.body as FakeFormula,
-    );
-    expect(violationsEventually.kind).toBe("eventually");
-    expect(violationsEventually.milliseconds).toBe(10_000);
-    expect(evaluate(violationsEventually.body)).toBeTrue();
-
-    const stableAlways = properties.stableCatalog;
-    expect(stableAlways?.kind).toBe("always");
-    const stableEventually = requireFormula(stableAlways?.body as FakeFormula);
-    expect(stableEventually.kind).toBe("eventually");
-    expect(stableEventually.milliseconds).toBe(10_000);
-    expect(evaluate(stableEventually.body)).toBeTrue();
-    cell.current = readDirectBombadilObservation(contractFixture({
-      catalogHash: "",
+    sample(contractFixture({
+      catalogHash: "fnv1a-64:ffffffffffffffff",
     }));
-    expect(evaluate(stableEventually.body)).toBeFalse();
+    expect(evaluate(properties.exactContract?.body)).toBeTrue();
+    expect(evaluate(properties.stableCatalog?.body)).toBeFalse();
+
+    sample(contractFixture({ violations: { console: 1 } }));
+    expect(evaluate(properties.noDeclaredViolations?.body)).toBeFalse();
 
     const outerAlways = properties.eventualQuiescence;
     expect(outerAlways?.kind).toBe("always");
@@ -387,32 +618,28 @@ describe("Direct Bombadil formulas", () => {
     const properties = createDirectBombadilProperties() as unknown as Record<string, FakeFormula>;
     const cell = cells.at(-1);
     if (cell === undefined) throw new Error("Expected one Direct extractor cell");
-    cell.current = readDirectBombadilObservation({});
-
-    const exactEventually = requireFormula(properties.exactContract?.body as FakeFormula);
-    const violationsEventually = requireFormula(
-      properties.noDeclaredViolations?.body as FakeFormula,
-    );
-    const stableEventually = requireFormula(properties.stableCatalog?.body as FakeFormula);
-    expect(evaluate(exactEventually.body)).toBeFalse();
-    expect(evaluate(violationsEventually.body)).toBeFalse();
-    expect(evaluate(stableEventually.body)).toBeFalse();
+    const sample = (window: unknown): void => {
+      cell.current = cell.read({ window });
+    };
+    sample({});
+    expect(evaluate(properties.startupContract?.body)).toBeFalse();
+    expect(evaluate(properties.exactContract?.body)).toBeTrue();
+    expect(evaluate(properties.noDeclaredViolations?.body)).toBeTrue();
+    expect(evaluate(properties.stableCatalog?.body)).toBeTrue();
 
     const eventual = properties.eventualQuiescence?.body as FakeFormula;
     expect(evaluate(eventual.body)).toBeFalse();
 
-    cell.current = readDirectBombadilObservation(contractFixture());
-    expect(evaluate(exactEventually.body)).toBeTrue();
-    expect(evaluate(violationsEventually.body)).toBeTrue();
-    expect(evaluate(stableEventually.body)).toBeTrue();
+    sample(contractFixture());
+    expect(evaluate(properties.startupContract?.body)).toBeTrue();
+    expect(evaluate(properties.exactContract?.body)).toBeTrue();
+    expect(evaluate(properties.noDeclaredViolations?.body)).toBeTrue();
+    expect(evaluate(properties.stableCatalog?.body)).toBeTrue();
     expect(evaluate(eventual.body)).toBeTrue();
 
-    cell.current = readDirectBombadilObservation(contractFixture({
-      catalogHash: "",
-      violations: { console: 1 },
-    }));
-    expect(evaluate(exactEventually.body)).toBeFalse();
-    expect(evaluate(stableEventually.body)).toBeFalse();
-    expect(evaluate(violationsEventually.body)).toBeFalse();
+    sample({});
+    expect(evaluate(properties.exactContract?.body)).toBeFalse();
+    expect(evaluate(properties.stableCatalog?.body)).toBeFalse();
+    expect(evaluate(properties.noDeclaredViolations?.body)).toBeFalse();
   });
 });

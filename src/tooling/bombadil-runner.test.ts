@@ -11,6 +11,8 @@ import {
   parseDirectBombadilFuzzArguments,
   runBombadilNativeProcess,
   runDirectBombadilFuzz,
+  runDirectBombadilFuzzMatrix,
+  summarizeDirectBombadilTrace,
   validateDirectBombadilFuzzConfig,
   type DirectBombadilFuzzConfig,
   type DirectBombadilInvocation,
@@ -169,6 +171,67 @@ function directObservation(options: {
   };
 }
 
+function largeDirectObservation(): Record<string, unknown> {
+  const scenarioIds = Array.from({ length: 256 }, (_, index) =>
+    `s${String(index).padStart(3, "0")}.${"x".repeat(115)}`
+  );
+  const firstScenario = scenarioIds[0];
+  if (firstScenario === undefined) throw new Error("large Direct fixture needs a scenario");
+  const citedScenarios: [string, ...string[]] = [firstScenario, ...scenarioIds.slice(1)];
+  const definition = defineDirect({
+    parseWorld: (input) => {
+      if (
+        typeof input !== "object"
+        || input === null
+        || Array.isArray(input)
+        || typeof Reflect.get(input, "count") !== "number"
+      ) {
+        throw new Error("count is required");
+      }
+      return { count: Reflect.get(input, "count") as number };
+    },
+    defaultScenario: firstScenario,
+    scenarios: scenarioIds.map((id, index) => ({
+      description: "d".repeat(2_000),
+      id,
+      route: `/surface/${String(index)}`,
+      title: "t".repeat(160),
+      world: { count: index },
+    })),
+    coverage: Array.from({ length: 256 }, (_, index) => ({
+      claim: "c".repeat(1_000),
+      key: `coverage.${String(index)}`,
+      mode: "fixture" as const,
+      scenarios: citedScenarios,
+    })),
+  });
+  const session = createDirectSession({
+    definition,
+    activation: { kind: "scenario", scenario: firstScenario },
+    create: () => ({}),
+  });
+  if (!session.ok) throw new Error(session.error.message);
+  const snapshot = session.value.probe.snapshot();
+  if (!snapshot.ok) throw new Error(snapshot.error.message);
+  const manifest = jsonClone(session.value.manifest);
+  const probe = jsonClone(snapshot.value);
+  return {
+    activationHash: manifest.active.activationHash,
+    activeRoute: manifest.active.route,
+    activeScenario: manifest.active.scenario,
+    activeSource: manifest.active.source,
+    bridgePresent: true,
+    bridgeSchema: "direct.browser-bridge/v2",
+    catalogHash: manifest.catalogHash,
+    contractValid: true,
+    isQuiescent: probe.isQuiescent,
+    manifest,
+    probe,
+    violations: Object.values(probe.violations),
+    violationsValid: true,
+  };
+}
+
 function absentObservation(): Record<string, unknown> {
   return {
     activationHash: "",
@@ -187,26 +250,71 @@ function absentObservation(): Record<string, unknown> {
   };
 }
 
-function traceLine(observation: unknown, timestamp: number): string {
+interface TraceLineOptions {
+  readonly action?: unknown;
+  readonly namedSnapshots?: readonly { readonly name: string; readonly value: unknown }[];
+  readonly url?: string;
+  readonly violations?: readonly unknown[];
+}
+
+function traceLine(
+  observation: unknown,
+  timestamp: number,
+  options: TraceLineOptions = {},
+): string {
   return JSON.stringify({
     timestamp,
-    action: null,
-    state: {},
-    snapshots: [{ index: 0, name: "direct", value: observation, time: timestamp }],
-    violations: [],
+    action: options.action ?? null,
+    state: {
+      url: options.url ?? "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+      hash_previous: timestamp === 1 ? null : timestamp - 1,
+      hash_current: timestamp,
+      screenshot: `/tmp/${String(timestamp)}.png`,
+      resources: {
+        js_heap_used: timestamp * 10,
+        js_heap_total: timestamp * 20,
+        dom_nodes: timestamp,
+        documents: 1,
+        js_event_listeners: timestamp * 2,
+        layout_objects: timestamp * 3,
+        timestamp,
+        thread_time: timestamp / 10,
+        task_duration: timestamp / 20,
+        script_duration: timestamp / 30,
+      },
+    },
+    snapshots: [
+      { index: 0, name: "direct", value: observation, time: timestamp },
+      ...(options.namedSnapshots ?? []).map((snapshot, index) => ({
+        index: index + 1,
+        name: snapshot.name,
+        value: snapshot.value,
+        time: timestamp,
+      })),
+    ],
+    violations: options.violations ?? [],
   });
 }
 
 async function writeTrace(
   tracePath: string,
   observations: readonly unknown[],
+  lineOptions: readonly TraceLineOptions[] = [],
 ): Promise<void> {
   await mkdir(join(tracePath, ".."), { recursive: true });
   await writeFile(
     tracePath,
-    `${observations.map((observation, index) => traceLine(observation, index + 1)).join("\n")}\n`,
+    `${observations.map((observation, index) =>
+      traceLine(observation, index + 1, lineOptions[index])
+    ).join("\n")}\n`,
     "utf8",
   );
+}
+
+function nestedJson(depth: number): unknown {
+  let value: unknown = null;
+  for (let index = 0; index < depth; index += 1) value = [value];
+  return value;
 }
 
 function fakeServer(
@@ -250,6 +358,7 @@ function dependencies(options: {
   readonly noTrace?: boolean;
   readonly neverServerOutput?: boolean;
   readonly observations?: readonly unknown[];
+  readonly traceLineOptions?: readonly TraceLineOptions[];
   readonly serverOutputTimeoutMs?: number;
   readonly stopFailure?: boolean;
   readonly termination?: "aborted" | "timeout";
@@ -298,6 +407,7 @@ function dependencies(options: {
             await writeTrace(
               join(invocation.outputPath, "trace.jsonl"),
               options.observations ?? [absentObservation(), directObservation()],
+              options.traceLineOptions,
             );
           }
           return {
@@ -316,7 +426,7 @@ function dependencies(options: {
         if (options.stopFailure === true) {
           throw new Error("server cleanup failed");
         }
-        ownedServer.terminate();
+        if (ownedServer.exitCode() === null) ownedServer.terminate();
         await ownedServer.exited;
       },
     },
@@ -392,9 +502,74 @@ describe("Direct Bombadil configuration and invocation", () => {
     expect(validated.entryPath).toBe("/");
     expect(validated.targetQuery).toEqual({});
     expect(validated.server.readinessPath).toBe("/ready");
+    expect(validated.viewport).toEqual({
+      deviceScaleFactor: 2,
+      height: 768,
+      width: 1_024,
+    });
+    expect(validateDirectBombadilFuzzConfig({
+      ...config,
+      viewport: { deviceScaleFactor: 1.5, height: 720, width: 1_280 },
+    }).viewport).toEqual({
+      deviceScaleFactor: 1.5,
+      height: 720,
+      width: 1_280,
+    });
     expect(validated.bombadilExecutable).toEndWith(
       `node_modules/@antithesishq/bombadil/binaries/${nativeBinaryName()}`,
     );
+  });
+
+  test("orders query and policy artifacts by explicit code units", async () => {
+    const { config } = await fixture();
+    const validated = validateDirectBombadilFuzzConfig({
+      ...config,
+      targetQuery: { z: "4", "a.": "3", A: "1", "a-": "2" },
+      explorationPolicy: {
+        minDistinctNamedSnapshotValues: {
+          z: 4,
+          "a.": 3,
+          A: 1,
+          "a-": 2,
+        },
+        minNamedSnapshotChangesAfterActionKind: {
+          z: { Wait: 4, Click: 3 },
+          "a.": { SetViewport: 3 },
+          A: { Wait: 1, Click: 2 },
+          "a-": { TypeText: 2 },
+        },
+        minNamedSnapshotChangesAfterNonWait: {
+          z: 4,
+          "a.": 3,
+          A: 1,
+          "a-": 2,
+        },
+        requiredActionKinds: ["Wait", "TypeText", "Click"],
+        requiredNamedSnapshots: ["z", "a.", "A", "a-"],
+      },
+    });
+    const expectedNames = ["A", "a-", "a.", "z"];
+    expect(Object.keys(validated.targetQuery)).toEqual(expectedNames);
+    expect(validated.explorationPolicy?.requiredActionKinds).toEqual([
+      "Click",
+      "TypeText",
+      "Wait",
+    ]);
+    expect(validated.explorationPolicy?.requiredNamedSnapshots).toEqual(
+      expectedNames,
+    );
+    expect(Object.keys(
+      validated.explorationPolicy?.minDistinctNamedSnapshotValues ?? {},
+    )).toEqual(expectedNames);
+    expect(Object.keys(
+      validated.explorationPolicy?.minNamedSnapshotChangesAfterActionKind ?? {},
+    )).toEqual(expectedNames);
+    expect(Object.keys(
+      validated.explorationPolicy?.minNamedSnapshotChangesAfterActionKind.A ?? {},
+    )).toEqual(["Click", "Wait"]);
+    expect(Object.keys(
+      validated.explorationPolicy?.minNamedSnapshotChangesAfterNonWait ?? {},
+    )).toEqual(expectedNames);
   });
 
   test("rejects unsafe artifact, scenario, route, path, readiness, and server command inputs", async () => {
@@ -435,6 +610,75 @@ describe("Direct Bombadil configuration and invocation", () => {
       ...config,
       server: { ...config.server, readinessPath: "//external.test" },
     })).toThrow("origin-relative");
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
+      viewport: { width: 0 },
+    })).toThrow("viewport.width");
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
+      viewport: { deviceScaleFactor: Number.POSITIVE_INFINITY },
+    })).toThrow("deviceScaleFactor");
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
+      explorationPolicy: { requiredActionKinds: ["Wait", "Wait"] },
+    })).toThrow("duplicate kind");
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
+      explorationPolicy: { minDistinctNamedSnapshotValues: { "unsafe name": 2 } },
+    })).toThrow("safe bounded snapshot name");
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
+      explorationPolicy: { minNamedSnapshotChangesAfterNonWait: { phase: 10_001 } },
+    })).toThrow("between 1 and 10000");
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
+      explorationPolicy: {
+        minNamedSnapshotChangesAfterActionKind: { phase: {} },
+      },
+    })).toThrow("bounded action map");
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
+      explorationPolicy: {
+        minNamedSnapshotChangesAfterActionKind: {
+          phase: { Unknown: 1 } as never,
+        },
+      },
+    })).toThrow("unknown action kind");
+    for (const minimum of [0, 10_001]) {
+      expect(() => validateDirectBombadilFuzzConfig({
+        ...config,
+        explorationPolicy: {
+          minNamedSnapshotChangesAfterActionKind: {
+            phase: { Click: minimum },
+          },
+        },
+      })).toThrow("between 1 and 10000");
+    }
+    const snapshotNames = (prefix: string): string[] =>
+      Array.from({ length: 32 }, (_, index) => `${prefix}${String(index)}`);
+    const maximumPolicy = {
+      minDistinctNamedSnapshotValues: Object.fromEntries(
+        snapshotNames("d").map((name) => [name, 1]),
+      ),
+      minNamedSnapshotChangesAfterActionKind: Object.fromEntries(
+        snapshotNames("a").map((name) => [name, { Click: 1 }]),
+      ),
+      minNamedSnapshotChangesAfterNonWait: Object.fromEntries(
+        snapshotNames("n").map((name) => [name, 1]),
+      ),
+      requiredNamedSnapshots: snapshotNames("r").slice(0, 31),
+    } as const;
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
+      explorationPolicy: maximumPolicy,
+    })).not.toThrow();
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
+      explorationPolicy: {
+        ...maximumPolicy,
+        requiredNamedSnapshots: snapshotNames("r"),
+      },
+    })).toThrow("at most 127 distinct non-Direct snapshots");
   });
 
   test("rejects specification, server cwd, and replay symlinks that escape the repository", async () => {
@@ -493,6 +737,7 @@ describe("Direct Bombadil configuration and invocation", () => {
       specificationPath: "/repo/spec.ts",
       targetQuery: { workbench: "frame" },
       timeLimitSeconds: 20,
+      viewport: { deviceScaleFactor: 1.25, height: 720, width: 1_280 },
     });
     expect(invocation.targetUrl).toBe(
       "http://127.0.0.1:5184/direct/?__direct_scenario=surface.ready&workbench=frame",
@@ -508,6 +753,12 @@ describe("Direct Bombadil configuration and invocation", () => {
       "/repo/artifacts/run/bombadil",
       "--headless",
       "--instrument-javascript=",
+      "--width",
+      "1280",
+      "--height",
+      "720",
+      "--device-scale-factor",
+      "1.25",
       "--exit-on-violation",
       "--time-limit",
       "20s",
@@ -526,18 +777,74 @@ describe("Direct Bombadil configuration and invocation", () => {
       timeLimitSeconds: 20,
     });
     expect(invocation.command).toContain("--reproduce");
+    expect(invocation.command).toEqual(expect.arrayContaining([
+      "--width", "1024", "--height", "768", "--device-scale-factor", "2",
+    ]));
     expect(invocation.command).not.toContain("--time-limit");
     expect(invocation.command).not.toContain("--exit-on-violation");
     expect(invocation.wallClockTimeoutMs).toBe(330_000);
   });
 });
 
+describe("Direct Bombadil campaign matrix", () => {
+  test("runs unique bounded campaigns serially and selects exactly one", async () => {
+    const { config } = await fixture();
+    const campaigns = [{ id: "primary", config }, {
+      id: "secondary",
+      config: { ...config, artifactName: "fixture-secondary" },
+    }] as const;
+    const allRuntime = dependencies();
+    const all = await runDirectBombadilFuzzMatrix(
+      campaigns,
+      ["--time-limit=12s"],
+      allRuntime.overrides,
+    );
+    expect(all).toMatchObject({
+      kind: "matrix",
+      results: [{ campaignId: "primary" }, { campaignId: "secondary" }],
+    });
+    expect(allRuntime.calls.filter((call) => call === "run-bombadil")).toHaveLength(2);
+
+    const selectedRuntime = dependencies();
+    const selected = await runDirectBombadilFuzzMatrix(
+      campaigns,
+      ["--campaign=secondary", "--time-limit=12s"],
+      selectedRuntime.overrides,
+    );
+    expect(selected).toMatchObject({
+      kind: "matrix",
+      results: [{ campaignId: "secondary" }],
+    });
+    expect(selectedRuntime.calls.filter((call) => call === "run-bombadil")).toHaveLength(1);
+  });
+
+  test("rejects ambiguous replay, duplicate IDs, and unknown selection", async () => {
+    const { config } = await fixture();
+    const campaigns = [{ id: "primary", config }] as const;
+    expect((await rejection(runDirectBombadilFuzzMatrix(
+      campaigns,
+      ["--replay=artifacts/trace.jsonl"],
+    ))).message).toContain("requires exactly one --campaign");
+    expect((await rejection(runDirectBombadilFuzzMatrix(
+      campaigns,
+      ["--campaign=missing"],
+    ))).message).toContain("Unknown Bombadil campaign");
+    expect((await rejection(runDirectBombadilFuzzMatrix([
+      { id: "same", config },
+      { id: "same", config: { ...config, artifactName: "other" } },
+    ], []))).message).toContain("unique lowercase kebab");
+  });
+});
+
 describe("Direct Bombadil trace attestation", () => {
-  async function attest(observations: readonly unknown[]) {
+  async function attest(
+    observations: readonly unknown[],
+    lineOptions: readonly TraceLineOptions[] = [],
+  ) {
     const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-trace-"));
     temporaryDirectories.push(directory);
     const tracePath = join(directory, "trace.jsonl");
-    await writeTrace(tracePath, observations);
+    await writeTrace(tracePath, observations, lineOptions);
     return attestDirectBombadilTrace({
       expectedRoute: "/surface",
       expectedScenario: "surface.ready",
@@ -565,6 +872,72 @@ describe("Direct Bombadil trace attestation", () => {
         isQuiescent: true,
       },
     });
+  });
+
+  test("ignores unrelated Bombadil snapshots outside the Direct attestation contract", async () => {
+    const oversizedValue = "x".repeat(2 * 1024 * 1024 + 1);
+    const cases: readonly {
+      readonly label: string;
+      readonly snapshots: NonNullable<TraceLineOptions["namedSnapshots"]>;
+    }[] = [{
+      label: "arbitrary name",
+      snapshots: [{ name: "phase state", value: "ready" }],
+    }, {
+      label: "duplicate unrelated name",
+      snapshots: [
+        { name: "phase", value: "loading" },
+        { name: "phase", value: "ready" },
+      ],
+    }, {
+      label: "depth 65 value",
+      snapshots: [{ name: "deep", value: nestedJson(65) }],
+    }, {
+      label: "value above two MiB",
+      snapshots: [{ name: "large", value: oversizedValue }],
+    }];
+
+    for (const testCase of cases) {
+      const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-compatible-trace-"));
+      temporaryDirectories.push(directory);
+      const tracePath = join(directory, "trace.jsonl");
+      await writeTrace(tracePath, [directObservation()], [{
+        namedSnapshots: testCase.snapshots,
+      }]);
+      const result = await attestDirectBombadilTrace({
+        expectedRoute: "/surface",
+        expectedScenario: "surface.ready",
+        tracePath,
+      });
+      expect(result.validObservationCount, testCase.label).toBe(1);
+    }
+  });
+
+  test("keeps exact Direct uniqueness and schema bounds independent of diagnostic limits", async () => {
+    const duplicateError = await rejection(attest([directObservation()], [{
+      namedSnapshots: [{ name: "direct", value: directObservation() }],
+    }]));
+    expect(duplicateError.message).toContain("must contain one named direct snapshot");
+
+    const observation = largeDirectObservation();
+    expect(Buffer.byteLength(JSON.stringify(observation), "utf8"))
+      .toBeGreaterThan(2 * 1024 * 1024);
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-large-direct-trace-"));
+    temporaryDirectories.push(directory);
+    const tracePath = join(directory, "trace.jsonl");
+    await writeTrace(tracePath, [observation]);
+    const result = await attestDirectBombadilTrace({
+      expectedRoute: String(observation.activeRoute),
+      expectedScenario: String(observation.activeScenario),
+      tracePath,
+    });
+    expect(result.validObservationCount).toBe(1);
+    const summary = await summarizeDirectBombadilTrace({
+      targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+      tracePath,
+    });
+    expect(summary.namedSnapshots).toEqual([
+      expect.objectContaining({ name: "direct", observationCount: 1 }),
+    ]);
   });
 
   test("rejects a vacuous, wrongly activated, or post-activation missing trace", async () => {
@@ -654,6 +1027,564 @@ describe("Direct Bombadil trace attestation", () => {
       expectedScenario: "surface.ready",
       tracePath,
     }))).message).toContain("nonempty trace.jsonl");
+  });
+});
+
+describe("Direct Bombadil exploration summary", () => {
+  async function summaryTrace(lines: readonly string[]): Promise<string> {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-summary-"));
+    temporaryDirectories.push(directory);
+    const tracePath = join(directory, "trace.jsonl");
+    await writeFile(tracePath, `${lines.join("\n")}\n`, "utf8");
+    return tracePath;
+  }
+
+  test("derives deterministic bounded diagnostics without retaining typed text or labels", async () => {
+    const observation = directObservation();
+    const tracePath = await summaryTrace([
+      traceLine(observation, 1, {
+        namedSnapshots: [{ name: "phase", value: { b: 2, a: 1 } }],
+      }),
+      traceLine(observation, 2, {
+        action: {
+          Click: {
+            fingerprint: {
+              accessible_name: "sensitive button label",
+              tag: "button",
+            },
+            point: { x: 1, y: 1 },
+          },
+        },
+        namedSnapshots: [{ name: "phase", value: { a: 2 } }],
+      }),
+      traceLine(observation, 3, {
+        action: "Wait",
+        namedSnapshots: [{ name: "phase", value: { a: 2 } }],
+      }),
+      traceLine(observation, 4, {
+        action: { TypeText: { delay_millis: 0, text: "sensitive typed text" } },
+        namedSnapshots: [{ name: "phase", value: { a: 2 } }],
+        violations: [{
+          name: "noConsoleErrors",
+          violation: { False: { condition: "sensitive formula source" } },
+        }],
+      }),
+    ]);
+    const options = {
+      explorationPolicy: {
+        minDistinctNamedSnapshotValues: { phase: 2 },
+        minNamedSnapshotChangesAfterActionKind: { phase: { Click: 1 } },
+        minNamedSnapshotChangesAfterNonWait: { phase: 1 },
+        minNonWaitActions: 2,
+        requireStableTargetUrl: true,
+        requiredActionKinds: ["Click", "TypeText"] as const,
+        requiredNamedSnapshots: ["phase"],
+      },
+      targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+      tracePath,
+    };
+    const first = await summarizeDirectBombadilTrace(options);
+    const second = await summarizeDirectBombadilTrace(options);
+    expect(second).toEqual(first);
+    expect(first).toMatchObject({
+      schema: "direct.bombadil-exploration-summary/v2",
+      actions: {
+        byKind: { Click: 1, TypeText: 1, Wait: 1 },
+        maxWaitStreak: 1,
+        nonWaitCount: 2,
+        targetTags: { button: 1 },
+        total: 3,
+      },
+      urls: {
+        distinctFingerprintCount: 1,
+        observationCount: 4,
+        rawDistinctFingerprintCount: 1,
+        rawObservationCount: 4,
+        stableTarget: true,
+      },
+      transitions: {
+        distinctNonNullHashCount: 4,
+        nonNullHashCount: 4,
+        rawDistinctNonNullHashCount: 4,
+        rawNonNullHashCount: 4,
+      },
+      propertyViolations: { byName: { noConsoleErrors: 1 }, total: 1 },
+      resourceHighWaterMarks: {
+        domNodes: 4,
+        jsHeapUsedBytes: 40,
+      },
+      policy: { configured: true, failures: [], satisfied: true },
+    });
+    expect(first.namedSnapshots.find((entry) => entry.name === "phase")).toMatchObject({
+      changeAfterActionKind: { Click: 1 },
+      changeAfterNonWaitCount: 1,
+      distinctValueCount: 2,
+      observationCount: 4,
+    });
+    expect(first.trace.sha256).toHaveLength(64);
+    const serialized = JSON.stringify(first);
+    expect(serialized).not.toContain("sensitive button label");
+    expect(serialized).not.toContain("sensitive typed text");
+    expect(serialized).not.toContain("sensitive formula source");
+    expect(serialized).not.toContain("127.0.0.1");
+    expect(serialized).not.toContain("/tmp/");
+  });
+
+  test("omits out-of-contract unrelated snapshots while keeping policy snapshots strict", async () => {
+    const observation = directObservation();
+    const oversizedValue = "x".repeat(2 * 1024 * 1024 + 1);
+    const tracePath = await summaryTrace([traceLine(observation, 1, {
+      namedSnapshots: [
+        { name: "owned", value: "ready" },
+        { name: "phase state", value: "ready" },
+        { name: "duplicate", value: 0 },
+        { name: "duplicate", value: 1 },
+        { name: "deep", value: nestedJson(65) },
+        { name: "large", value: oversizedValue },
+      ],
+    })]);
+    const summary = await summarizeDirectBombadilTrace({
+      explorationPolicy: { requiredNamedSnapshots: ["owned"] },
+      targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+      tracePath,
+    });
+    expect(summary.namedSnapshots.map(({ name }) => name)).toEqual(["direct", "owned"]);
+    expect(summary.policy).toMatchObject({ configured: true, failures: [], satisfied: true });
+
+    const strictCases: readonly {
+      readonly label: string;
+      readonly snapshots: NonNullable<TraceLineOptions["namedSnapshots"]>;
+      readonly expected: string;
+    }[] = [{
+      label: "duplicate",
+      snapshots: [
+        { name: "owned", value: 0 },
+        { name: "owned", value: 1 },
+      ],
+      expected: "repeats named snapshot owned",
+    }, {
+      label: "depth",
+      snapshots: [{ name: "owned", value: nestedJson(65) }],
+      expected: "exceeds JSON depth",
+    }, {
+      label: "size",
+      snapshots: [{ name: "owned", value: oversizedValue }],
+      expected: "exceeds 2097152 canonical bytes",
+    }];
+    for (const testCase of strictCases) {
+      const strictTracePath = await summaryTrace([traceLine(observation, 1, {
+        namedSnapshots: testCase.snapshots,
+      })]);
+      const error = await rejection(summarizeDirectBombadilTrace({
+        explorationPolicy: { requiredNamedSnapshots: ["owned"] },
+        targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+        tracePath: strictTracePath,
+      }));
+      expect(error.message, testCase.label).toContain(testCase.expected);
+    }
+  });
+
+  test("accepts every exact Bombadil 0.7.2 browser action payload", async () => {
+    const actions = [
+      "Back",
+      {
+        Click: {
+          fingerprint: { accessible_name: "private click label", tag: "button" },
+          point: { x: 1, y: 2 },
+        },
+      },
+      {
+        DoubleClick: {
+          delay_millis: 10,
+          fingerprint: {
+            structural_path: "private/path",
+            tag: "x-private.widget_\u00e9",
+          },
+          point: { x: 2, y: 3 },
+        },
+      },
+      "Forward",
+      {
+        MouseDrag: {
+          delay_millis: 5,
+          from: { x: 3, y: 4 },
+          steps: 10,
+          to: { x: 30, y: 40 },
+        },
+      },
+      { PressKey: { code: 13 } },
+      "Reload",
+      { ScrollDown: { distance: 100, origin: { x: 5, y: 6 } } },
+      { ScrollUp: { distance: 100, origin: { x: 5, y: 6 } } },
+      {
+        SetFileInputFiles: {
+          files: ["/private/file.txt"],
+          selector: "#private-file-input",
+        },
+      },
+      { SetViewport: { height: 720, width: 1_280 } },
+      { TypeText: { delay_millis: 5, text: "private typed text" } },
+      "Wait",
+    ] as const;
+    const observation = directObservation();
+    const tracePath = await summaryTrace([
+      traceLine(observation, 1),
+      ...actions.map((action, index) => traceLine(observation, index + 2, {
+        action,
+      })),
+    ]);
+    const summary = await summarizeDirectBombadilTrace({
+      targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+      tracePath,
+    });
+    expect(Object.keys(summary.actions.byKind)).toEqual([
+      "Back",
+      "Click",
+      "DoubleClick",
+      "Forward",
+      "MouseDrag",
+      "PressKey",
+      "Reload",
+      "ScrollDown",
+      "ScrollUp",
+      "SetFileInputFiles",
+      "SetViewport",
+      "TypeText",
+      "Wait",
+    ]);
+    expect(summary.actions.total).toBe(actions.length);
+    expect(Object.keys(summary.actions.targetTags)).toContain("button");
+    expect(Object.keys(summary.actions.targetTags).some((tag) =>
+      /^sha256:[a-f0-9]{64}$/u.test(tag)
+    )).toBeTrue();
+    expect(JSON.stringify(summary)).not.toContain("private");
+  });
+
+  test("reports strict policy misses while keeping the diagnostic summary", async () => {
+    const tracePath = await summaryTrace([traceLine(directObservation(), 1)]);
+    const summary = await summarizeDirectBombadilTrace({
+      explorationPolicy: {
+        minDistinctNamedSnapshotValues: { phase: 2 },
+        minNonWaitActions: 1,
+        requireStableTargetUrl: true,
+        requiredActionKinds: ["Click"],
+        requiredNamedSnapshots: ["phase"],
+      },
+      targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+      tracePath,
+    });
+    expect(summary.policy.satisfied).toBeFalse();
+    expect(summary.policy.failures).toHaveLength(4);
+  });
+
+  test("does not credit bootstrap or Wait-only state changes to product actions", async () => {
+    const observation = directObservation();
+    const tracePath = await summaryTrace([
+      traceLine(observation, 1, {
+        namedSnapshots: [{ name: "phase", value: "loading" }],
+      }),
+      traceLine(observation, 2, {
+        action: "Wait",
+        namedSnapshots: [{ name: "phase", value: "ready" }],
+      }),
+    ]);
+    const summary = await summarizeDirectBombadilTrace({
+      explorationPolicy: {
+        minDistinctNamedSnapshotValues: { phase: 2 },
+        minNamedSnapshotChangesAfterNonWait: { phase: 1 },
+      },
+      targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+      tracePath,
+    });
+    expect(summary.namedSnapshots.find((entry) => entry.name === "phase")).toMatchObject({
+      changeAfterNonWaitCount: 0,
+      distinctValueCount: 2,
+    });
+    expect(summary.policy).toMatchObject({
+      failures: [expect.stringContaining("post-non-Wait change minimum")],
+      satisfied: false,
+    });
+  });
+
+  test("attributes named changes to the exact action kind", async () => {
+    const observation = directObservation();
+    const noOpClickTrace = await summaryTrace([
+      traceLine(observation, 1, {
+        namedSnapshots: [{ name: "phase", value: 0 }],
+      }),
+      traceLine(observation, 2, {
+        action: {
+          Click: {
+            fingerprint: { tag: "button" },
+            point: { x: 1, y: 1 },
+          },
+        },
+        namedSnapshots: [{ name: "phase", value: 0 }],
+      }),
+      traceLine(observation, 3, {
+        action: { SetViewport: { height: 720, width: 1_280 } },
+        namedSnapshots: [{ name: "phase", value: 1 }],
+      }),
+    ]);
+    const failed = await summarizeDirectBombadilTrace({
+      explorationPolicy: {
+        minNamedSnapshotChangesAfterActionKind: {
+          phase: { Click: 1, SetViewport: 1 },
+        },
+        minNamedSnapshotChangesAfterNonWait: { phase: 1 },
+      },
+      targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+      tracePath: noOpClickTrace,
+    });
+    expect(failed.namedSnapshots.find((entry) => entry.name === "phase"))
+      .toMatchObject({
+        changeAfterActionKind: { SetViewport: 1 },
+        changeAfterNonWaitCount: 1,
+      });
+    expect(failed.policy).toMatchObject({
+      failures: [expect.stringContaining("post-Click change minimum")],
+      satisfied: false,
+    });
+
+    const attributedTrace = await summaryTrace([
+      traceLine(observation, 1, {
+        namedSnapshots: [{ name: "phase", value: 0 }],
+      }),
+      traceLine(observation, 2, {
+        action: {
+          Click: {
+            fingerprint: { tag: "button" },
+            point: { x: 1, y: 1 },
+          },
+        },
+        namedSnapshots: [{ name: "phase", value: 1 }],
+      }),
+      traceLine(observation, 3, {
+        action: { SetViewport: { height: 720, width: 1_280 } },
+        namedSnapshots: [{ name: "phase", value: 2 }],
+      }),
+    ]);
+    const attributed = await summarizeDirectBombadilTrace({
+      explorationPolicy: {
+        minNamedSnapshotChangesAfterActionKind: {
+          phase: { SetViewport: 1, Click: 1 },
+        },
+      },
+      targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+      tracePath: attributedTrace,
+    });
+    const phase = attributed.namedSnapshots.find((entry) => entry.name === "phase");
+    expect(phase?.changeAfterActionKind).toEqual({ Click: 1, SetViewport: 1 });
+    expect(phase?.changeAfterNonWaitCount).toBe(2);
+    expect(phase?.changeAfterNonWaitCount).toBe(
+      Object.entries(phase?.changeAfterActionKind ?? {})
+        .filter(([kind]) => kind !== "Wait")
+        .reduce((total, [, count]) => total + count, 0),
+    );
+    expect(attributed.policy.satisfied).toBeTrue();
+  });
+
+  test("requires adjacent exact observations for action attribution", async () => {
+    const exact = directObservation();
+    const click = {
+      Click: {
+        fingerprint: { tag: "button" },
+        point: { x: 1, y: 1 },
+      },
+    } as const;
+    const missingSnapshotTrace = await summaryTrace([
+      traceLine(exact, 1, {
+        namedSnapshots: [{ name: "phase", value: 0 }],
+      }),
+      traceLine(exact, 2),
+      traceLine(exact, 3, {
+        action: click,
+        namedSnapshots: [{ name: "phase", value: 1 }],
+      }),
+    ]);
+    const invalidCurrentTrace = await summaryTrace([
+      traceLine(exact, 1, {
+        namedSnapshots: [{ name: "phase", value: 0 }],
+      }),
+      traceLine(absentObservation(), 2, {
+        action: click,
+        namedSnapshots: [{ name: "phase", value: 1 }],
+      }),
+    ]);
+    for (const tracePath of [missingSnapshotTrace, invalidCurrentTrace]) {
+      const summary = await summarizeDirectBombadilTrace({
+        explorationPolicy: {
+          minNamedSnapshotChangesAfterActionKind: { phase: { Click: 1 } },
+        },
+        targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+        tracePath,
+      });
+      expect(summary.namedSnapshots.find((entry) => entry.name === "phase")
+        ?.changeAfterActionKind).toEqual({});
+      expect(summary.policy.satisfied).toBeFalse();
+    }
+  });
+
+  test("uses the first exact Direct observation only as the policy baseline", async () => {
+    const tracePath = await summaryTrace([
+      traceLine(absentObservation(), 20, {
+        namedSnapshots: [{ name: "phase", value: "loading" }],
+        violations: [{
+          name: "startup_contract",
+          violation: { False: {} },
+        }],
+      }),
+      traceLine(absentObservation(), 2, {
+        action: {
+          Click: {
+            fingerprint: { tag: "button" },
+            point: { x: 1, y: 1 },
+          },
+        },
+        namedSnapshots: [{ name: "phase", value: "pre-handshake-click" }],
+      }),
+      traceLine(directObservation(), 3, {
+        action: {
+          Click: {
+            fingerprint: { tag: "button" },
+            point: { x: 1, y: 1 },
+          },
+        },
+        namedSnapshots: [{ name: "phase", value: "ready" }],
+      }),
+    ]);
+    const summary = await summarizeDirectBombadilTrace({
+      explorationPolicy: {
+        minDistinctNamedSnapshotValues: { phase: 2 },
+        minNamedSnapshotChangesAfterActionKind: { phase: { Click: 1 } },
+        minNamedSnapshotChangesAfterNonWait: { phase: 1 },
+        minNonWaitActions: 1,
+        requiredActionKinds: ["Click"],
+        requiredNamedSnapshots: ["phase"],
+      },
+      targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+      tracePath,
+    });
+    expect(summary.actions).toMatchObject({
+      byKind: {},
+      nonWaitCount: 0,
+      total: 0,
+    });
+    expect(summary.urls.observationCount).toBe(1);
+    expect(summary.urls.rawObservationCount).toBe(3);
+    expect(summary.transitions).toEqual({
+      distinctNonNullHashCount: 1,
+      nonNullHashCount: 1,
+      rawDistinctNonNullHashCount: 3,
+      rawNonNullHashCount: 3,
+    });
+    expect(summary.propertyViolations).toEqual({
+      byName: { startup_contract: 1 },
+      total: 1,
+    });
+    expect(summary.resourceHighWaterMarks.domNodes).toBe(20);
+    expect(summary.namedSnapshots.find((entry) => entry.name === "phase"))
+      .toMatchObject({
+        changeAfterNonWaitCount: 0,
+        distinctValueCount: 1,
+        observationCount: 1,
+      });
+    expect(summary.policy).toMatchObject({
+      failures: [
+        expect.stringContaining("minimum non-Wait"),
+        expect.stringContaining("required action kind Click"),
+        expect.stringContaining("distinct-value minimum"),
+        expect.stringContaining("post-non-Wait change minimum"),
+        expect.stringContaining("post-Click change minimum"),
+      ],
+      satisfied: false,
+    });
+  });
+
+  test("orders mixed-case and punctuation summary names by code unit", async () => {
+    const observation = directObservation();
+    const tracePath = await summaryTrace([traceLine(observation, 1, {
+      namedSnapshots: [
+        { name: "z", value: 4 },
+        { name: "a.", value: 3 },
+        { name: "A", value: 1 },
+        { name: "a-", value: 2 },
+      ],
+      violations: [
+        { name: "z", violation: { False: {} } },
+        { name: "a.", violation: { False: {} } },
+        { name: "A", violation: { False: {} } },
+        { name: "a-", violation: { False: {} } },
+      ],
+    })]);
+    const summary = await summarizeDirectBombadilTrace({
+      targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+      tracePath,
+    });
+    expect(summary.namedSnapshots.map(({ name }) => name)).toEqual([
+      "A",
+      "a-",
+      "a.",
+      "direct",
+      "z",
+    ]);
+    expect(Object.keys(summary.propertyViolations.byName)).toEqual([
+      "A",
+      "a-",
+      "a.",
+      "z",
+    ]);
+  });
+
+  test("rejects hostile envelopes, action targets, and excessively deep snapshot JSON", async () => {
+    const observation = directObservation();
+    const badTarget = await summaryTrace([traceLine(observation, 1, {
+      action: {
+        Click: {
+          fingerprint: { tag: "" },
+          point: { x: 1, y: 1 },
+        },
+      },
+    })]);
+    expect((await rejection(summarizeDirectBombadilTrace({
+      targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+      tracePath: badTarget,
+    }))).message).toContain("invalid action target tag");
+
+    for (const action of [
+      { PressKey: {} },
+      { PressKey: { code: 256 } },
+      { SetViewport: {} },
+      { SetViewport: { height: 720, width: 0 } },
+      {
+        MouseDrag: {
+          delay_millis: 0,
+          from: { x: 0, y: 0 },
+          steps: 0,
+          to: { x: 1, y: 1 },
+        },
+      },
+      { TypeText: { delay_millis: 0, text: "safe", unexpected: true } },
+    ]) {
+      const malformedAction = await summaryTrace([traceLine(observation, 1, {
+        action,
+      })]);
+      expect((await rejection(summarizeDirectBombadilTrace({
+        targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+        tracePath: malformedAction,
+      }))).message).toContain("invalid action");
+    }
+
+    let deep: unknown = null;
+    for (let index = 0; index < 70; index += 1) deep = [deep];
+    const deepTrace = await summaryTrace([traceLine(observation, 1, {
+      namedSnapshots: [{ name: "deep", value: deep }],
+    })]);
+    expect((await rejection(summarizeDirectBombadilTrace({
+      explorationPolicy: { requiredNamedSnapshots: ["deep"] },
+      targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+      tracePath: deepTrace,
+    }))).message).toContain("exceeds JSON depth");
   });
 });
 
@@ -790,6 +1721,11 @@ describe("Direct Bombadil run lifecycle", () => {
       },
       initialDirect: { source: "scenario", scenario: "surface.ready", route: "/surface" },
       server: { logPresent: true },
+      explorationSummary: {
+        schema: "direct.bombadil-exploration-summary/v2",
+        policy: { configured: false, satisfied: true },
+      },
+      viewport: { deviceScaleFactor: 2, height: 768, width: 1_024 },
     });
     const bombadil = record(manifest.bombadil, "bombadil");
     expect(bombadil.version).toBe("0.7.2");
@@ -800,6 +1736,170 @@ describe("Direct Bombadil run lifecycle", () => {
     expect(await readFile(String(bombadil.logPath), "utf8")).toContain("bombadil stdout");
     const server = record(manifest.server, "server");
     expect(await readFile(String(server.logPath), "utf8")).toContain("server output");
+    const summaryPath = String(manifest.explorationSummaryPath);
+    expect(JSON.parse(await readFile(summaryPath, "utf8"))).toMatchObject({
+      schema: "direct.bombadil-exploration-summary/v2",
+      trace: { lineCount: 2 },
+    });
+  });
+
+  test("runs with policy-owned evidence despite arbitrary unrelated named snapshots", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const runtime = dependencies({
+      observations: [directObservation()],
+      traceLineOptions: [{
+        namedSnapshots: [
+          { name: "owned", value: "ready" },
+          { name: "phase state", value: "ready" },
+          { name: "duplicate", value: 0 },
+          { name: "duplicate", value: 1 },
+          { name: "deep", value: nestedJson(65) },
+          { name: "large", value: "x".repeat(2 * 1024 * 1024 + 1) },
+        ],
+      }],
+    });
+    const result = await runDirectBombadilFuzz({
+      ...config,
+      explorationPolicy: { requiredNamedSnapshots: ["owned"] },
+    }, [], runtime.overrides);
+    expect(result.kind).toBe("run");
+    const manifest = JSON.parse(await readFile(
+      join(repositoryRoot, "artifacts", "direct-bombadil", "fixture-product", "manifest.json"),
+      "utf8",
+    )) as Record<string, unknown>;
+    expect(manifest).toMatchObject({
+      status: "passed",
+      attestation: { validObservationCount: 1 },
+      explorationSummary: {
+        namedSnapshots: [{ name: "direct" }, { name: "owned" }],
+        policy: { configured: true, failures: [], satisfied: true },
+      },
+    });
+  });
+
+  test("does not spawn when cancellation wins before server startup", async () => {
+    const { config } = await fixture();
+    const runtime = dependencies();
+    const controller = new AbortController();
+    const error = await rejection(runDirectBombadilFuzz(config, [], {
+      ...runtime.overrides,
+      createAbortController: () => controller,
+      acquireServer: (options): Promise<ServerLease> => {
+        runtime.calls.push("acquire-server");
+        controller.abort();
+        return Promise.resolve({ source: "started", server: options.startServer() });
+      },
+    }));
+    expect(error.message).toContain("Bombadil fuzzing was interrupted");
+    expect(runtime.calls).toEqual(["acquire-server"]);
+  });
+
+  test("terminates a server when cancellation wins during spawn", async () => {
+    const { config } = await fixture();
+    const runtime = dependencies();
+    const controller = new AbortController();
+    const server = fakeServer(runtime.calls);
+    const error = await rejection(runDirectBombadilFuzz(config, [], {
+      ...runtime.overrides,
+      createAbortController: () => controller,
+      spawnServer: () => {
+        runtime.calls.push("spawn-server");
+        controller.abort();
+        return server;
+      },
+    }));
+    expect(error.message).toContain("Bombadil fuzzing was interrupted");
+    expect(runtime.calls).toEqual([
+      "acquire-server",
+      "spawn-server",
+      "terminate",
+      "stop-server",
+    ]);
+    expect(server.exitCode()).toBe(0);
+  });
+
+  test("cleans a just-acquired server before Bombadil can run", async () => {
+    const { config } = await fixture();
+    const runtime = dependencies();
+    const controller = new AbortController();
+    const error = await rejection(runDirectBombadilFuzz(config, [], {
+      ...runtime.overrides,
+      createAbortController: () => controller,
+      acquireServer: (options): Promise<ServerLease> => {
+        runtime.calls.push("acquire-server");
+        const server = options.startServer();
+        controller.abort();
+        return Promise.resolve({ source: "started", server });
+      },
+    }));
+    expect(error.message).toContain("Bombadil fuzzing was interrupted");
+    expect(runtime.calls).toEqual([
+      "acquire-server",
+      "spawn-server",
+      "terminate",
+      "stop-server",
+    ]);
+    expect(runtime.calls).not.toContain("run-bombadil");
+  });
+
+  test("unwinds a pending server acquisition when cancellation arrives", async () => {
+    const { config } = await fixture();
+    const runtime = dependencies();
+    const controller = new AbortController();
+    let markAcquiring!: () => void;
+    const acquiring = new Promise<void>((resolve) => {
+      markAcquiring = resolve;
+    });
+    const run = runDirectBombadilFuzz(config, [], {
+      ...runtime.overrides,
+      createAbortController: () => controller,
+      acquireServer: async (options): Promise<ServerLease> => {
+        runtime.calls.push("acquire-server");
+        const server = options.startServer();
+        markAcquiring();
+        await new Promise<void>((_resolve, reject) => {
+          const abort = (): void => reject(new Error("acquisition aborted"));
+          options.abortSignal?.addEventListener("abort", abort, { once: true });
+          if (options.abortSignal?.aborted === true) abort();
+        });
+        return { source: "started", server };
+      },
+    });
+    await acquiring;
+    controller.abort();
+    const error = await rejection(run);
+    expect(error.message).toContain("Bombadil fuzzing was interrupted");
+    expect(runtime.calls).toEqual([
+      "acquire-server",
+      "spawn-server",
+      "stop-server",
+      "terminate",
+    ]);
+    expect(runtime.calls).not.toContain("run-bombadil");
+  });
+
+  test("fails a configured exploration policy while retaining the derived sidecar", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const runtime = dependencies();
+    expect((await rejection(runDirectBombadilFuzz({
+      ...config,
+      explorationPolicy: {
+        minNonWaitActions: 1,
+        requiredActionKinds: ["Click"],
+      },
+    }, [], runtime.overrides))).message).toContain("exploration policy was not satisfied");
+    const manifest = JSON.parse(await readFile(
+      join(repositoryRoot, "artifacts", "direct-bombadil", "fixture-product", "manifest.json"),
+      "utf8",
+    )) as Record<string, unknown>;
+    expect(manifest).toMatchObject({
+      status: "failed",
+      explorationSummary: {
+        policy: { configured: true, satisfied: false },
+      },
+    });
+    expect(await readFile(String(manifest.explorationSummaryPath), "utf8"))
+      .toContain("direct.bombadil-exploration-summary/v2");
   });
 
   test("retains an attested failure artifact and server log for a nonzero exit", async () => {
