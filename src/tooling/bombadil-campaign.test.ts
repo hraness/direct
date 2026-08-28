@@ -167,6 +167,14 @@ function evaluate(body: unknown): boolean {
   return (body as () => boolean)();
 }
 
+function acceptBombadilJson(value: BombadilJson): value is BombadilJson {
+  return value !== undefined;
+}
+
+function rejectBombadilJson(value: BombadilJson): value is never {
+  return value === undefined;
+}
+
 describe("Direct Bombadil observation", () => {
   test("accepts the exact current bridge, manifest, and probe contract", () => {
     const observation = readDirectBombadilObservation(contractFixture());
@@ -354,7 +362,7 @@ describe("Direct Bombadil named snapshots", () => {
         fallback: null,
         name,
         read: () => null,
-        validate: (_value): _value is BombadilJson => true,
+        validate: acceptBombadilJson,
       })).toThrow("safe, unreserved");
     }
 
@@ -362,7 +370,7 @@ describe("Direct Bombadil named snapshots", () => {
       fallback: null,
       name: "safe",
       read: (state) => Reflect.get(state.window, "phase"),
-      validate: (_value): _value is BombadilJson => true,
+      validate: acceptBombadilJson,
     }) as unknown as FakeCell;
     let atLimit: BombadilJson = null;
     for (let index = 0; index < 64; index += 1) atLimit = [atLimit];
@@ -376,13 +384,13 @@ describe("Direct Bombadil named snapshots", () => {
       fallback: null,
       name: "safe",
       read: () => null,
-      validate: (_value): _value is never => false,
+      validate: rejectBombadilJson,
     })).toThrow("accepted by validate");
     expect(() => createDirectBombadilNamedSnapshot<BombadilJson>({
       fallback: undefined as never,
       name: "safe",
       read: () => null,
-      validate: (_value): _value is BombadilJson => true,
+      validate: acceptBombadilJson,
     })).toThrow("fallback must be bounded JSON accepted by validate");
   });
 });
