@@ -267,7 +267,7 @@ describe("npm release workflows", () => {
       "const minimumPackedBytes = 140_000",
       "const maximumPackedBytes = 180_000",
       "const minimumUnpackedBytes = 650_000",
-      "const maximumUnpackedBytes = 750_000",
+      "const maximumUnpackedBytes = 810_000",
       "record.files.length !== record.entryCount",
       "unpackedSize !== record.unpackedSize",
       'createHash("sha1")',
