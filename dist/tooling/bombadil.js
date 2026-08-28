@@ -5,6 +5,7 @@ import { readFile, realpath, stat, writeFile as writeFile2 } from "fs/promises";
 import { isAbsolute, join as join2, relative, resolve } from "path";
 import process2 from "process";
 import { createInterface } from "readline";
+import { createHash } from "crypto";
 
 // src/core/result.ts
 function ok(value) {
@@ -1134,6 +1135,12 @@ var TRACE_MAX_BYTES = 64 * 1024 * 1024;
 var TRACE_MAX_LINE_BYTES = 16 * 1024 * 1024;
 var TRACE_MAX_LINES = 1e4;
 var TRACE_MAX_SNAPSHOTS_PER_LINE = 4096;
+var TRACE_MAX_NAMED_SNAPSHOT_NAMES = 128;
+var TRACE_MAX_DISTINCT_SNAPSHOT_VALUES_PER_NAME = 1024;
+var TRACE_MAX_DISTINCT_URLS = 1024;
+var TRACE_MAX_PROPERTY_NAMES = 128;
+var TRACE_MAX_CANONICAL_SNAPSHOT_BYTES = 2 * 1024 * 1024;
+var TRACE_MAX_JSON_DEPTH = 64;
 var RANDOM_RUN_OVERHEAD_MS = 30000;
 var REPLAY_WALL_CLOCK_TIMEOUT_MS = MAX_TIME_LIMIT_SECONDS * 1000 + RANDOM_RUN_OVERHEAD_MS;
 var PROCESS_TERMINATION_GRACE_MS = 5000;
@@ -1142,6 +1149,94 @@ var SERVER_OUTPUT_TIMEOUT_MS = 3000;
 var DIRECT_BROWSER_BRIDGE_SCHEMA = "direct.browser-bridge/v2";
 var TRACE_LINE_KEYS = new Set(["action", "snapshots", "state", "timestamp", "violations"]);
 var TRACE_SNAPSHOT_KEYS = new Set(["index", "name", "time", "value"]);
+var TRACE_STATE_KEYS = new Set([
+  "hash_current",
+  "hash_previous",
+  "resources",
+  "screenshot",
+  "url"
+]);
+var TRACE_RESOURCE_KEYS = new Set([
+  "documents",
+  "dom_nodes",
+  "js_event_listeners",
+  "js_heap_total",
+  "js_heap_used",
+  "layout_objects",
+  "script_duration",
+  "task_duration",
+  "thread_time",
+  "timestamp"
+]);
+var TRACE_VIOLATION_KEYS = new Set(["name", "violation"]);
+var TRACE_POINT_KEYS = new Set(["x", "y"]);
+var TRACE_FINGERPRINT_KEYS = new Set([
+  "accessible_name",
+  "href",
+  "id",
+  "input_type",
+  "name_attr",
+  "placeholder",
+  "role",
+  "structural_path",
+  "tag",
+  "test_id",
+  "text_content"
+]);
+var TRACE_CLICK_ACTION_KEYS = new Set(["fingerprint", "point"]);
+var TRACE_DOUBLE_CLICK_ACTION_KEYS = new Set([
+  "delay_millis",
+  "fingerprint",
+  "point"
+]);
+var TRACE_TYPE_TEXT_ACTION_KEYS = new Set(["delay_millis", "text"]);
+var TRACE_PRESS_KEY_ACTION_KEYS = new Set(["code"]);
+var TRACE_SCROLL_ACTION_KEYS = new Set(["distance", "origin"]);
+var TRACE_FILE_INPUT_ACTION_KEYS = new Set(["files", "selector"]);
+var TRACE_MOUSE_DRAG_ACTION_KEYS = new Set([
+  "delay_millis",
+  "from",
+  "steps",
+  "to"
+]);
+var TRACE_VIEWPORT_ACTION_KEYS = new Set(["height", "width"]);
+var VIEWPORT_KEYS = new Set(["deviceScaleFactor", "height", "width"]);
+var EXPLORATION_POLICY_KEYS = new Set([
+  "minDistinctNamedSnapshotValues",
+  "minNamedSnapshotChangesAfterActionKind",
+  "minNamedSnapshotChangesAfterNonWait",
+  "minNonWaitActions",
+  "requireStableTargetUrl",
+  "requiredActionKinds",
+  "requiredNamedSnapshots"
+]);
+var DEFAULT_VIEWPORT_WIDTH = 1024;
+var DEFAULT_VIEWPORT_HEIGHT = 768;
+var DEFAULT_DEVICE_SCALE_FACTOR = 2;
+var SNAPSHOT_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.:/-]*$/u;
+var TARGET_TAG_PATTERN = /^[a-z][a-z0-9-]*$/u;
+var ACTION_KINDS = [
+  "Back",
+  "Click",
+  "DoubleClick",
+  "Forward",
+  "MouseDrag",
+  "PressKey",
+  "Reload",
+  "ScrollDown",
+  "ScrollUp",
+  "SetFileInputFiles",
+  "SetViewport",
+  "TypeText",
+  "Wait"
+];
+var ACTION_KIND_SET = new Set(ACTION_KINDS);
+var UNIT_ACTION_KINDS = new Set([
+  "Back",
+  "Forward",
+  "Reload",
+  "Wait"
+]);
 var DIRECT_OBSERVATION_KEYS = new Set([
   "activationHash",
   "activeRoute",
@@ -1216,6 +1311,13 @@ function isRecord2(value) {
 function hasExactKeys(value, expected) {
   const keys = Object.keys(value);
   return keys.length === expected.size && keys.every((key) => expected.has(key));
+}
+function compareCodeUnits(left, right) {
+  if (left < right)
+    return -1;
+  if (left > right)
+    return 1;
+  return 0;
 }
 function parseTraceDirectObservation(value) {
   if (!isRecord2(value) || !hasExactKeys(value, DIRECT_OBSERVATION_KEYS)) {
@@ -1311,6 +1413,181 @@ function exactTraceDirectObservation(observation) {
     isQuiescent: probe2.value.isQuiescent
   };
 }
+var RESOURCE_FIELD_MAP = {
+  documents: "documents",
+  dom_nodes: "domNodes",
+  js_event_listeners: "jsEventListeners",
+  js_heap_total: "jsHeapTotalBytes",
+  js_heap_used: "jsHeapUsedBytes",
+  layout_objects: "layoutObjects",
+  script_duration: "scriptDurationSeconds",
+  task_duration: "taskDurationSeconds",
+  thread_time: "threadTimeSeconds"
+};
+function canonicalJson2(value, depth = 0) {
+  if (depth > TRACE_MAX_JSON_DEPTH) {
+    throw new Error(`Bombadil named snapshot exceeds JSON depth ${String(TRACE_MAX_JSON_DEPTH)}`);
+  }
+  if (value === null || typeof value === "boolean" || typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value))
+      throw new Error("Bombadil named snapshot has a non-finite number");
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => canonicalJson2(entry, depth + 1)).join(",")}]`;
+  }
+  if (!isRecord2(value))
+    throw new Error("Bombadil named snapshot is not JSON");
+  const entries = Object.keys(value).sort(compareCodeUnits).map((key) => `${JSON.stringify(key)}:${canonicalJson2(value[key], depth + 1)}`);
+  return `{${entries.join(",")}}`;
+}
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+function namedSnapshotValueSha256(value) {
+  const canonical = canonicalJson2(value);
+  if (Buffer.byteLength(canonical, "utf8") > TRACE_MAX_CANONICAL_SNAPSHOT_BYTES) {
+    throw new Error(`Bombadil named snapshot exceeds ${String(TRACE_MAX_CANONICAL_SNAPSHOT_BYTES)} canonical bytes`);
+  }
+  return sha256(canonical);
+}
+function validTracePoint(value) {
+  return isRecord2(value) && hasExactKeys(value, TRACE_POINT_KEYS) && typeof value.x === "number" && Number.isFinite(value.x) && typeof value.y === "number" && Number.isFinite(value.y);
+}
+function parseTraceFingerprintTag(value, lineNumber) {
+  if (!isRecord2(value) || !Object.keys(value).every((key) => TRACE_FINGERPRINT_KEYS.has(key))) {
+    throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid action target`);
+  }
+  for (const [key, candidate] of Object.entries(value)) {
+    if (key !== "tag" && typeof candidate !== "string") {
+      throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid action target`);
+    }
+  }
+  const tag = value.tag;
+  if (typeof tag !== "string" || tag.length === 0) {
+    throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid action target tag`);
+  }
+  if (typeof value.structural_path === "string" && Object.keys(value).some((key) => key !== "tag" && key !== "structural_path")) {
+    throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid action target`);
+  }
+  return tag.length <= 64 && TARGET_TAG_PATTERN.test(tag) ? tag : `sha256:${sha256(tag)}`;
+}
+function isSafeIntegerBetween(value, minimum, maximum) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= minimum && value <= maximum;
+}
+function invalidTraceAction(lineNumber) {
+  throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid action`);
+}
+function parseTraceAction(value, lineNumber) {
+  if (value === null)
+    return null;
+  if (typeof value === "string") {
+    if (!ACTION_KIND_SET.has(value) || !UNIT_ACTION_KINDS.has(value)) {
+      return invalidTraceAction(lineNumber);
+    }
+    return { kind: value, targetTag: null };
+  }
+  if (!isRecord2(value) || Object.keys(value).length !== 1) {
+    return invalidTraceAction(lineNumber);
+  }
+  const kind = Object.keys(value)[0];
+  const payload = kind === undefined ? undefined : value[kind];
+  if (kind === undefined || !ACTION_KIND_SET.has(kind) || UNIT_ACTION_KINDS.has(kind) || !isRecord2(payload)) {
+    return invalidTraceAction(lineNumber);
+  }
+  const actionKind = kind;
+  let targetTag = null;
+  switch (actionKind) {
+    case "Click":
+      if (!hasExactKeys(payload, TRACE_CLICK_ACTION_KEYS) || !validTracePoint(payload.point)) {
+        return invalidTraceAction(lineNumber);
+      }
+      targetTag = parseTraceFingerprintTag(payload.fingerprint, lineNumber);
+      break;
+    case "DoubleClick":
+      if (!hasExactKeys(payload, TRACE_DOUBLE_CLICK_ACTION_KEYS) || !isSafeIntegerBetween(payload.delay_millis, 0, 1000) || !validTracePoint(payload.point))
+        return invalidTraceAction(lineNumber);
+      targetTag = parseTraceFingerprintTag(payload.fingerprint, lineNumber);
+      break;
+    case "TypeText":
+      if (!hasExactKeys(payload, TRACE_TYPE_TEXT_ACTION_KEYS) || !isSafeIntegerBetween(payload.delay_millis, 0, Number.MAX_SAFE_INTEGER) || typeof payload.text !== "string")
+        return invalidTraceAction(lineNumber);
+      break;
+    case "PressKey":
+      if (!hasExactKeys(payload, TRACE_PRESS_KEY_ACTION_KEYS) || !isSafeIntegerBetween(payload.code, 0, 255)) {
+        return invalidTraceAction(lineNumber);
+      }
+      break;
+    case "ScrollDown":
+    case "ScrollUp":
+      if (!hasExactKeys(payload, TRACE_SCROLL_ACTION_KEYS) || typeof payload.distance !== "number" || !Number.isFinite(payload.distance) || !validTracePoint(payload.origin))
+        return invalidTraceAction(lineNumber);
+      break;
+    case "SetFileInputFiles":
+      if (!hasExactKeys(payload, TRACE_FILE_INPUT_ACTION_KEYS) || typeof payload.selector !== "string" || !Array.isArray(payload.files) || !payload.files.every((file) => typeof file === "string"))
+        return invalidTraceAction(lineNumber);
+      break;
+    case "MouseDrag":
+      if (!hasExactKeys(payload, TRACE_MOUSE_DRAG_ACTION_KEYS) || !isSafeIntegerBetween(payload.delay_millis, 0, 1000) || !isSafeIntegerBetween(payload.steps, 1, 255) || !validTracePoint(payload.from) || !validTracePoint(payload.to))
+        return invalidTraceAction(lineNumber);
+      break;
+    case "SetViewport":
+      if (!hasExactKeys(payload, TRACE_VIEWPORT_ACTION_KEYS) || !isSafeIntegerBetween(payload.height, 1, 1e4) || !isSafeIntegerBetween(payload.width, 1, 1e4))
+        return invalidTraceAction(lineNumber);
+      break;
+    default:
+      return invalidTraceAction(lineNumber);
+  }
+  return { kind: actionKind, targetTag };
+}
+function parseNonNegativeFiniteNumber(value, lineNumber, field) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid ${field}`);
+  }
+  return value;
+}
+function parseTraceState(value, lineNumber) {
+  if (!isRecord2(value) || !hasExactKeys(value, TRACE_STATE_KEYS)) {
+    throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid browser state`);
+  }
+  if (typeof value.url !== "string" || value.url.length === 0 || value.url.length > 8192) {
+    throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid browser URL`);
+  }
+  let url;
+  try {
+    url = new URL(value.url);
+  } catch {
+    throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid browser URL`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid browser URL protocol`);
+  }
+  if (typeof value.screenshot !== "string" || value.screenshot.length > 8192) {
+    throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid screenshot path`);
+  }
+  for (const field of ["hash_previous", "hash_current"]) {
+    const hash = value[field];
+    if (hash !== null && (typeof hash !== "number" || !Number.isFinite(hash) || !Number.isInteger(hash) || hash < 0)) {
+      throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid ${field}`);
+    }
+  }
+  if (!isRecord2(value.resources) || !hasExactKeys(value.resources, TRACE_RESOURCE_KEYS)) {
+    throw new Error(`Bombadil trace line ${String(lineNumber)} has invalid browser resources`);
+  }
+  const resources = {};
+  for (const field of Object.keys(RESOURCE_FIELD_MAP)) {
+    resources[field] = parseNonNegativeFiniteNumber(value.resources[field], lineNumber, `resources.${field}`);
+  }
+  parseNonNegativeFiniteNumber(value.resources.timestamp, lineNumber, "resources.timestamp");
+  return {
+    currentHash: value.hash_current,
+    resources,
+    url
+  };
+}
 function parseTraceLine(line, lineNumber) {
   let input;
   try {
@@ -1324,7 +1601,27 @@ function parseTraceLine(line, lineNumber) {
   if (!Number.isSafeInteger(input.timestamp) || typeof input.timestamp !== "number" || input.timestamp < 0 || !Array.isArray(input.snapshots) || input.snapshots.length > TRACE_MAX_SNAPSHOTS_PER_LINE || !Array.isArray(input.violations)) {
     throw new Error(`Bombadil trace line ${String(lineNumber)} has invalid state fields`);
   }
+  const state = parseTraceState(input.state, lineNumber);
+  const action = parseTraceAction(input.action, lineNumber);
   const snapshots = input.snapshots;
+  const namedSnapshots = [];
+  const namedSnapshotNames = new Set;
+  for (const snapshotValue of snapshots) {
+    if (!isRecord2(snapshotValue) || !hasExactKeys(snapshotValue, TRACE_SNAPSHOT_KEYS) || !Number.isSafeInteger(snapshotValue.index) || !Number.isSafeInteger(snapshotValue.time) || snapshotValue.index < 0 || snapshotValue.time < 0 || snapshotValue.name !== null && typeof snapshotValue.name !== "string") {
+      throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid snapshot`);
+    }
+    if (snapshotValue.name !== null) {
+      const name = validateSnapshotName(snapshotValue.name, `Bombadil trace line ${String(lineNumber)} snapshot name`);
+      if (namedSnapshotNames.has(name)) {
+        throw new Error(`Bombadil trace line ${String(lineNumber)} repeats named snapshot ${name}`);
+      }
+      namedSnapshotNames.add(name);
+      namedSnapshots.push({
+        name,
+        valueSha256: namedSnapshotValueSha256(snapshotValue.value)
+      });
+    }
+  }
   const directSnapshots = snapshots.filter((snapshot2) => isRecord2(snapshot2) && snapshot2.name === "direct");
   if (directSnapshots.length !== 1) {
     throw new Error(`Bombadil trace line ${String(lineNumber)} must contain one named direct snapshot`);
@@ -1333,7 +1630,23 @@ function parseTraceLine(line, lineNumber) {
   if (snapshot === undefined || !hasExactKeys(snapshot, TRACE_SNAPSHOT_KEYS) || !Number.isSafeInteger(snapshot.index) || !Number.isSafeInteger(snapshot.time) || snapshot.index < 0 || snapshot.time < 0) {
     throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid direct snapshot`);
   }
-  return parseTraceDirectObservation(snapshot.value);
+  const propertyViolationNames = [];
+  for (const violation of input.violations) {
+    if (!isRecord2(violation) || !hasExactKeys(violation, TRACE_VIOLATION_KEYS)) {
+      throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid property violation`);
+    }
+    propertyViolationNames.push(validateSnapshotName(violation.name, `Bombadil trace line ${String(lineNumber)} property violation name`));
+    if (!isRecord2(violation.violation) || Object.keys(violation.violation).length !== 1) {
+      throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid property violation`);
+    }
+  }
+  return {
+    action,
+    directObservation: parseTraceDirectObservation(snapshot.value),
+    namedSnapshots,
+    propertyViolationNames,
+    state
+  };
 }
 async function attestDirectBombadilTrace(options) {
   const metadata = await stat(options.tracePath).catch(() => null);
@@ -1360,7 +1673,7 @@ async function attestDirectBombadilTrace(options) {
       if (Buffer.byteLength(line, "utf8") > TRACE_MAX_LINE_BYTES) {
         throw new Error(`Bombadil trace line ${String(observationCount)} is too large`);
       }
-      const observation = parseTraceLine(line, observationCount);
+      const observation = parseTraceLine(line, observationCount).directObservation;
       const exact = exactTraceDirectObservation(observation);
       if (exact === null) {
         if (initial !== null) {
@@ -1427,6 +1740,245 @@ async function attestDirectBombadilTrace(options) {
     invalidObservationCount,
     validObservationCount
   };
+}
+function sortedCountRecord(values) {
+  return Object.freeze(Object.fromEntries([...values.entries()].sort(([left], [right]) => compareCodeUnits(left, right))));
+}
+async function summarizeDirectBombadilTrace(options) {
+  const metadata = await stat(options.tracePath).catch(() => null);
+  if (metadata === null || !metadata.isFile() || metadata.size === 0) {
+    throw new Error("Bombadil did not produce a nonempty trace.jsonl");
+  }
+  if (metadata.size > TRACE_MAX_BYTES) {
+    throw new Error(`Bombadil trace exceeds ${String(TRACE_MAX_BYTES)} bytes`);
+  }
+  let targetUrl;
+  try {
+    targetUrl = new URL(options.targetUrl);
+  } catch {
+    throw new Error("targetUrl must be an absolute URL");
+  }
+  const policy = validateExplorationPolicy(options.explorationPolicy);
+  const actionCounts = new Map;
+  const targetTags = new Map;
+  const urlFingerprints = new Set;
+  const rawUrlFingerprints = new Set;
+  const transitionHashes = new Set;
+  const rawTransitionHashes = new Set;
+  const snapshots = new Map;
+  const propertyViolations = new Map;
+  const resources = {
+    documents: 0,
+    domNodes: 0,
+    jsEventListeners: 0,
+    jsHeapTotalBytes: 0,
+    jsHeapUsedBytes: 0,
+    layoutObjects: 0,
+    scriptDurationSeconds: 0,
+    taskDurationSeconds: 0,
+    threadTimeSeconds: 0
+  };
+  let lineCount = 0;
+  let totalActions = 0;
+  let nonWaitCount = 0;
+  let waitStreak = 0;
+  let maxWaitStreak = 0;
+  let nonNullHashCount = 0;
+  let rawNonNullHashCount = 0;
+  let policyObservationCount = 0;
+  let previousObservationWasExact = false;
+  let stableTarget = true;
+  const stream = createReadStream(options.tracePath, { encoding: "utf8" });
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      lineCount += 1;
+      if (lineCount > TRACE_MAX_LINES) {
+        throw new Error(`Bombadil trace exceeds ${String(TRACE_MAX_LINES)} lines`);
+      }
+      if (Buffer.byteLength(line, "utf8") > TRACE_MAX_LINE_BYTES) {
+        throw new Error(`Bombadil trace line ${String(lineCount)} is too large`);
+      }
+      const parsed = parseTraceLine(line, lineCount);
+      const rawRelativeUrl = `${parsed.state.url.pathname}${parsed.state.url.search}${parsed.state.url.hash}`;
+      rawUrlFingerprints.add(sha256(rawRelativeUrl));
+      if (rawUrlFingerprints.size > TRACE_MAX_DISTINCT_URLS) {
+        throw new Error(`Bombadil trace exceeds ${String(TRACE_MAX_DISTINCT_URLS)} distinct raw URL fingerprints`);
+      }
+      if (parsed.state.currentHash !== null) {
+        rawNonNullHashCount += 1;
+        rawTransitionHashes.add(String(parsed.state.currentHash));
+      }
+      for (const name of parsed.propertyViolationNames) {
+        if (!propertyViolations.has(name) && propertyViolations.size >= TRACE_MAX_PROPERTY_NAMES) {
+          throw new Error(`Bombadil trace exceeds ${String(TRACE_MAX_PROPERTY_NAMES)} property names`);
+        }
+        propertyViolations.set(name, (propertyViolations.get(name) ?? 0) + 1);
+      }
+      for (const [sourceName, outputName] of Object.entries(RESOURCE_FIELD_MAP)) {
+        resources[outputName] = Math.max(resources[outputName], parsed.state.resources[sourceName]);
+      }
+      const currentObservationIsExact = exactTraceDirectObservation(parsed.directObservation) !== null;
+      if (!currentObservationIsExact) {
+        previousObservationWasExact = false;
+        continue;
+      }
+      policyObservationCount += 1;
+      const actionFollowsExactObservation = previousObservationWasExact;
+      const recordedActionKind = actionFollowsExactObservation ? parsed.action?.kind ?? null : null;
+      if (actionFollowsExactObservation && parsed.action !== null) {
+        totalActions += 1;
+        actionCounts.set(parsed.action.kind, (actionCounts.get(parsed.action.kind) ?? 0) + 1);
+        if (parsed.action.kind === "Wait") {
+          waitStreak += 1;
+          maxWaitStreak = Math.max(maxWaitStreak, waitStreak);
+        } else {
+          nonWaitCount += 1;
+          waitStreak = 0;
+        }
+        if (parsed.action.targetTag !== null) {
+          if (!targetTags.has(parsed.action.targetTag) && targetTags.size >= 128) {
+            throw new Error("Bombadil trace exceeds 128 distinct action target tags");
+          }
+          targetTags.set(parsed.action.targetTag, (targetTags.get(parsed.action.targetTag) ?? 0) + 1);
+        }
+      } else if (actionFollowsExactObservation) {
+        waitStreak = 0;
+      }
+      const relativeUrl = `${parsed.state.url.pathname}${parsed.state.url.search}${parsed.state.url.hash}`;
+      urlFingerprints.add(sha256(relativeUrl));
+      if (urlFingerprints.size > TRACE_MAX_DISTINCT_URLS) {
+        throw new Error(`Bombadil trace exceeds ${String(TRACE_MAX_DISTINCT_URLS)} distinct URL fingerprints`);
+      }
+      stableTarget &&= parsed.state.url.href === targetUrl.href;
+      if (parsed.state.currentHash !== null) {
+        nonNullHashCount += 1;
+        transitionHashes.add(String(parsed.state.currentHash));
+      }
+      for (const snapshot of parsed.namedSnapshots) {
+        let entry = snapshots.get(snapshot.name);
+        if (entry === undefined) {
+          if (snapshots.size >= TRACE_MAX_NAMED_SNAPSHOT_NAMES) {
+            throw new Error(`Bombadil trace exceeds ${String(TRACE_MAX_NAMED_SNAPSHOT_NAMES)} named snapshots`);
+          }
+          entry = {
+            changeAfterActionKind: new Map,
+            changeAfterNonWaitCount: 0,
+            lastObservationIndex: null,
+            lastValueSha256: null,
+            observationCount: 0,
+            values: new Set
+          };
+          snapshots.set(snapshot.name, entry);
+        }
+        const changedAfterRecordedAction = recordedActionKind !== null && entry.lastObservationIndex === policyObservationCount - 1 && entry.lastValueSha256 !== null && entry.lastValueSha256 !== snapshot.valueSha256;
+        if (changedAfterRecordedAction) {
+          entry.changeAfterActionKind.set(recordedActionKind, (entry.changeAfterActionKind.get(recordedActionKind) ?? 0) + 1);
+        }
+        if (changedAfterRecordedAction && recordedActionKind !== "Wait") {
+          entry.changeAfterNonWaitCount += 1;
+        }
+        entry.lastObservationIndex = policyObservationCount;
+        entry.lastValueSha256 = snapshot.valueSha256;
+        entry.observationCount += 1;
+        entry.values.add(snapshot.valueSha256);
+        if (entry.values.size > TRACE_MAX_DISTINCT_SNAPSHOT_VALUES_PER_NAME) {
+          throw new Error(`Bombadil trace named snapshot ${snapshot.name} exceeds ${String(TRACE_MAX_DISTINCT_SNAPSHOT_VALUES_PER_NAME)} distinct values`);
+        }
+      }
+      previousObservationWasExact = true;
+    }
+  } finally {
+    lines.close();
+    stream.destroy();
+  }
+  if (lineCount === 0)
+    throw new Error("Bombadil did not produce a nonempty trace.jsonl");
+  const policyFailures = [];
+  if (policy !== null) {
+    if (nonWaitCount < policy.minNonWaitActions) {
+      policyFailures.push("minimum non-Wait action count was not reached");
+    }
+    for (const kind of policy.requiredActionKinds) {
+      if ((actionCounts.get(kind) ?? 0) === 0) {
+        policyFailures.push(`required action kind ${kind} was not observed`);
+      }
+    }
+    for (const name of policy.requiredNamedSnapshots) {
+      if (!snapshots.has(name)) {
+        policyFailures.push(`required named snapshot ${name} was not observed`);
+      }
+    }
+    for (const [name, minimum] of Object.entries(policy.minDistinctNamedSnapshotValues)) {
+      if ((snapshots.get(name)?.values.size ?? 0) < minimum) {
+        policyFailures.push(`named snapshot ${name} did not reach its distinct-value minimum`);
+      }
+    }
+    for (const [name, minimum] of Object.entries(policy.minNamedSnapshotChangesAfterNonWait)) {
+      if ((snapshots.get(name)?.changeAfterNonWaitCount ?? 0) < minimum) {
+        policyFailures.push(`named snapshot ${name} did not reach its post-non-Wait change minimum`);
+      }
+    }
+    for (const [name, minimumByKind] of Object.entries(policy.minNamedSnapshotChangesAfterActionKind)) {
+      for (const [kind, minimum] of Object.entries(minimumByKind)) {
+        if ((snapshots.get(name)?.changeAfterActionKind.get(kind) ?? 0) < minimum) {
+          policyFailures.push(`named snapshot ${name} did not reach its post-${kind} change minimum`);
+        }
+      }
+    }
+    if (policy.requireStableTargetUrl && !stableTarget) {
+      policyFailures.push("the browser did not remain on the exact target URL");
+    }
+  }
+  const traceBytes = await readFile(options.tracePath);
+  return Object.freeze({
+    schema: "direct.bombadil-exploration-summary/v2",
+    trace: Object.freeze({
+      bytes: metadata.size,
+      lineCount,
+      sha256: sha256(traceBytes)
+    }),
+    actions: Object.freeze({
+      byKind: sortedCountRecord(actionCounts),
+      maxWaitStreak,
+      nonWaitCount,
+      targetTags: sortedCountRecord(targetTags),
+      total: totalActions
+    }),
+    urls: Object.freeze({
+      distinctFingerprintCount: urlFingerprints.size,
+      fingerprintSha256: Object.freeze([...urlFingerprints].sort(compareCodeUnits)),
+      observationCount: policyObservationCount,
+      rawDistinctFingerprintCount: rawUrlFingerprints.size,
+      rawFingerprintSha256: Object.freeze([...rawUrlFingerprints].sort(compareCodeUnits)),
+      rawObservationCount: lineCount,
+      stableTarget
+    }),
+    transitions: Object.freeze({
+      distinctNonNullHashCount: transitionHashes.size,
+      nonNullHashCount,
+      rawDistinctNonNullHashCount: rawTransitionHashes.size,
+      rawNonNullHashCount
+    }),
+    namedSnapshots: Object.freeze([...snapshots.entries()].sort(([left], [right]) => compareCodeUnits(left, right)).map(([name, entry]) => Object.freeze({
+      changeAfterActionKind: sortedCountRecord(entry.changeAfterActionKind),
+      changeAfterNonWaitCount: entry.changeAfterNonWaitCount,
+      distinctValueCount: entry.values.size,
+      distinctValueSha256: Object.freeze([...entry.values].sort(compareCodeUnits)),
+      name,
+      observationCount: entry.observationCount
+    }))),
+    propertyViolations: Object.freeze({
+      byName: sortedCountRecord(propertyViolations),
+      total: [...propertyViolations.values()].reduce((total, value) => total + value, 0)
+    }),
+    resourceHighWaterMarks: Object.freeze(resources),
+    policy: Object.freeze({
+      configured: policy !== null,
+      failures: Object.freeze(policyFailures),
+      satisfied: policyFailures.length === 0
+    })
+  });
 }
 function parseDirectBombadilFuzzArguments(arguments_, defaultBaseUrl) {
   let baseUrl = defaultBaseUrl;
@@ -1527,7 +2079,7 @@ function validateTargetQuery(value) {
     throw new Error("targetQuery may contain at most 16 parameters");
   }
   const validated = {};
-  for (const [name, queryValue] of [...entries].sort(([left], [right]) => left.localeCompare(right))) {
+  for (const [name, queryValue] of [...entries].sort(([left], [right]) => compareCodeUnits(left, right))) {
     if (name.length === 0 || name.length > 128 || !QUERY_PARAMETER_NAME_PATTERN.test(name) || PROTOTYPE_PROPERTY_NAMES.has(name) || hasControlCharacters3(name) || name === SCENARIO_QUERY_KEY2 || name === FIXTURE_QUERY_KEY2) {
       throw new Error("targetQuery contains an invalid or reserved parameter name");
     }
@@ -1537,6 +2089,131 @@ function validateTargetQuery(value) {
     validated[name] = queryValue;
   }
   return Object.freeze(validated);
+}
+function validateSnapshotName(value, label) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 128 || !SNAPSHOT_NAME_PATTERN.test(value) || PROTOTYPE_PROPERTY_NAMES.has(value) || hasControlCharacters3(value)) {
+    throw new Error(`${label} must be a safe bounded snapshot name`);
+  }
+  return value;
+}
+function validateViewport(value) {
+  if (value === undefined) {
+    return Object.freeze({
+      deviceScaleFactor: DEFAULT_DEVICE_SCALE_FACTOR,
+      height: DEFAULT_VIEWPORT_HEIGHT,
+      width: DEFAULT_VIEWPORT_WIDTH
+    });
+  }
+  if (!isRecord2(value) || !Object.keys(value).every((key) => VIEWPORT_KEYS.has(key))) {
+    throw new Error("viewport must contain only width, height, and deviceScaleFactor");
+  }
+  const validateDimension = (name, input) => {
+    if (typeof input !== "number" || !Number.isSafeInteger(input) || input < 1 || input > 65535) {
+      throw new Error(`viewport.${name} must be an integer between 1 and 65535`);
+    }
+    return input;
+  };
+  const width = validateDimension("width", value.width ?? DEFAULT_VIEWPORT_WIDTH);
+  const height = validateDimension("height", value.height ?? DEFAULT_VIEWPORT_HEIGHT);
+  const deviceScaleFactor = value.deviceScaleFactor ?? DEFAULT_DEVICE_SCALE_FACTOR;
+  if (typeof deviceScaleFactor !== "number" || !Number.isFinite(deviceScaleFactor) || deviceScaleFactor < 0.1 || deviceScaleFactor > 10) {
+    throw new Error("viewport.deviceScaleFactor must be a finite number between 0.1 and 10");
+  }
+  return Object.freeze({ deviceScaleFactor, height, width });
+}
+function validateSnapshotMinimumMap(options) {
+  if (!isRecord2(options.value) || Object.keys(options.value).length > 32) {
+    throw new Error(`${options.label} must be a bounded object`);
+  }
+  const validated = {};
+  for (const [rawName, minimum] of Object.entries(options.value).sort(([left], [right]) => compareCodeUnits(left, right))) {
+    const name = validateSnapshotName(rawName, `${options.label} key`);
+    if (typeof minimum !== "number" || !Number.isSafeInteger(minimum) || minimum < 1 || minimum > options.maximum) {
+      throw new Error(`${options.label} ${name} must be an integer between 1 and ${String(options.maximum)}`);
+    }
+    validated[name] = minimum;
+  }
+  return Object.freeze(validated);
+}
+function validateSnapshotActionMinimumMap(options) {
+  if (!isRecord2(options.value) || Object.keys(options.value).length > 32) {
+    throw new Error(`${options.label} must be a bounded object`);
+  }
+  const validated = {};
+  for (const [rawName, rawMinimumByKind] of Object.entries(options.value).sort(([left], [right]) => compareCodeUnits(left, right))) {
+    const name = validateSnapshotName(rawName, `${options.label} key`);
+    if (!isRecord2(rawMinimumByKind) || Object.keys(rawMinimumByKind).length === 0 || Object.keys(rawMinimumByKind).length > ACTION_KINDS.length) {
+      throw new Error(`${options.label} ${name} must be a bounded action map`);
+    }
+    const minimumByKind = {};
+    for (const [rawKind, minimum] of Object.entries(rawMinimumByKind).sort(([left], [right]) => compareCodeUnits(left, right))) {
+      if (!ACTION_KIND_SET.has(rawKind)) {
+        throw new Error(`${options.label} ${name} contains an unknown action kind`);
+      }
+      if (typeof minimum !== "number" || !Number.isSafeInteger(minimum) || minimum < 1 || minimum > TRACE_MAX_LINES) {
+        throw new Error(`${options.label} ${name}.${rawKind} must be an integer between 1 and ${String(TRACE_MAX_LINES)}`);
+      }
+      minimumByKind[rawKind] = minimum;
+    }
+    validated[name] = Object.freeze(minimumByKind);
+  }
+  return Object.freeze(validated);
+}
+function validateExplorationPolicy(value) {
+  if (value === undefined)
+    return null;
+  if (!isRecord2(value) || !Object.keys(value).every((key) => EXPLORATION_POLICY_KEYS.has(key))) {
+    throw new Error("explorationPolicy contains an unknown field");
+  }
+  const minNonWaitActions = value.minNonWaitActions ?? 0;
+  if (typeof minNonWaitActions !== "number" || !Number.isSafeInteger(minNonWaitActions) || minNonWaitActions < 0 || minNonWaitActions > TRACE_MAX_LINES) {
+    throw new Error(`explorationPolicy.minNonWaitActions must be an integer between 0 and ${String(TRACE_MAX_LINES)}`);
+  }
+  const requiredActionKindsInput = value.requiredActionKinds ?? [];
+  if (!Array.isArray(requiredActionKindsInput) || requiredActionKindsInput.length > ACTION_KINDS.length) {
+    throw new Error("explorationPolicy.requiredActionKinds must be a bounded array");
+  }
+  const requiredActionKinds = [...requiredActionKindsInput];
+  if (!requiredActionKinds.every((kind) => typeof kind === "string" && ACTION_KIND_SET.has(kind)) || new Set(requiredActionKinds).size !== requiredActionKinds.length) {
+    throw new Error("explorationPolicy.requiredActionKinds contains an unknown or duplicate kind");
+  }
+  requiredActionKinds.sort(compareCodeUnits);
+  const requiredNamedSnapshotsInput = value.requiredNamedSnapshots ?? [];
+  if (!Array.isArray(requiredNamedSnapshotsInput) || requiredNamedSnapshotsInput.length > 32) {
+    throw new Error("explorationPolicy.requiredNamedSnapshots must be a bounded array");
+  }
+  const requiredNamedSnapshots = requiredNamedSnapshotsInput.map((name) => validateSnapshotName(name, "explorationPolicy.requiredNamedSnapshots entry"));
+  if (new Set(requiredNamedSnapshots).size !== requiredNamedSnapshots.length) {
+    throw new Error("explorationPolicy.requiredNamedSnapshots contains a duplicate name");
+  }
+  requiredNamedSnapshots.sort(compareCodeUnits);
+  const minDistinctNamedSnapshotValues = validateSnapshotMinimumMap({
+    label: "explorationPolicy.minDistinctNamedSnapshotValues",
+    maximum: TRACE_MAX_DISTINCT_SNAPSHOT_VALUES_PER_NAME,
+    value: value.minDistinctNamedSnapshotValues ?? {}
+  });
+  const minNamedSnapshotChangesAfterActionKind = validateSnapshotActionMinimumMap({
+    label: "explorationPolicy.minNamedSnapshotChangesAfterActionKind",
+    value: value.minNamedSnapshotChangesAfterActionKind ?? {}
+  });
+  const minNamedSnapshotChangesAfterNonWait = validateSnapshotMinimumMap({
+    label: "explorationPolicy.minNamedSnapshotChangesAfterNonWait",
+    maximum: TRACE_MAX_LINES,
+    value: value.minNamedSnapshotChangesAfterNonWait ?? {}
+  });
+  const requireStableTargetUrl = value.requireStableTargetUrl ?? false;
+  if (typeof requireStableTargetUrl !== "boolean") {
+    throw new Error("explorationPolicy.requireStableTargetUrl must be a boolean");
+  }
+  return Object.freeze({
+    minDistinctNamedSnapshotValues,
+    minNamedSnapshotChangesAfterActionKind,
+    minNamedSnapshotChangesAfterNonWait,
+    minNonWaitActions,
+    requireStableTargetUrl,
+    requiredActionKinds: Object.freeze(requiredActionKinds),
+    requiredNamedSnapshots: Object.freeze(requiredNamedSnapshots)
+  });
 }
 function validateDirectBombadilFuzzConfig(config, baseUrlOverride) {
   const repositoryRoot = resolve(config.repositoryRoot);
@@ -1590,6 +2267,8 @@ function validateDirectBombadilFuzzConfig(config, baseUrlOverride) {
   const entryPath = config.entryPath ?? "/";
   validateEntryPath(entryPath);
   const targetQuery = validateTargetQuery(config.targetQuery ?? {});
+  const viewport = validateViewport(config.viewport);
+  const explorationPolicy = validateExplorationPolicy(config.explorationPolicy);
   const startupTimeoutMs = config.server.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
   if (!Number.isSafeInteger(startupTimeoutMs) || startupTimeoutMs < 1000 || startupTimeoutMs > MAX_STARTUP_TIMEOUT_MS) {
     throw new Error(`server.startupTimeoutMs must be an integer between 1000 and ${String(MAX_STARTUP_TIMEOUT_MS)}`);
@@ -1604,8 +2283,10 @@ function validateDirectBombadilFuzzConfig(config, baseUrlOverride) {
     artifactRoot: join2(repositoryRoot, "artifacts", "direct-bombadil", config.artifactName),
     bombadilExecutable: bombadilNativeBinary(repositoryRoot),
     entryPath,
+    explorationPolicy,
     port,
     targetQuery,
+    viewport,
     server: {
       ...config.server,
       cwd: serverCwd,
@@ -1624,6 +2305,7 @@ function resolveReplayPath(repositoryRoot, replayPath) {
   return resolved;
 }
 function createDirectBombadilInvocation(options) {
+  const viewport = validateViewport(options.viewport);
   const target = new URL(options.entryPath ?? "/", `${options.baseUrl}/`);
   target.searchParams.set(SCENARIO_QUERY_KEY2, options.scenario);
   for (const [name, value] of Object.entries(options.targetQuery ?? {})) {
@@ -1638,7 +2320,13 @@ function createDirectBombadilInvocation(options) {
     "--output-path",
     options.outputPath,
     "--headless",
-    "--instrument-javascript="
+    "--instrument-javascript=",
+    "--width",
+    String(viewport.width),
+    "--height",
+    String(viewport.height),
+    "--device-scale-factor",
+    String(viewport.deviceScaleFactor)
   ];
   if (options.replayPath === null) {
     command.push("--exit-on-violation", "--time-limit", `${String(options.timeLimitSeconds)}s`);
@@ -1892,6 +2580,78 @@ function helpText(defaultBaseUrl) {
   ].join(`
 `);
 }
+function parseMatrixCampaignArgument(arguments_) {
+  const forwarded = [];
+  let campaignId = null;
+  let help = false;
+  for (let index = 0;index < arguments_.length; index += 1) {
+    const argument = arguments_[index];
+    if (argument === undefined)
+      continue;
+    if (argument === "--help" || argument === "-h")
+      help = true;
+    if (argument === "--campaign" || argument.startsWith("--campaign=")) {
+      if (campaignId !== null)
+        throw new Error("--campaign may be provided only once");
+      if (argument === "--campaign") {
+        const next = readOptionValue(arguments_, index, "--campaign");
+        campaignId = next.value;
+        index = next.index;
+      } else {
+        campaignId = argument.slice("--campaign=".length);
+      }
+      if (campaignId.length === 0)
+        throw new Error("--campaign requires a value");
+      continue;
+    }
+    forwarded.push(argument);
+  }
+  return { arguments: Object.freeze(forwarded), campaignId, help };
+}
+function validateCampaignMatrix(campaigns) {
+  if (campaigns.length === 0 || campaigns.length > 32) {
+    throw new Error("Bombadil campaign matrix must contain 1-32 campaigns");
+  }
+  const ids = new Set;
+  for (const campaign of campaigns) {
+    if (!ARTIFACT_NAME_PATTERN.test(campaign.id) || ids.has(campaign.id)) {
+      throw new Error("Bombadil campaign IDs must be unique lowercase kebab identifiers");
+    }
+    ids.add(campaign.id);
+  }
+  return campaigns;
+}
+async function runDirectBombadilFuzzMatrix(campaignsInput, arguments_ = process2.argv.slice(2), dependencyOverrides = {}) {
+  const campaigns = validateCampaignMatrix(campaignsInput);
+  const parsed = parseMatrixCampaignArgument(arguments_);
+  if (parsed.help) {
+    process2.stdout.write(`${[
+      helpText(campaigns[0]?.config.baseUrl ?? ""),
+      "  --campaign <id>   Run one campaign; required with --replay",
+      "",
+      `Campaigns: ${campaigns.map((campaign) => campaign.id).join(", ")}`
+    ].join(`
+`)}
+`);
+    return { kind: "help" };
+  }
+  const selected = parsed.campaignId === null ? campaigns : campaigns.filter((campaign) => campaign.id === parsed.campaignId);
+  if (selected.length === 0) {
+    throw new Error(`Unknown Bombadil campaign ${parsed.campaignId ?? ""}`);
+  }
+  if (parsed.campaignId === null && parsed.arguments.some((argument) => argument === "--replay" || argument.startsWith("--replay="))) {
+    throw new Error("--replay requires exactly one --campaign in matrix mode");
+  }
+  const results = [];
+  for (const campaign of selected) {
+    const result = await runDirectBombadilFuzz(campaign.config, parsed.arguments, dependencyOverrides);
+    if (result.kind !== "run") {
+      throw new Error("Bombadil campaign unexpectedly returned help during matrix execution");
+    }
+    results.push({ campaignId: campaign.id, result });
+  }
+  return { kind: "matrix", results: Object.freeze(results) };
+}
 async function runDirectBombadilFuzz(config, arguments_ = process2.argv.slice(2), dependencyOverrides = {}) {
   const parsed = parseDirectBombadilFuzzArguments(arguments_, config.baseUrl);
   if (parsed.kind === "help") {
@@ -1923,7 +2683,8 @@ async function runDirectBombadilFuzz(config, arguments_ = process2.argv.slice(2)
     scenario: validated.scenario,
     specificationPath: validated.specificationPath,
     targetQuery: validated.targetQuery,
-    timeLimitSeconds: parsed.timeLimitSeconds
+    timeLimitSeconds: parsed.timeLimitSeconds,
+    viewport: validated.viewport
   });
   const abortableInvocation = { ...invocation, abortSignal: abortController.signal };
   const serverCommand = validated.server.command.map((argument) => argument === "{port}" ? validated.port : argument);
@@ -1933,6 +2694,8 @@ async function runDirectBombadilFuzz(config, arguments_ = process2.argv.slice(2)
   let processResult = null;
   let attestation = null;
   let attestationFailure = null;
+  let explorationSummary = null;
+  let explorationSummaryFailure = null;
   let rawTracePath = null;
   let serverOutput = "";
   let serverOutputFailure = null;
@@ -1988,6 +2751,15 @@ async function runDirectBombadilFuzz(config, arguments_ = process2.argv.slice(2)
       } catch (error) {
         attestationFailure = error;
       }
+      try {
+        explorationSummary = await summarizeDirectBombadilTrace({
+          ...validated.explorationPolicy === null ? {} : { explorationPolicy: validated.explorationPolicy },
+          targetUrl: invocation.targetUrl,
+          tracePath
+        });
+      } catch (error) {
+        explorationSummaryFailure = error;
+      }
       if (processFailure !== null) {
         throw processFailure instanceof Error ? processFailure : new Error(renderUnknown(processFailure));
       }
@@ -2004,6 +2776,12 @@ async function runDirectBombadilFuzz(config, arguments_ = process2.argv.slice(2)
       }
       if (attestationFailure !== null) {
         throw attestationFailure instanceof Error ? attestationFailure : new Error(renderUnknown(attestationFailure));
+      }
+      if (explorationSummaryFailure !== null) {
+        throw explorationSummaryFailure instanceof Error ? explorationSummaryFailure : new Error(renderUnknown(explorationSummaryFailure));
+      }
+      if (explorationSummary?.policy.satisfied !== true) {
+        throw new Error(`Bombadil exploration policy was not satisfied: ${explorationSummary?.policy.failures.join("; ") ?? "summary unavailable"}`);
       }
     } catch (error) {
       failure = error;
@@ -2038,6 +2816,7 @@ async function runDirectBombadilFuzz(config, arguments_ = process2.argv.slice(2)
   const status = failure === null ? "passed" : "failed";
   const logPath = join2(artifactRun.runDirectory, "bombadil.log");
   const serverLogPath = join2(artifactRun.runDirectory, "server.log");
+  const explorationSummaryPath = join2(artifactRun.runDirectory, "exploration-summary.json");
   const record = {
     schema: ARTIFACT_SCHEMA,
     evidenceClass: "diagnostic-fuzz",
@@ -2053,6 +2832,8 @@ async function runDirectBombadilFuzz(config, arguments_ = process2.argv.slice(2)
     entryPath: validated.entryPath,
     targetQuery: validated.targetQuery,
     targetUrl: invocation.targetUrl,
+    viewport: validated.viewport,
+    explorationPolicy: validated.explorationPolicy,
     specificationPath: validated.specificationPath,
     replayPath,
     timeLimitSeconds: replayPath === null ? parsed.timeLimitSeconds : null,
@@ -2074,6 +2855,9 @@ async function runDirectBombadilFuzz(config, arguments_ = process2.argv.slice(2)
     },
     attestation,
     attestationFailure: attestationFailure === null ? null : renderUnknown(attestationFailure),
+    explorationSummary,
+    explorationSummaryPath: explorationSummary === null ? null : explorationSummaryPath,
+    explorationSummaryFailure: explorationSummaryFailure === null ? null : renderUnknown(explorationSummaryFailure),
     initialDirect: attestation?.initial ?? null,
     interruptedSignal: capturedSignal,
     failure: failure === null ? null : renderUnknown(failure)
@@ -2085,9 +2869,23 @@ async function runDirectBombadilFuzz(config, arguments_ = process2.argv.slice(2)
 ` : ""}`, "utf8");
     await writeFile2(serverLogPath, `${serverOutput}${serverOutput.length > 0 ? `
 ` : ""}`, "utf8");
+    if (explorationSummary !== null) {
+      await writeJsonAtomically(explorationSummaryPath, explorationSummary);
+    }
     await writeJsonAtomically(join2(artifactRun.runDirectory, "run.json"), record);
     await writeJsonAtomically(artifactRun.manifestPath, record);
-    const summary = `${status === "passed" ? "PASS" : "FAIL"} ${validated.label}; artifacts: ${artifactRun.runDirectory}; log: ${logPath}`;
+    const exploration = explorationSummary === null ? "exploration=unavailable" : [
+      `nonWait=${String(explorationSummary.actions.nonWaitCount)}`,
+      `maxWaitStreak=${String(explorationSummary.actions.maxWaitStreak)}`,
+      `namedChanges=${explorationSummary.namedSnapshots.map((snapshot) => `${snapshot.name}:${String(snapshot.changeAfterNonWaitCount)}`).join(",") || "none"}`,
+      `policy=${explorationSummary.policy.satisfied ? "satisfied" : "failed"}`
+    ].join("; ");
+    const summary = [
+      `${status === "passed" ? "PASS" : "FAIL"} ${validated.label}`,
+      exploration,
+      `artifacts: ${artifactRun.runDirectory}`,
+      `log: ${logPath}`
+    ].join("; ");
     (status === "passed" ? process2.stdout : process2.stderr).write(`${summary}
 `);
     if (failure !== null) {
@@ -2108,10 +2906,16 @@ async function runDirectBombadilFuzz(config, arguments_ = process2.argv.slice(2)
 
 // src/tooling/bombadil.ts
 var attestDirectBombadilTrace2 = attestDirectBombadilTrace;
+var summarizeDirectBombadilTrace2 = summarizeDirectBombadilTrace;
 function runDirectBombadilFuzz2(config, arguments_) {
   return arguments_ === undefined ? runDirectBombadilFuzz(config) : runDirectBombadilFuzz(config, arguments_);
 }
+function runDirectBombadilFuzzMatrix2(campaigns, arguments_) {
+  return arguments_ === undefined ? runDirectBombadilFuzzMatrix(campaigns) : runDirectBombadilFuzzMatrix(campaigns, arguments_);
+}
 export {
+  summarizeDirectBombadilTrace2 as summarizeDirectBombadilTrace,
+  runDirectBombadilFuzzMatrix2 as runDirectBombadilFuzzMatrix,
   runDirectBombadilFuzz2 as runDirectBombadilFuzz,
   attestDirectBombadilTrace2 as attestDirectBombadilTrace
 };
