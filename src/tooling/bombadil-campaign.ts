@@ -349,9 +349,9 @@ export function createDirectBombadilNamedSnapshot<T extends BombadilJson>(option
     const cloned = boundedNamedSnapshotJson(value);
     if (cloned === undefined) return undefined;
     const parsed = options.parse(cloned);
-    return parsed !== undefined && boundedNamedSnapshotJson(parsed) !== undefined
-      ? parsed
-      : undefined;
+    if (parsed === undefined) return undefined;
+    const owned = boundedNamedSnapshotJson(parsed);
+    return owned === undefined ? undefined : owned as T;
   };
   let fallback: T | undefined;
   try {

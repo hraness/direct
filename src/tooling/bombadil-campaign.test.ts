@@ -270,6 +270,14 @@ describe("Direct Bombadil named snapshots", () => {
   });
 
   test("produces a named value accepted by the host summary contract", async () => {
+    class MutableParsedValue {
+      status = "ready";
+
+      toJSON() {
+        return { status: "é".repeat(1_100_000) };
+      }
+    }
+    const parserOutput = new MutableParsedValue();
     const snapshot = createDirectBombadilNamedSnapshot({
       fallback: { status: "unavailable" },
       name: "product.compat",
@@ -278,11 +286,18 @@ describe("Direct Bombadil named snapshots", () => {
           return undefined;
         }
         const status = Reflect.get(value, "status");
-        return typeof status === "string" ? { status } : undefined;
+        return typeof status === "string" ? parserOutput : undefined;
       },
       read: (state) => Reflect.get(state.window, "phase"),
     }) as unknown as FakeCell;
-    const value = snapshot.read({ window: { phase: { status: "ready" } } });
+    const value = snapshot.read({
+      window: { phase: { status: "ready" } },
+    }) as { status: string };
+    expect(value).toEqual({ status: "ready" });
+    expect(value).not.toBe(parserOutput);
+    expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
+    parserOutput.status = "mutated";
+    expect(value).toEqual({ status: "ready" });
     const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-helper-summary-"));
     const tracePath = join(directory, "trace.jsonl");
     try {
