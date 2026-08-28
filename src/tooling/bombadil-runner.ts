@@ -2333,7 +2333,22 @@ export async function runDirectBombadilFuzz(
     await writeJsonAtomically(join(artifactRun.runDirectory, "run.json"), record);
     await writeJsonAtomically(artifactRun.manifestPath, record);
 
-    const summary = `${status === "passed" ? "PASS" : "FAIL"} ${validated.label}; artifacts: ${artifactRun.runDirectory}; log: ${logPath}`;
+    const exploration = explorationSummary === null
+      ? "exploration=unavailable"
+      : [
+          `nonWait=${String(explorationSummary.actions.nonWaitCount)}`,
+          `maxWaitStreak=${String(explorationSummary.actions.maxWaitStreak)}`,
+          `namedChanges=${explorationSummary.namedSnapshots
+            .map((snapshot) => `${snapshot.name}:${String(snapshot.changeAfterNonWaitCount)}`)
+            .join(",") || "none"}`,
+          `policy=${explorationSummary.policy.satisfied ? "satisfied" : "failed"}`,
+        ].join("; ");
+    const summary = [
+      `${status === "passed" ? "PASS" : "FAIL"} ${validated.label}`,
+      exploration,
+      `artifacts: ${artifactRun.runDirectory}`,
+      `log: ${logPath}`,
+    ].join("; ");
     (status === "passed" ? process.stdout : process.stderr).write(`${summary}\n`);
 
     if (failure !== null) {
