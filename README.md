@@ -286,6 +286,10 @@ promote the smallest readable failure to a deterministic product regression.
 When a campaign must exercise an interaction, require a named product value to
 change after a non-Wait action so bootstrap and idle transitions do not satisfy
 the exploration policy.
+If the full product snapshot includes viewport dimensions, put that requirement
+on a separate interaction snapshot without viewport fields and require an
+opposite-size `SetViewport` independently. Latch the first ready product state
+for initial-world properties so later actions cannot repair a bad initial state.
 The raw trace remains authoritative and may contain screenshots, URLs, typed
 text, accessible labels, and local paths; treat it as potentially sensitive.
 Summary counts and hashes help triage exploration but are not Direct coverage.

@@ -404,6 +404,15 @@ sufficiency check, not a coverage claim. Start with observed stable behavior
 and raise thresholds only when the action generator makes them reliably
 reachable.
 
+Do not let responsive evidence stand in for product interaction. When a full
+product snapshot includes viewport dimensions, name a second compact
+interaction snapshot that excludes them and put the distinct-value and
+post-action-change requirements on that snapshot. Require `SetViewport`
+separately, and generate only a width or height different from the current
+viewport. Likewise, latch the first product-ready observation for initial-world
+properties so a later generated action cannot repair an incorrect initial
+state before the bounded formula completes.
+
 Run random exploration for 12 to 300 seconds. The default is 20 seconds:
 
 ```sh
