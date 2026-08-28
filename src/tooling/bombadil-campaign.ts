@@ -30,6 +30,18 @@ const DIRECT_PROBE_SCHEMA = "direct.probe/v1";
 const MAX_RAW_CONTRACT_CHARACTERS = 2_000_000;
 const BRIDGE_KEYS = new Set(["manifest", "reset", "schema", "snapshot"]);
 const UNSAFE_CLICK_INPUT_TYPES = new Set(["image", "reset", "submit"]);
+const UNSAFE_CLICK_LABEL_PHRASES = [
+  "clear",
+  "close",
+  "delete",
+  "discard",
+  "erase",
+  "log out",
+  "remove",
+  "reset",
+  "sign out",
+  "unlink",
+] as const;
 const SNAPSHOT_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.:/-]*$/u;
 const RESOURCE_LEAK_OPTION_KEYS = new Set(["growthLimit", "metric", "windowMillis"]);
 const RESOURCE_METRICS = [
@@ -86,11 +98,18 @@ function safeClickAction(action: ActionTemplate): boolean {
   const inputType = fingerprint.inputType?.toLowerCase() ?? "";
   const labels = [fingerprint.accessibleName, fingerprint.textContent]
     .filter((label): label is string => label !== null)
-    .map((label) => label.trim().toLowerCase());
+    .map((label) => label
+      .trim()
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, " "));
+  const hasUnsafeLabel = labels.some((label) => {
+    const padded = ` ${label} `;
+    return UNSAFE_CLICK_LABEL_PHRASES.some((phrase) => padded.includes(` ${phrase} `));
+  });
   return fingerprint.href === null
     && tag !== "a"
     && fingerprint.role?.toLowerCase() !== "link"
-    && !labels.includes("reset")
+    && !hasUnsafeLabel
     && !UNSAFE_CLICK_INPUT_TYPES.has(inputType)
     && (tag !== "button" || inputType === "button");
 }

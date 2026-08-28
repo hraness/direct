@@ -365,6 +365,11 @@ describe("Direct Bombadil actions", () => {
         [2, { value: clickAction({ textContent: "ReSeT" }) }],
         [2, { value: clickAction({ accessibleName: "RESET", textContent: "Again" }) }],
         [2, { value: clickAction({ accessibleName: "", textContent: "Reset" }) }],
+        [2, { value: clickAction({ textContent: "Delete track" }) }],
+        [2, { value: clickAction({ accessibleName: "Close editor", textContent: "Done" }) }],
+        [2, { value: clickAction({ textContent: "Sign-out" }) }],
+        [2, { value: clickAction({ textContent: "Remove from playlist" }) }],
+        [2, { value: clickAction({ textContent: "Unclear status" }) }],
         [1, {
           branches: [
             [9, { value: clickAction({ tag: "input", inputType: "text" }) }],
@@ -383,6 +388,7 @@ describe("Direct Bombadil actions", () => {
     expect(filtered?.generate()).toEqual({
       branches: [
         [7, { value: clickAction() }],
+        [2, { value: clickAction({ textContent: "Unclear status" }) }],
         [1, {
           branches: [
             [9, { value: clickAction({ tag: "input", inputType: "text" }) }],
