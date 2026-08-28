@@ -1321,7 +1321,7 @@ describe("Direct Bombadil exploration summary", () => {
     const badTarget = await summaryTrace([traceLine(observation, 1, {
       action: {
         Click: {
-          fingerprint: { tag: "unsafe tag" },
+          fingerprint: { tag: "" },
           point: { x: 1, y: 1 },
         },
       },
