@@ -332,8 +332,8 @@ function boundedNamedSnapshotJson(value: unknown): BombadilJson | undefined {
 export function createDirectBombadilNamedSnapshot<T extends BombadilJson>(options: {
   readonly fallback: T;
   readonly name: string;
-  readonly parse: (value: BombadilJson) => T | undefined;
   readonly read: (state: BombadilBrowserState) => unknown;
+  readonly validate: (value: BombadilJson) => value is T;
 }): Cell<T> {
   if (
     options.name.length === 0
@@ -345,28 +345,24 @@ export function createDirectBombadilNamedSnapshot<T extends BombadilJson>(option
       "Bombadil snapshot name must be a safe, unreserved 1-128 character identifier",
     );
   }
-  const parse = (value: unknown): T | undefined => {
-    const cloned = boundedNamedSnapshotJson(value);
-    if (cloned === undefined) return undefined;
-    const parsed = options.parse(cloned);
-    if (parsed === undefined) return undefined;
-    const owned = boundedNamedSnapshotJson(parsed);
-    return owned === undefined ? undefined : owned as T;
+  const validate = (value: unknown): T | undefined => {
+    const owned = boundedNamedSnapshotJson(value);
+    return owned !== undefined && options.validate(owned) ? owned : undefined;
   };
   let fallback: T | undefined;
   try {
-    fallback = parse(options.fallback);
+    fallback = validate(options.fallback);
   } catch {
     fallback = undefined;
   }
   if (fallback === undefined) {
     throw new Error(
-      "Bombadil snapshot fallback must be bounded JSON accepted by parse",
+      "Bombadil snapshot fallback must be bounded JSON accepted by validate",
     );
   }
   return extract<BombadilBrowserState, T>((state) => {
     try {
-      return parse(options.read(state)) ?? fallback;
+      return validate(options.read(state)) ?? fallback;
     } catch {
       return fallback;
     }

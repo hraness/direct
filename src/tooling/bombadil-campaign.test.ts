@@ -240,14 +240,13 @@ describe("Direct Bombadil named snapshots", () => {
     const snapshot = createDirectBombadilNamedSnapshot({
       fallback: { status: "unavailable" },
       name: "product.phase",
-      parse: (value) => {
-        if (typeof value !== "object" || value === null || Array.isArray(value)) {
-          return undefined;
-        }
-        const status = Reflect.get(value, "status");
-        return typeof status === "string" ? { status } : undefined;
-      },
       read: (state) => Reflect.get(state.window, "phase"),
+      validate: (value): value is { readonly status: string } => (
+        typeof value === "object"
+        && value !== null
+        && !Array.isArray(value)
+        && typeof Reflect.get(value, "status") === "string"
+      ),
     }) as unknown as FakeCell;
     expect(snapshot.name).toBe("product.phase");
     expect(snapshot.read({ window: { phase: { status: "ready" } } })).toEqual({
@@ -270,33 +269,32 @@ describe("Direct Bombadil named snapshots", () => {
   });
 
   test("produces a named value accepted by the host summary contract", async () => {
-    class MutableParsedValue {
+    class MutablePageValue {
       status = "ready";
 
       toJSON() {
         return { status: "é".repeat(1_100_000) };
       }
     }
-    const parserOutput = new MutableParsedValue();
+    const pageValue = new MutablePageValue();
     const snapshot = createDirectBombadilNamedSnapshot({
       fallback: { status: "unavailable" },
       name: "product.compat",
-      parse: (value) => {
-        if (typeof value !== "object" || value === null || Array.isArray(value)) {
-          return undefined;
-        }
-        const status = Reflect.get(value, "status");
-        return typeof status === "string" ? parserOutput : undefined;
-      },
-      read: (state) => Reflect.get(state.window, "phase"),
+      read: () => pageValue,
+      validate: (value): value is { readonly status: string } => (
+        typeof value === "object"
+        && value !== null
+        && !Array.isArray(value)
+        && typeof Reflect.get(value, "status") === "string"
+      ),
     }) as unknown as FakeCell;
     const value = snapshot.read({
       window: { phase: { status: "ready" } },
     }) as { status: string };
     expect(value).toEqual({ status: "ready" });
-    expect(value).not.toBe(parserOutput);
+    expect(value).not.toBe(pageValue);
     expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
-    parserOutput.status = "mutated";
+    pageValue.status = "mutated";
     expect(value).toEqual({ status: "ready" });
     const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-helper-summary-"));
     const tracePath = join(directory, "trace.jsonl");
@@ -355,16 +353,16 @@ describe("Direct Bombadil named snapshots", () => {
       expect(() => createDirectBombadilNamedSnapshot<BombadilJson>({
         fallback: null,
         name,
-        parse: (value) => value,
         read: () => null,
+        validate: (_value): _value is BombadilJson => true,
       })).toThrow("safe, unreserved");
     }
 
     const snapshot = createDirectBombadilNamedSnapshot<BombadilJson>({
       fallback: null,
       name: "safe",
-      parse: (value) => value,
       read: (state) => Reflect.get(state.window, "phase"),
+      validate: (_value): _value is BombadilJson => true,
     }) as unknown as FakeCell;
     let atLimit: BombadilJson = null;
     for (let index = 0; index < 64; index += 1) atLimit = [atLimit];
@@ -373,19 +371,19 @@ describe("Direct Bombadil named snapshots", () => {
     expect(snapshot.read({ window: { phase: beyondLimit } })).toBeNull();
   });
 
-  test("rejects non-JSON or parser-invalid fallbacks before registering an extractor", () => {
+  test("rejects non-JSON or predicate-invalid fallbacks before registering an extractor", () => {
     expect(() => createDirectBombadilNamedSnapshot({
       fallback: null,
       name: "safe",
-      parse: () => undefined,
       read: () => null,
-    })).toThrow("accepted by parse");
+      validate: (_value): _value is never => false,
+    })).toThrow("accepted by validate");
     expect(() => createDirectBombadilNamedSnapshot<BombadilJson>({
       fallback: undefined as never,
       name: "safe",
-      parse: (value) => value,
       read: () => null,
-    })).toThrow("fallback must be bounded JSON accepted by parse");
+      validate: (_value): _value is BombadilJson => true,
+    })).toThrow("fallback must be bounded JSON accepted by validate");
   });
 });
 
