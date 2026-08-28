@@ -167,11 +167,6 @@ function evaluate(body: unknown): boolean {
   return (body as () => boolean)();
 }
 
-function requireFormula(value: boolean | FakeFormula): FakeFormula {
-  if (typeof value === "boolean") throw new Error("Expected a nested formula");
-  return value;
-}
-
 describe("Direct Bombadil observation", () => {
   test("accepts the exact current bridge, manifest, and probe contract", () => {
     const observation = readDirectBombadilObservation(contractFixture());
