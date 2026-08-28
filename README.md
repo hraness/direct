@@ -50,7 +50,7 @@ Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
 Use $direct to install hraness/direct from
-the npm registry at the exact 0.7.5 version. Follow the repository README, add
+the npm registry at the exact 0.7.6 version. Follow the repository README, add
 `@hraness/direct` to devDependencies only, and verify that the production
 dependency graph excludes Direct. Do not add a fixture composition until I
 ask.
@@ -66,7 +66,7 @@ Pin the public npm package to an exact immutable version:
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "0.7.5"
+    "@hraness/direct": "0.7.6"
   }
 }
 ```
