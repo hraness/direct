@@ -2,20 +2,23 @@
 
 [![skills.sh](https://skills.sh/b/hraness/direct)](https://skills.sh/hraness/direct)
 
-a general harness for repeatable app states.
+a TypeScript harness for deterministic frontend development with repeatable
+scenarios, local fixtures, and browser verification for coding agents.
 
 name signed-in, empty, error, and other hard-to-reach app states once, then let
 coding agents open them by URL during development. your interface and feature
 code run normally. direct replaces only the outside systems needed for that
-state with predictable local stand-ins. it does not click through the browser
+state with predictable local fixtures. it does not click through the browser
 or test the systems it replaces.
 
 ```sh
-bun add --dev @hraness/direct@0.7.6
+bun add --dev @hraness/direct@0.7.7
 # or
-npm install --save-dev @hraness/direct@0.7.6
+npm install --save-dev @hraness/direct@0.7.7
 ```
 
+[npm](https://www.npmjs.com/package/@hraness/direct) ·
+[github](https://github.com/hraness/direct) ·
 [overview](https://hraness.com/direct)
 
 ```text
@@ -50,7 +53,7 @@ Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
 Use $direct to install hraness/direct from
-the npm registry at the exact 0.7.6 version. Follow the repository README, add
+the npm registry at the exact 0.7.7 version. Follow the repository README, add
 `@hraness/direct` to devDependencies only, and verify that the production
 dependency graph excludes Direct. Do not add a fixture composition until I
 ask.
@@ -66,7 +69,7 @@ Pin the public npm package to an exact immutable version:
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "0.7.6"
+    "@hraness/direct": "0.7.7"
   }
 }
 ```
