@@ -175,9 +175,9 @@ describe("npm release workflows", () => {
     const opening = readme.slice(0, 1_500).replace(/\s+/gu, " ").toLowerCase();
     expect(opening).toContain(String(manifest.description).toLowerCase());
     for (const link of [
-      "[npm](https://www.npmjs.com/package/@hraness/direct)",
-      "[github](https://github.com/hraness/direct)",
-      "[overview](https://hraness.com/direct)",
+      "[Install @hraness/direct from npm](https://www.npmjs.com/package/@hraness/direct)",
+      "[Direct source on GitHub](https://github.com/hraness/direct)",
+      "[Direct overview](https://hraness.com/direct)",
     ]) expect(readme).toContain(link);
   });
 
