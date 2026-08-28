@@ -252,27 +252,36 @@ async function verifyInstalledManifest(
   consumer: string,
   packageVersion: string,
 ): Promise<void> {
-  const value = JSON.parse(await readFile(
-    join(consumer, "node_modules", "@hraness", "direct", "package.json"),
-    "utf8",
-  )) as unknown;
+  const [value, sourceValue] = await Promise.all([
+    readFile(
+      join(consumer, "node_modules", "@hraness", "direct", "package.json"),
+      "utf8",
+    ).then((source) => JSON.parse(source) as unknown),
+    readFile(join(repository, "package.json"), "utf8")
+      .then((source) => JSON.parse(source) as unknown),
+  ]);
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Installed Direct package manifest is not an object");
   }
+  const sourceManifest = record(sourceValue, "source Direct package manifest");
   const manifest = value as Record<string, unknown>;
-  const repository = manifest.repository;
+  const repositoryMetadata = manifest.repository;
   const bugs = manifest.bugs;
   const publishConfig = manifest.publishConfig;
   if (
     manifest.name !== packageName
     || manifest.version !== packageVersion
+    || typeof sourceManifest.description !== "string"
+    || !Array.isArray(sourceManifest.keywords)
+    || manifest.description !== sourceManifest.description
+    || JSON.stringify(manifest.keywords) !== JSON.stringify(sourceManifest.keywords)
     || manifest.license !== "MIT"
     || manifest.homepage !== "https://hraness.com/direct"
-    || typeof repository !== "object"
-    || repository === null
-    || Array.isArray(repository)
-    || (repository as Record<string, unknown>).type !== "git"
-    || (repository as Record<string, unknown>).url
+    || typeof repositoryMetadata !== "object"
+    || repositoryMetadata === null
+    || Array.isArray(repositoryMetadata)
+    || (repositoryMetadata as Record<string, unknown>).type !== "git"
+    || (repositoryMetadata as Record<string, unknown>).url
       !== "git+https://github.com/hraness/direct.git"
     || typeof bugs !== "object"
     || bugs === null
