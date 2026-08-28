@@ -237,6 +237,11 @@ deterministic checks. This path does not replace product-owned semantic or
 accessibility assertions. It also does not prove a substituted service,
 adapter, browser host, operating system, or device.
 
+Bombadil is an experimental 0.x tool. Review the official
+[manual](https://antithesishq.github.io/bombadil/) when changing its pinned
+version, specification, actions, properties, or CLI invocation; minor releases
+may change interfaces or trace details.
+
 Install the one supported release directly in the consumer. Direct declares
 it as an exact optional peer so products that do not use fuzzing do not install
 a browser tool:
@@ -253,20 +258,36 @@ TypeScript source. Import it only from a Bombadil specification; use the built
 Create a specification such as `direct/bombadil-campaign.ts`:
 
 ```ts
+import { always, eventually } from "@antithesishq/bombadil";
 import {
   createDirectBombadilActions,
+  createDirectBombadilNamedSnapshot,
   createDirectBombadilProperties,
+  createDirectBombadilResourceLeakProperty,
 } from "@hraness/direct/tooling/bombadil-campaign";
 
 export * from "@antithesishq/bombadil/browser/defaults/properties";
 
 const direct = createDirectBombadilProperties();
+const phase = createDirectBombadilNamedSnapshot({
+  fallback: "unavailable",
+  name: "todos.phase",
+  read: ({ window }) => Reflect.get(window, "__todosPhase"),
+});
 
 export const direct_safe_actions = createDirectBombadilActions();
 export const direct_exact_contract = direct.exactContract;
 export const direct_stable_catalog = direct.stableCatalog;
 export const direct_no_declared_violations = direct.noDeclaredViolations;
 export const direct_eventual_quiescence = direct.eventualQuiescence;
+export const todos_phase_is_known = always(
+  eventually(() => phase.current !== "unavailable").within(5, "seconds"),
+);
+export const no_dom_node_leak = createDirectBombadilResourceLeakProperty({
+  metric: "dom_nodes",
+  growthLimit: 500,
+  windowMillis: 10_000,
+});
 ```
 
 The Direct action generator deliberately excludes reload, history traversal,
@@ -275,6 +296,31 @@ Enter key. It retains ordinary buttons, text input, scrolling, and an
 always-eligible low-weight wait. This preserves the post-handshake contract
 within one document. Add product actions only when their navigation and form
 effects are understood, and keep product-specific assertions in the campaign.
+Guard domain actions on the state that makes them valid, then weight valuable
+state-changing actions above Wait. Do not increase throughput by admitting
+reload, navigation, submission, destructive controls, or arbitrary generated
+input. A generated action sequence is useful only while it preserves the
+scenario boundary and exercises behavior the product can interpret.
+
+`createDirectBombadilNamedSnapshot` gives product properties and post-run
+diagnostics a small semantic signal. It requires a safe bounded name, clones no
+more than two million JSON characters, and fails closed to the explicit
+fallback when a page getter throws or returns unsuitable data. Extract state,
+not page content or credentials. Named values are represented only by canonical
+SHA-256 hashes in the exploration summary; the authoritative raw trace still
+contains the original values.
+
+Bombadil's 0.7.2 manual documents a sliding-window resource property at
+`@antithesishq/bombadil/browser/extras/resources`, but the published npm
+package omits that subpath from its `exports` map. Use Direct's
+`createDirectBombadilResourceLeakProperty` implementation until a reviewed
+Bombadil release exports the official helper. Add a tuned property when
+repeated product actions allocate DOM nodes, listeners, layout objects, or
+heap. Prefer DOM-node or listener thresholds when they express the defect
+because heap samples move with garbage collection. Measure a normal run in
+Inspect before setting a growth limit, and keep the window longer than ordinary
+rendering bursts. The summary's resource high-water marks help choose and
+review those thresholds; a maximum alone does not prove or disprove a leak.
 
 Create a Bun wrapper such as `direct/fuzz-browser.ts`:
 
@@ -297,6 +343,14 @@ await runDirectBombadilFuzz({
   repositoryRoot,
   scenario: "todos.populated",
   specificationPath: resolve(directRoot, "bombadil-campaign.ts"),
+  viewport: { width: 1_024, height: 768, deviceScaleFactor: 2 },
+  explorationPolicy: {
+    minNonWaitActions: 1,
+    requiredNamedSnapshots: ["direct", "todos.phase"],
+    minDistinctNamedSnapshotValues: { "todos.phase": 2 },
+    minNamedSnapshotChangesAfterNonWait: { "todos.phase": 1 },
+    requireStableTargetUrl: true,
+  },
   server: {
     command: [
       process.execPath,
@@ -327,6 +381,26 @@ the runner rejects Direct's reserved scenario and fixture keys there because
 it binds the requested scenario itself. The repository root, campaign path,
 server working directory, and replay trace are resolved canonically before use;
 a symlink that escapes the configured repository is rejected.
+`viewport` is optional and defaults to Bombadil 0.7.2's 1024×768 viewport at a
+device scale factor of 2. The runner always passes the validated exact values
+to random and replay invocations and records them in `run.json`.
+Assign one reviewed viewport to each existing scenario campaign. Alternate a
+stable wide and narrow viewport across the matrix instead of duplicating every
+scenario at every size; add a second size only when the scenario owns a
+responsive behavior that needs separate exploration.
+
+`explorationPolicy` is optional. When present, it can require a minimum count
+of non-Wait actions, particular action kinds and named snapshots, minimum
+distinct hashed values for named snapshots, named-value changes observed after
+a non-Wait action, and an exact stable target URL. The change requirement keeps
+bootstrap or Wait-only transitions from satisfying a product-interaction
+threshold. The trace records the last action with the resulting state, so this
+count identifies a named value transition associated with an active product
+action. It does not prove causality. The policy detects a campaign that passed
+its properties without doing the intended exploration. It is a diagnostic
+sufficiency check, not a coverage claim. Start with observed stable behavior
+and raise thresholds only when the action generator makes them reliably
+reachable.
 
 Run random exploration for 12 to 300 seconds. The default is 20 seconds:
 
@@ -334,19 +408,54 @@ Run random exploration for 12 to 300 seconds. The default is 20 seconds:
 bun direct/fuzz-browser.ts --time-limit 20s
 ```
 
+Use 12–30 seconds in the edit loop. A scheduled diagnostic lane can run each
+campaign for 60–300 seconds, serially, with an outer job timeout and retained
+failure artifacts. Random exploration should supplement the deterministic
+required gate rather than make an otherwise healthy pull request depend on one
+particular random path.
+
+For multiple product scenarios, pass a bounded matrix to the shared runner:
+
+```ts
+import { runDirectBombadilFuzzMatrix } from "@hraness/direct/tooling/bombadil";
+
+await runDirectBombadilFuzzMatrix([
+  { id: "populated", config: populatedCampaign },
+  { id: "empty", config: emptyCampaign },
+], process.argv.slice(2));
+```
+
+Without `--campaign`, the matrix runs every unique campaign serially. Select
+one for focused work with `--campaign empty`. Replay is intentionally rejected
+without that selector so a trace cannot be applied to the wrong scenario.
+
 Use `--base-url` to select another local root origin. Use `--replay` with a
 repository-local `.jsonl` trace instead of `--time-limit` to reproduce a prior
 run. The native runner supports Bombadil 0.7.2 on Apple silicon macOS and x64
 or arm64 Linux. Unsupported platform and architecture pairs fail before a
 server starts.
 
+Bombadil's browser Inspect UI is the fastest way to examine the actions,
+screenshots, resource timeline, snapshots, and violations in a retained run:
+
+```sh
+bunx bombadil browser inspect artifacts/direct-bombadil/todos/<run>/bombadil
+bun direct/fuzz-browser.ts --replay artifacts/direct-bombadil/todos/<run>/bombadil/trace.jsonl
+```
+
+Use the same campaign, viewport, specification, scenario, application tree,
+and server configuration for replay. Bombadil rejects a replay that diverges,
+so reproduction is strong debugging evidence but not guaranteed after the
+product changes.
+
 The browser formulas require an exact scenario contract, a nonempty catalog,
 zero declared violations, and quiescence to recur within ten seconds from every
-observed state. Bombadil's temporal engine cannot decide an unbounded `always`
-inside a bounded `eventually`, so continuous identity and catalog binding stay
-in the host attestation below. A formula result and Bombadil exit status are not
-sufficient evidence because a short or incomplete trace could otherwise pass
-vacuously.
+observed state. Keep every liveness obligation bounded to a product latency
+budget. A finite run cannot decide an unbounded future obligation, and nesting
+unbounded `always` inside bounded `eventually` does not make it decidable.
+Continuous identity and catalog binding therefore stay in the host attestation
+below. A formula result and Bombadil exit status are not sufficient evidence
+because a short or incomplete trace could otherwise pass vacuously.
 
 After every random run or replay, the host runner streams the bounded 0.7.2
 JSONL trace from foreign input and requires one named `direct` observation per
@@ -369,12 +478,30 @@ configured local server is always stopped through the shared
 browser-verification lease helpers, and its output drain remains bounded even
 when cleanup itself fails.
 
-Each attempt writes `run.json`, `bombadil.log`, and `server.log` below
+Each attempt writes `run.json`, `exploration-summary.json`, `bombadil.log`, and `server.log` below
 `artifacts/direct-bombadil/<artifactName>/<run>/`, including failures. The
 rolling `manifest.json` points to the latest record. `rawTracePath` reports a
 regular nonempty trace even if attestation fails; `tracePath` is present only
-after exact attestation. Keep these diagnostic artifacts out of source control
-unless the consumer explicitly reviews them as fixtures.
+after exact attestation. The summary strictly parses the 0.7.2 envelopes and
+records the raw trace SHA-256, action-kind and safe target-tag counts, non-Wait
+count and longest Wait streak, origin-relative URL fingerprints, non-null
+transition-hash cardinality, canonical named-snapshot value hashes, property
+violation names and counts, named-value changes after non-Wait actions, and
+browser resource high-water marks. It excludes
+typed text, accessible names, snapshot values, URLs, screenshots, and absolute
+paths. These diagnostics describe what Bombadil happened to explore. They do
+not measure code, state, interaction, or Direct catalog coverage, and the raw
+trace remains authoritative.
+
+Keep all generated artifacts out of source control by default. Upload a failed
+scheduled run to access-controlled CI storage with a bounded retention period;
+the raw trace can contain screenshots, query values, typed text, accessibility
+labels, extracted values, and local paths. Preserve it long enough to inspect
+and replay. Once the defect is understood, add the smallest deterministic
+regression at the owning parser, reducer, port, component, semantic browser, or
+Direct scenario boundary. Verify that regression fails before the fix and
+passes after it. Retain a reviewed trace fixture only when replay itself adds
+durable value; otherwise remove the sensitive trace after promotion.
 
 ## Report coverage without promotion
 

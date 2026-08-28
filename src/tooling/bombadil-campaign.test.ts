@@ -13,7 +13,10 @@ interface FakeCell {
   current: unknown;
   name: string | null;
   readonly named: (name: string) => FakeCell;
-  readonly read: (state: { readonly window: unknown }) => unknown;
+  readonly read: (state: {
+    readonly resources?: Readonly<Record<string, number>>;
+    readonly window: unknown;
+  }) => unknown;
 }
 
 interface FakeActionGenerator {
@@ -68,7 +71,9 @@ void mock.module("@antithesishq/bombadil/browser/defaults/actions", () => ({
 
 const {
   createDirectBombadilActions,
+  createDirectBombadilNamedSnapshot,
   createDirectBombadilProperties,
+  createDirectBombadilResourceLeakProperty,
   readDirectBombadilObservation,
 } = await import("./bombadil-campaign.js");
 
@@ -226,6 +231,100 @@ describe("Direct Bombadil observation", () => {
     expect(drifted.contractValid).toBeTrue();
     expect(drifted.manifest).not.toBeNull();
     expect(drifted.probe).toMatchObject({ pending: { requests: 1 } });
+  });
+});
+
+describe("Direct Bombadil named snapshots", () => {
+  test("names bounded JSON and fails closed around hostile or oversized page values", () => {
+    const snapshot = createDirectBombadilNamedSnapshot({
+      fallback: { status: "unavailable" },
+      name: "product.phase",
+      read: (state) => Reflect.get(state.window, "phase"),
+    }) as unknown as FakeCell;
+    expect(snapshot.name).toBe("product.phase");
+    expect(snapshot.read({ window: { phase: { status: "ready" } } })).toEqual({
+      status: "ready",
+    });
+
+    const hostile = {};
+    Object.defineProperty(hostile, "phase", {
+      get: () => {
+        throw new Error("hostile getter");
+      },
+    });
+    expect(snapshot.read({ window: hostile })).toEqual({ status: "unavailable" });
+    expect(snapshot.read({
+      window: { phase: "x".repeat(2_000_001) },
+    })).toEqual({ status: "unavailable" });
+  });
+
+  test("rejects unsafe names and non-JSON fallbacks before registering an extractor", () => {
+    expect(() => createDirectBombadilNamedSnapshot({
+      fallback: null,
+      name: "unsafe name",
+      read: () => null,
+    })).toThrow("safe 1-128 character identifier");
+    expect(() => createDirectBombadilNamedSnapshot({
+      fallback: undefined as never,
+      name: "safe",
+      read: () => null,
+    })).toThrow("fallback must be bounded JSON");
+  });
+});
+
+describe("Direct Bombadil resource properties", () => {
+  const resources = (timestamp: number, domNodes: number) => ({
+    documents: 1,
+    dom_nodes: domNodes,
+    js_event_listeners: 2,
+    js_heap_total: 2_000,
+    js_heap_used: 1_000,
+    layout_objects: 10,
+    script_duration: 0,
+    task_duration: 0,
+    thread_time: 0,
+    timestamp,
+  });
+
+  test("detects excessive growth across a bounded sliding resource window", () => {
+    const property = createDirectBombadilResourceLeakProperty({
+      growthLimit: 10,
+      metric: "dom_nodes",
+      windowMillis: 1_000,
+    }) as unknown as FakeFormula;
+    const cell = cells.at(-1);
+    if (cell === undefined) throw new Error("resource extractor was not registered");
+
+    cell.current = cell.read({ resources: resources(1, 100), window: {} });
+    expect(evaluate(property.body)).toBeTrue();
+    cell.current = cell.read({ resources: resources(1.5, 105), window: {} });
+    expect(evaluate(property.body)).toBeTrue();
+    cell.current = cell.read({ resources: resources(1.75, 120), window: {} });
+    expect(evaluate(property.body)).toBeFalse();
+  });
+
+  test("rejects unknown fields, metrics, and unsafe numeric bounds", () => {
+    expect(() => createDirectBombadilResourceLeakProperty({
+      growthLimit: 1,
+      metric: "dom_nodes",
+      windowMillis: 1_000,
+      extra: true,
+    } as never)).toThrow("must contain metric");
+    expect(() => createDirectBombadilResourceLeakProperty({
+      growthLimit: 1,
+      metric: "documents" as never,
+      windowMillis: 1_000,
+    })).toThrow("metric is unsupported");
+    expect(() => createDirectBombadilResourceLeakProperty({
+      growthLimit: Number.POSITIVE_INFINITY,
+      metric: "dom_nodes",
+      windowMillis: 1_000,
+    })).toThrow("positive finite safe number");
+    expect(() => createDirectBombadilResourceLeakProperty({
+      growthLimit: 1,
+      metric: "dom_nodes",
+      windowMillis: 300_001,
+    })).toThrow("between 1 and 300000");
   });
 });
 

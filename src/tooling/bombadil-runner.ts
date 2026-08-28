@@ -3,6 +3,7 @@ import { readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import process from "node:process";
 import { createInterface } from "node:readline";
+import { createHash } from "node:crypto";
 
 import {
   parseDirectProbeSnapshot,
@@ -44,6 +45,12 @@ const TRACE_MAX_BYTES = 64 * 1024 * 1024;
 const TRACE_MAX_LINE_BYTES = 16 * 1024 * 1024;
 const TRACE_MAX_LINES = 10_000;
 const TRACE_MAX_SNAPSHOTS_PER_LINE = 4_096;
+const TRACE_MAX_NAMED_SNAPSHOT_NAMES = 128;
+const TRACE_MAX_DISTINCT_SNAPSHOT_VALUES_PER_NAME = 1_024;
+const TRACE_MAX_DISTINCT_URLS = 1_024;
+const TRACE_MAX_PROPERTY_NAMES = 128;
+const TRACE_MAX_CANONICAL_SNAPSHOT_BYTES = 2 * 1024 * 1024;
+const TRACE_MAX_JSON_DEPTH = 64;
 const RANDOM_RUN_OVERHEAD_MS = 30_000;
 const REPLAY_WALL_CLOCK_TIMEOUT_MS = MAX_TIME_LIMIT_SECONDS * 1_000 + RANDOM_RUN_OVERHEAD_MS;
 const PROCESS_TERMINATION_GRACE_MS = 5_000;
@@ -52,6 +59,66 @@ const SERVER_OUTPUT_TIMEOUT_MS = 3_000;
 const DIRECT_BROWSER_BRIDGE_SCHEMA = "direct.browser-bridge/v2";
 const TRACE_LINE_KEYS = new Set(["action", "snapshots", "state", "timestamp", "violations"]);
 const TRACE_SNAPSHOT_KEYS = new Set(["index", "name", "time", "value"]);
+const TRACE_STATE_KEYS = new Set([
+  "hash_current",
+  "hash_previous",
+  "resources",
+  "screenshot",
+  "url",
+]);
+const TRACE_RESOURCE_KEYS = new Set([
+  "documents",
+  "dom_nodes",
+  "js_event_listeners",
+  "js_heap_total",
+  "js_heap_used",
+  "layout_objects",
+  "script_duration",
+  "task_duration",
+  "thread_time",
+  "timestamp",
+]);
+const TRACE_VIOLATION_KEYS = new Set(["name", "violation"]);
+const VIEWPORT_KEYS = new Set(["deviceScaleFactor", "height", "width"]);
+const EXPLORATION_POLICY_KEYS = new Set([
+  "minDistinctNamedSnapshotValues",
+  "minNamedSnapshotChangesAfterNonWait",
+  "minNonWaitActions",
+  "requireStableTargetUrl",
+  "requiredActionKinds",
+  "requiredNamedSnapshots",
+]);
+const DEFAULT_VIEWPORT_WIDTH = 1_024;
+const DEFAULT_VIEWPORT_HEIGHT = 768;
+const DEFAULT_DEVICE_SCALE_FACTOR = 2;
+const SNAPSHOT_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.:/-]*$/u;
+const TARGET_TAG_PATTERN = /^[a-z][a-z0-9-]*$/u;
+const ACTION_KINDS = [
+  "Back",
+  "Click",
+  "DoubleClick",
+  "Forward",
+  "MouseDrag",
+  "PressKey",
+  "Reload",
+  "ScrollDown",
+  "ScrollUp",
+  "SetFileInputFiles",
+  "SetViewport",
+  "TypeText",
+  "Wait",
+] as const;
+const ACTION_KIND_SET = new Set<string>(ACTION_KINDS);
+const UNIT_ACTION_KINDS = new Set<DirectBombadilActionKind>([
+  "Back",
+  "Forward",
+  "Reload",
+  "Wait",
+]);
+const TARGETED_ACTION_KINDS = new Set<DirectBombadilActionKind>([
+  "Click",
+  "DoubleClick",
+]);
 const DIRECT_OBSERVATION_KEYS = new Set([
   "activationHash",
   "activeRoute",
@@ -76,6 +143,76 @@ export interface DirectBombadilServerConfig {
   readonly startupTimeoutMs?: number;
 }
 
+export type DirectBombadilActionKind = (typeof ACTION_KINDS)[number];
+
+export interface DirectBombadilViewportConfig {
+  readonly deviceScaleFactor?: number;
+  readonly height?: number;
+  readonly width?: number;
+}
+
+export interface DirectBombadilExplorationPolicy {
+  readonly minDistinctNamedSnapshotValues?: Readonly<Record<string, number>>;
+  readonly minNamedSnapshotChangesAfterNonWait?: Readonly<Record<string, number>>;
+  readonly minNonWaitActions?: number;
+  readonly requireStableTargetUrl?: boolean;
+  readonly requiredActionKinds?: readonly DirectBombadilActionKind[];
+  readonly requiredNamedSnapshots?: readonly string[];
+}
+
+export interface DirectBombadilExplorationSummary {
+  readonly schema: "direct.bombadil-exploration-summary/v1";
+  readonly trace: {
+    readonly bytes: number;
+    readonly lineCount: number;
+    readonly sha256: string;
+  };
+  readonly actions: {
+    readonly byKind: Readonly<Partial<Record<DirectBombadilActionKind, number>>>;
+    readonly maxWaitStreak: number;
+    readonly nonWaitCount: number;
+    readonly targetTags: Readonly<Record<string, number>>;
+    readonly total: number;
+  };
+  readonly urls: {
+    readonly distinctFingerprintCount: number;
+    readonly fingerprintSha256: readonly string[];
+    readonly observationCount: number;
+    readonly stableTarget: boolean;
+  };
+  readonly transitions: {
+    readonly distinctNonNullHashCount: number;
+    readonly nonNullHashCount: number;
+  };
+  readonly namedSnapshots: readonly {
+    readonly changeAfterNonWaitCount: number;
+    readonly distinctValueCount: number;
+    readonly distinctValueSha256: readonly string[];
+    readonly name: string;
+    readonly observationCount: number;
+  }[];
+  readonly propertyViolations: {
+    readonly byName: Readonly<Record<string, number>>;
+    readonly total: number;
+  };
+  readonly resourceHighWaterMarks: {
+    readonly documents: number;
+    readonly domNodes: number;
+    readonly jsEventListeners: number;
+    readonly jsHeapTotalBytes: number;
+    readonly jsHeapUsedBytes: number;
+    readonly layoutObjects: number;
+    readonly scriptDurationSeconds: number;
+    readonly taskDurationSeconds: number;
+    readonly threadTimeSeconds: number;
+  };
+  readonly policy: {
+    readonly configured: boolean;
+    readonly failures: readonly string[];
+    readonly satisfied: boolean;
+  };
+}
+
 export interface DirectBombadilFuzzConfig {
   readonly artifactName: string;
   readonly baseUrl: string;
@@ -86,6 +223,8 @@ export interface DirectBombadilFuzzConfig {
   readonly scenario: string;
   readonly specificationPath: string;
   readonly targetQuery?: Readonly<Record<string, string>>;
+  readonly explorationPolicy?: DirectBombadilExplorationPolicy;
+  readonly viewport?: DirectBombadilViewportConfig;
   readonly server: DirectBombadilServerConfig;
 }
 
@@ -105,6 +244,21 @@ export type DirectBombadilFuzzResult =
       readonly artifactDirectory: string;
       readonly manifestPath: string;
       readonly status: "passed";
+    };
+
+export interface DirectBombadilFuzzCampaign {
+  readonly config: DirectBombadilFuzzConfig;
+  readonly id: string;
+}
+
+export type DirectBombadilFuzzMatrixResult =
+  | { readonly kind: "help" }
+  | {
+      readonly kind: "matrix";
+      readonly results: readonly {
+        readonly campaignId: string;
+        readonly result: Extract<DirectBombadilFuzzResult, { readonly kind: "run" }>;
+      }[];
     };
 
 export interface DirectBombadilInvocation {
@@ -184,17 +338,37 @@ interface ProcessSignalEmitter {
   ) => unknown;
 }
 
-interface ValidatedConfig extends DirectBombadilFuzzConfig {
+type ValidatedConfig = Omit<
+  DirectBombadilFuzzConfig,
+  "explorationPolicy" | "server" | "viewport"
+> & {
   readonly artifactRoot: string;
   readonly baseUrl: string;
   readonly bombadilExecutable: string;
   readonly entryPath: `/${string}`;
+  readonly explorationPolicy: ValidatedExplorationPolicy | null;
   readonly port: string;
   readonly targetQuery: Readonly<Record<string, string>>;
+  readonly viewport: ValidatedViewport;
   readonly server: DirectBombadilServerConfig & {
     readonly readinessPath: `/${string}`;
     readonly startupTimeoutMs: number;
   };
+};
+
+interface ValidatedViewport {
+  readonly deviceScaleFactor: number;
+  readonly height: number;
+  readonly width: number;
+}
+
+interface ValidatedExplorationPolicy {
+  readonly minDistinctNamedSnapshotValues: Readonly<Record<string, number>>;
+  readonly minNamedSnapshotChangesAfterNonWait: Readonly<Record<string, number>>;
+  readonly minNonWaitActions: number;
+  readonly requireStableTargetUrl: boolean;
+  readonly requiredActionKinds: readonly DirectBombadilActionKind[];
+  readonly requiredNamedSnapshots: readonly string[];
 }
 
 function readOptionValue(
@@ -427,7 +601,177 @@ function exactTraceDirectObservation(
   };
 }
 
-function parseTraceLine(line: string, lineNumber: number): TraceDirectObservation {
+interface ParsedTraceAction {
+  readonly kind: DirectBombadilActionKind;
+  readonly targetTag: string | null;
+}
+
+interface ParsedTraceState {
+  readonly currentHash: number | null;
+  readonly resources: Readonly<Record<keyof typeof RESOURCE_FIELD_MAP, number>>;
+  readonly url: URL;
+}
+
+interface ParsedTraceLine {
+  readonly action: ParsedTraceAction | null;
+  readonly directObservation: TraceDirectObservation;
+  readonly namedSnapshots: readonly {
+    readonly name: string;
+    readonly valueSha256: string;
+  }[];
+  readonly propertyViolationNames: readonly string[];
+  readonly state: ParsedTraceState;
+}
+
+const RESOURCE_FIELD_MAP = {
+  documents: "documents",
+  dom_nodes: "domNodes",
+  js_event_listeners: "jsEventListeners",
+  js_heap_total: "jsHeapTotalBytes",
+  js_heap_used: "jsHeapUsedBytes",
+  layout_objects: "layoutObjects",
+  script_duration: "scriptDurationSeconds",
+  task_duration: "taskDurationSeconds",
+  thread_time: "threadTimeSeconds",
+} as const;
+
+function canonicalJson(value: unknown, depth = 0): string {
+  if (depth > TRACE_MAX_JSON_DEPTH) {
+    throw new Error(`Bombadil named snapshot exceeds JSON depth ${String(TRACE_MAX_JSON_DEPTH)}`);
+  }
+  if (value === null || typeof value === "boolean" || typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("Bombadil named snapshot has a non-finite number");
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => canonicalJson(entry, depth + 1)).join(",")}]`;
+  }
+  if (!isRecord(value)) throw new Error("Bombadil named snapshot is not JSON");
+  const entries = Object.keys(value).sort().map((key) =>
+    `${JSON.stringify(key)}:${canonicalJson(value[key], depth + 1)}`
+  );
+  return `{${entries.join(",")}}`;
+}
+
+function sha256(value: string | Uint8Array): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function namedSnapshotValueSha256(value: unknown): string {
+  const canonical = canonicalJson(value);
+  if (Buffer.byteLength(canonical, "utf8") > TRACE_MAX_CANONICAL_SNAPSHOT_BYTES) {
+    throw new Error(
+      `Bombadil named snapshot exceeds ${String(TRACE_MAX_CANONICAL_SNAPSHOT_BYTES)} canonical bytes`,
+    );
+  }
+  return sha256(canonical);
+}
+
+function parseTraceAction(value: unknown, lineNumber: number): ParsedTraceAction | null {
+  if (value === null) return null;
+  if (typeof value === "string") {
+    if (!ACTION_KIND_SET.has(value) || !UNIT_ACTION_KINDS.has(value as DirectBombadilActionKind)) {
+      throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid action`);
+    }
+    return { kind: value as DirectBombadilActionKind, targetTag: null };
+  }
+  if (!isRecord(value) || Object.keys(value).length !== 1) {
+    throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid action`);
+  }
+  const kind = Object.keys(value)[0];
+  if (
+    kind === undefined
+    || !ACTION_KIND_SET.has(kind)
+    || UNIT_ACTION_KINDS.has(kind as DirectBombadilActionKind)
+    || !isRecord(value[kind])
+  ) {
+    throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid action`);
+  }
+  const actionKind = kind as DirectBombadilActionKind;
+  let targetTag: string | null = null;
+  if (TARGETED_ACTION_KINDS.has(actionKind)) {
+    const fingerprint = value[kind].fingerprint;
+    if (!isRecord(fingerprint)) {
+      throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid action target`);
+    }
+    const tag = fingerprint.tag;
+    if (
+      typeof tag !== "string"
+      || tag.length === 0
+      || tag.length > 64
+      || !TARGET_TAG_PATTERN.test(tag)
+    ) {
+      throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid action target tag`);
+    }
+    targetTag = tag;
+  }
+  return { kind: actionKind, targetTag };
+}
+
+function parseNonNegativeFiniteNumber(
+  value: unknown,
+  lineNumber: number,
+  field: string,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid ${field}`);
+  }
+  return value;
+}
+
+function parseTraceState(value: unknown, lineNumber: number): ParsedTraceState {
+  if (!isRecord(value) || !hasExactKeys(value, TRACE_STATE_KEYS)) {
+    throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid browser state`);
+  }
+  if (typeof value.url !== "string" || value.url.length === 0 || value.url.length > 8_192) {
+    throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid browser URL`);
+  }
+  let url: URL;
+  try {
+    url = new URL(value.url);
+  } catch {
+    throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid browser URL`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid browser URL protocol`);
+  }
+  if (typeof value.screenshot !== "string" || value.screenshot.length > 8_192) {
+    throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid screenshot path`);
+  }
+  for (const field of ["hash_previous", "hash_current"] as const) {
+    const hash = value[field];
+    if (hash !== null && (
+      typeof hash !== "number"
+      || !Number.isFinite(hash)
+      || !Number.isInteger(hash)
+      || hash < 0
+    )) {
+      throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid ${field}`);
+    }
+  }
+  if (!isRecord(value.resources) || !hasExactKeys(value.resources, TRACE_RESOURCE_KEYS)) {
+    throw new Error(`Bombadil trace line ${String(lineNumber)} has invalid browser resources`);
+  }
+  const resources: Record<string, number> = {};
+  for (const field of Object.keys(RESOURCE_FIELD_MAP) as (keyof typeof RESOURCE_FIELD_MAP)[]) {
+    resources[field] = parseNonNegativeFiniteNumber(
+      value.resources[field],
+      lineNumber,
+      `resources.${field}`,
+    );
+  }
+  parseNonNegativeFiniteNumber(value.resources.timestamp, lineNumber, "resources.timestamp");
+  return {
+    currentHash: value.hash_current as number | null,
+    resources: resources as Readonly<Record<keyof typeof RESOURCE_FIELD_MAP, number>>,
+    url,
+  };
+}
+
+function parseTraceLine(line: string, lineNumber: number): ParsedTraceLine {
   let input: unknown;
   try {
     input = JSON.parse(line) as unknown;
@@ -447,7 +791,38 @@ function parseTraceLine(line: string, lineNumber: number): TraceDirectObservatio
   ) {
     throw new Error(`Bombadil trace line ${String(lineNumber)} has invalid state fields`);
   }
+  const state = parseTraceState(input.state, lineNumber);
+  const action = parseTraceAction(input.action, lineNumber);
   const snapshots = input.snapshots as unknown[];
+  const namedSnapshots: Array<{ readonly name: string; readonly valueSha256: string }> = [];
+  const namedSnapshotNames = new Set<string>();
+  for (const snapshotValue of snapshots) {
+    if (
+      !isRecord(snapshotValue)
+      || !hasExactKeys(snapshotValue, TRACE_SNAPSHOT_KEYS)
+      || !Number.isSafeInteger(snapshotValue.index)
+      || !Number.isSafeInteger(snapshotValue.time)
+      || (snapshotValue.index as number) < 0
+      || (snapshotValue.time as number) < 0
+      || (snapshotValue.name !== null && typeof snapshotValue.name !== "string")
+    ) {
+      throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid snapshot`);
+    }
+    if (snapshotValue.name !== null) {
+      const name = validateSnapshotName(
+        snapshotValue.name,
+        `Bombadil trace line ${String(lineNumber)} snapshot name`,
+      );
+      if (namedSnapshotNames.has(name)) {
+        throw new Error(`Bombadil trace line ${String(lineNumber)} repeats named snapshot ${name}`);
+      }
+      namedSnapshotNames.add(name);
+      namedSnapshots.push({
+        name,
+        valueSha256: namedSnapshotValueSha256(snapshotValue.value),
+      });
+    }
+  }
   const directSnapshots = snapshots.filter((snapshot): snapshot is Readonly<Record<string, unknown>> =>
     isRecord(snapshot) && snapshot.name === "direct"
   );
@@ -465,7 +840,26 @@ function parseTraceLine(line: string, lineNumber: number): TraceDirectObservatio
   ) {
     throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid direct snapshot`);
   }
-  return parseTraceDirectObservation(snapshot.value);
+  const propertyViolationNames: string[] = [];
+  for (const violation of input.violations) {
+    if (!isRecord(violation) || !hasExactKeys(violation, TRACE_VIOLATION_KEYS)) {
+      throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid property violation`);
+    }
+    propertyViolationNames.push(validateSnapshotName(
+      violation.name,
+      `Bombadil trace line ${String(lineNumber)} property violation name`,
+    ));
+    if (!isRecord(violation.violation) || Object.keys(violation.violation).length !== 1) {
+      throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid property violation`);
+    }
+  }
+  return {
+    action,
+    directObservation: parseTraceDirectObservation(snapshot.value),
+    namedSnapshots,
+    propertyViolationNames,
+    state,
+  };
 }
 
 /** Exact post-run proof over Bombadil 0.7.2's bounded JSONL trace. */
@@ -499,7 +893,7 @@ export async function attestDirectBombadilTrace(options: {
       if (Buffer.byteLength(line, "utf8") > TRACE_MAX_LINE_BYTES) {
         throw new Error(`Bombadil trace line ${String(observationCount)} is too large`);
       }
-      const observation = parseTraceLine(line, observationCount);
+      const observation = parseTraceLine(line, observationCount).directObservation;
       const exact = exactTraceDirectObservation(observation);
       if (exact === null) {
         if (initial !== null) {
@@ -575,6 +969,248 @@ export async function attestDirectBombadilTrace(options: {
     invalidObservationCount,
     validObservationCount,
   };
+}
+
+function sortedCountRecord<K extends string>(
+  values: ReadonlyMap<K, number>,
+): Readonly<Partial<Record<K, number>>> {
+  return Object.freeze(Object.fromEntries(
+    [...values.entries()].sort(([left], [right]) => left.localeCompare(right)),
+  ) as Partial<Record<K, number>>);
+}
+
+/**
+ * Derives bounded diagnostic exploration metadata from the raw Bombadil trace.
+ * The hashes and counts are navigation aids, not Direct coverage evidence.
+ */
+export async function summarizeDirectBombadilTrace(options: {
+  readonly explorationPolicy?: DirectBombadilExplorationPolicy;
+  readonly targetUrl: string;
+  readonly tracePath: string;
+}): Promise<DirectBombadilExplorationSummary> {
+  const metadata = await stat(options.tracePath).catch(() => null);
+  if (metadata === null || !metadata.isFile() || metadata.size === 0) {
+    throw new Error("Bombadil did not produce a nonempty trace.jsonl");
+  }
+  if (metadata.size > TRACE_MAX_BYTES) {
+    throw new Error(`Bombadil trace exceeds ${String(TRACE_MAX_BYTES)} bytes`);
+  }
+  let targetUrl: URL;
+  try {
+    targetUrl = new URL(options.targetUrl);
+  } catch {
+    throw new Error("targetUrl must be an absolute URL");
+  }
+  const policy = validateExplorationPolicy(options.explorationPolicy);
+  const actionCounts = new Map<DirectBombadilActionKind, number>();
+  const targetTags = new Map<string, number>();
+  const urlFingerprints = new Set<string>();
+  const transitionHashes = new Set<string>();
+  const snapshots = new Map<string, {
+    changeAfterNonWaitCount: number;
+    lastValueSha256: string | null;
+    observationCount: number;
+    readonly values: Set<string>;
+  }>();
+  const propertyViolations = new Map<string, number>();
+  const resources = {
+    documents: 0,
+    domNodes: 0,
+    jsEventListeners: 0,
+    jsHeapTotalBytes: 0,
+    jsHeapUsedBytes: 0,
+    layoutObjects: 0,
+    scriptDurationSeconds: 0,
+    taskDurationSeconds: 0,
+    threadTimeSeconds: 0,
+  };
+  let lineCount = 0;
+  let totalActions = 0;
+  let nonWaitCount = 0;
+  let waitStreak = 0;
+  let maxWaitStreak = 0;
+  let nonNullHashCount = 0;
+  let stableTarget = true;
+  const stream = createReadStream(options.tracePath, { encoding: "utf8" });
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      lineCount += 1;
+      if (lineCount > TRACE_MAX_LINES) {
+        throw new Error(`Bombadil trace exceeds ${String(TRACE_MAX_LINES)} lines`);
+      }
+      if (Buffer.byteLength(line, "utf8") > TRACE_MAX_LINE_BYTES) {
+        throw new Error(`Bombadil trace line ${String(lineCount)} is too large`);
+      }
+      const parsed = parseTraceLine(line, lineCount);
+      if (parsed.action !== null) {
+        totalActions += 1;
+        actionCounts.set(parsed.action.kind, (actionCounts.get(parsed.action.kind) ?? 0) + 1);
+        if (parsed.action.kind === "Wait") {
+          waitStreak += 1;
+          maxWaitStreak = Math.max(maxWaitStreak, waitStreak);
+        } else {
+          nonWaitCount += 1;
+          waitStreak = 0;
+        }
+        if (parsed.action.targetTag !== null) {
+          if (!targetTags.has(parsed.action.targetTag) && targetTags.size >= 128) {
+            throw new Error("Bombadil trace exceeds 128 distinct action target tags");
+          }
+          targetTags.set(
+            parsed.action.targetTag,
+            (targetTags.get(parsed.action.targetTag) ?? 0) + 1,
+          );
+        }
+      } else {
+        waitStreak = 0;
+      }
+
+      const relativeUrl = `${parsed.state.url.pathname}${parsed.state.url.search}${parsed.state.url.hash}`;
+      urlFingerprints.add(sha256(relativeUrl));
+      if (urlFingerprints.size > TRACE_MAX_DISTINCT_URLS) {
+        throw new Error(
+          `Bombadil trace exceeds ${String(TRACE_MAX_DISTINCT_URLS)} distinct URL fingerprints`,
+        );
+      }
+      stableTarget &&= parsed.state.url.href === targetUrl.href;
+      if (parsed.state.currentHash !== null) {
+        nonNullHashCount += 1;
+        transitionHashes.add(String(parsed.state.currentHash));
+      }
+
+      for (const snapshot of parsed.namedSnapshots) {
+        let entry = snapshots.get(snapshot.name);
+        if (entry === undefined) {
+          if (snapshots.size >= TRACE_MAX_NAMED_SNAPSHOT_NAMES) {
+            throw new Error(
+              `Bombadil trace exceeds ${String(TRACE_MAX_NAMED_SNAPSHOT_NAMES)} named snapshots`,
+            );
+          }
+          entry = {
+            changeAfterNonWaitCount: 0,
+            lastValueSha256: null,
+            observationCount: 0,
+            values: new Set<string>(),
+          };
+          snapshots.set(snapshot.name, entry);
+        }
+        if (
+          parsed.action !== null
+          && parsed.action.kind !== "Wait"
+          && entry.lastValueSha256 !== null
+          && entry.lastValueSha256 !== snapshot.valueSha256
+        ) {
+          entry.changeAfterNonWaitCount += 1;
+        }
+        entry.lastValueSha256 = snapshot.valueSha256;
+        entry.observationCount += 1;
+        entry.values.add(snapshot.valueSha256);
+        if (entry.values.size > TRACE_MAX_DISTINCT_SNAPSHOT_VALUES_PER_NAME) {
+          throw new Error(
+            `Bombadil trace named snapshot ${snapshot.name} exceeds ${String(TRACE_MAX_DISTINCT_SNAPSHOT_VALUES_PER_NAME)} distinct values`,
+          );
+        }
+      }
+      for (const name of parsed.propertyViolationNames) {
+        if (!propertyViolations.has(name) && propertyViolations.size >= TRACE_MAX_PROPERTY_NAMES) {
+          throw new Error(
+            `Bombadil trace exceeds ${String(TRACE_MAX_PROPERTY_NAMES)} property names`,
+          );
+        }
+        propertyViolations.set(name, (propertyViolations.get(name) ?? 0) + 1);
+      }
+      for (const [sourceName, outputName] of Object.entries(RESOURCE_FIELD_MAP)) {
+        resources[outputName] = Math.max(
+          resources[outputName],
+          parsed.state.resources[sourceName as keyof typeof RESOURCE_FIELD_MAP],
+        );
+      }
+    }
+  } finally {
+    lines.close();
+    stream.destroy();
+  }
+  if (lineCount === 0) throw new Error("Bombadil did not produce a nonempty trace.jsonl");
+
+  const policyFailures: string[] = [];
+  if (policy !== null) {
+    if (nonWaitCount < policy.minNonWaitActions) {
+      policyFailures.push("minimum non-Wait action count was not reached");
+    }
+    for (const kind of policy.requiredActionKinds) {
+      if ((actionCounts.get(kind) ?? 0) === 0) {
+        policyFailures.push(`required action kind ${kind} was not observed`);
+      }
+    }
+    for (const name of policy.requiredNamedSnapshots) {
+      if (!snapshots.has(name)) {
+        policyFailures.push(`required named snapshot ${name} was not observed`);
+      }
+    }
+    for (const [name, minimum] of Object.entries(policy.minDistinctNamedSnapshotValues)) {
+      if ((snapshots.get(name)?.values.size ?? 0) < minimum) {
+        policyFailures.push(`named snapshot ${name} did not reach its distinct-value minimum`);
+      }
+    }
+    for (const [name, minimum] of Object.entries(
+      policy.minNamedSnapshotChangesAfterNonWait,
+    )) {
+      if ((snapshots.get(name)?.changeAfterNonWaitCount ?? 0) < minimum) {
+        policyFailures.push(
+          `named snapshot ${name} did not reach its post-non-Wait change minimum`,
+        );
+      }
+    }
+    if (policy.requireStableTargetUrl && !stableTarget) {
+      policyFailures.push("the browser did not remain on the exact target URL");
+    }
+  }
+  const traceBytes = await readFile(options.tracePath);
+  return Object.freeze({
+    schema: "direct.bombadil-exploration-summary/v1",
+    trace: Object.freeze({
+      bytes: metadata.size,
+      lineCount,
+      sha256: sha256(traceBytes),
+    }),
+    actions: Object.freeze({
+      byKind: sortedCountRecord(actionCounts),
+      maxWaitStreak,
+      nonWaitCount,
+      targetTags: sortedCountRecord(targetTags) as Readonly<Record<string, number>>,
+      total: totalActions,
+    }),
+    urls: Object.freeze({
+      distinctFingerprintCount: urlFingerprints.size,
+      fingerprintSha256: Object.freeze([...urlFingerprints].sort()),
+      observationCount: lineCount,
+      stableTarget,
+    }),
+    transitions: Object.freeze({
+      distinctNonNullHashCount: transitionHashes.size,
+      nonNullHashCount,
+    }),
+    namedSnapshots: Object.freeze([...snapshots.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, entry]) => Object.freeze({
+        changeAfterNonWaitCount: entry.changeAfterNonWaitCount,
+        distinctValueCount: entry.values.size,
+        distinctValueSha256: Object.freeze([...entry.values].sort()),
+        name,
+        observationCount: entry.observationCount,
+      }))),
+    propertyViolations: Object.freeze({
+      byName: sortedCountRecord(propertyViolations) as Readonly<Record<string, number>>,
+      total: [...propertyViolations.values()].reduce((total, value) => total + value, 0),
+    }),
+    resourceHighWaterMarks: Object.freeze(resources),
+    policy: Object.freeze({
+      configured: policy !== null,
+      failures: Object.freeze(policyFailures),
+      satisfied: policyFailures.length === 0,
+    }),
+  });
 }
 
 export function parseDirectBombadilFuzzArguments(
@@ -714,6 +1350,155 @@ function validateTargetQuery(value: unknown): Readonly<Record<string, string>> {
   return Object.freeze(validated);
 }
 
+function validateSnapshotName(value: unknown, label: string): string {
+  if (
+    typeof value !== "string"
+    || value.length === 0
+    || value.length > 128
+    || !SNAPSHOT_NAME_PATTERN.test(value)
+    || PROTOTYPE_PROPERTY_NAMES.has(value)
+    || hasControlCharacters(value)
+  ) {
+    throw new Error(`${label} must be a safe bounded snapshot name`);
+  }
+  return value;
+}
+
+function validateViewport(value: unknown): ValidatedViewport {
+  if (value === undefined) {
+    return Object.freeze({
+      deviceScaleFactor: DEFAULT_DEVICE_SCALE_FACTOR,
+      height: DEFAULT_VIEWPORT_HEIGHT,
+      width: DEFAULT_VIEWPORT_WIDTH,
+    });
+  }
+  if (!isRecord(value) || !Object.keys(value).every((key) => VIEWPORT_KEYS.has(key))) {
+    throw new Error("viewport must contain only width, height, and deviceScaleFactor");
+  }
+  const width = value.width ?? DEFAULT_VIEWPORT_WIDTH;
+  const height = value.height ?? DEFAULT_VIEWPORT_HEIGHT;
+  const deviceScaleFactor = value.deviceScaleFactor ?? DEFAULT_DEVICE_SCALE_FACTOR;
+  for (const [name, dimension] of [["width", width], ["height", height]] as const) {
+    if (
+      typeof dimension !== "number"
+      || !Number.isSafeInteger(dimension)
+      || dimension < 1
+      || dimension > 65_535
+    ) {
+      throw new Error(`viewport.${name} must be an integer between 1 and 65535`);
+    }
+  }
+  if (
+    typeof deviceScaleFactor !== "number"
+    || !Number.isFinite(deviceScaleFactor)
+    || deviceScaleFactor < 0.1
+    || deviceScaleFactor > 10
+  ) {
+    throw new Error("viewport.deviceScaleFactor must be a finite number between 0.1 and 10");
+  }
+  return Object.freeze({ deviceScaleFactor, height, width });
+}
+
+function validateSnapshotMinimumMap(options: {
+  readonly label: string;
+  readonly maximum: number;
+  readonly value: unknown;
+}): Readonly<Record<string, number>> {
+  if (!isRecord(options.value) || Object.keys(options.value).length > 32) {
+    throw new Error(`${options.label} must be a bounded object`);
+  }
+  const validated: Record<string, number> = {};
+  for (const [rawName, minimum] of Object.entries(options.value).sort(([left], [right]) =>
+    left.localeCompare(right)
+  )) {
+    const name = validateSnapshotName(rawName, `${options.label} key`);
+    if (
+      typeof minimum !== "number"
+      || !Number.isSafeInteger(minimum)
+      || minimum < 1
+      || minimum > options.maximum
+    ) {
+      throw new Error(
+        `${options.label} ${name} must be an integer between 1 and ${String(options.maximum)}`,
+      );
+    }
+    validated[name] = minimum;
+  }
+  return Object.freeze(validated);
+}
+
+function validateExplorationPolicy(
+  value: unknown,
+): ValidatedExplorationPolicy | null {
+  if (value === undefined) return null;
+  if (
+    !isRecord(value)
+    || !Object.keys(value).every((key) => EXPLORATION_POLICY_KEYS.has(key))
+  ) {
+    throw new Error("explorationPolicy contains an unknown field");
+  }
+  const minNonWaitActions = value.minNonWaitActions ?? 0;
+  if (
+    typeof minNonWaitActions !== "number"
+    || !Number.isSafeInteger(minNonWaitActions)
+    || minNonWaitActions < 0
+    || minNonWaitActions > TRACE_MAX_LINES
+  ) {
+    throw new Error(
+      `explorationPolicy.minNonWaitActions must be an integer between 0 and ${String(TRACE_MAX_LINES)}`,
+    );
+  }
+  const requiredActionKindsInput = value.requiredActionKinds ?? [];
+  if (!Array.isArray(requiredActionKindsInput) || requiredActionKindsInput.length > ACTION_KINDS.length) {
+    throw new Error("explorationPolicy.requiredActionKinds must be a bounded array");
+  }
+  const requiredActionKinds = [...requiredActionKindsInput];
+  if (
+    !requiredActionKinds.every((kind): kind is DirectBombadilActionKind =>
+      typeof kind === "string" && ACTION_KIND_SET.has(kind)
+    )
+    || new Set(requiredActionKinds).size !== requiredActionKinds.length
+  ) {
+    throw new Error("explorationPolicy.requiredActionKinds contains an unknown or duplicate kind");
+  }
+  requiredActionKinds.sort();
+
+  const requiredNamedSnapshotsInput = value.requiredNamedSnapshots ?? [];
+  if (!Array.isArray(requiredNamedSnapshotsInput) || requiredNamedSnapshotsInput.length > 32) {
+    throw new Error("explorationPolicy.requiredNamedSnapshots must be a bounded array");
+  }
+  const requiredNamedSnapshots = requiredNamedSnapshotsInput.map((name) =>
+    validateSnapshotName(name, "explorationPolicy.requiredNamedSnapshots entry")
+  );
+  if (new Set(requiredNamedSnapshots).size !== requiredNamedSnapshots.length) {
+    throw new Error("explorationPolicy.requiredNamedSnapshots contains a duplicate name");
+  }
+  requiredNamedSnapshots.sort();
+
+  const minDistinctNamedSnapshotValues = validateSnapshotMinimumMap({
+    label: "explorationPolicy.minDistinctNamedSnapshotValues",
+    maximum: TRACE_MAX_DISTINCT_SNAPSHOT_VALUES_PER_NAME,
+    value: value.minDistinctNamedSnapshotValues ?? {},
+  });
+  const minNamedSnapshotChangesAfterNonWait = validateSnapshotMinimumMap({
+    label: "explorationPolicy.minNamedSnapshotChangesAfterNonWait",
+    maximum: TRACE_MAX_LINES,
+    value: value.minNamedSnapshotChangesAfterNonWait ?? {},
+  });
+  const requireStableTargetUrl = value.requireStableTargetUrl ?? false;
+  if (typeof requireStableTargetUrl !== "boolean") {
+    throw new Error("explorationPolicy.requireStableTargetUrl must be a boolean");
+  }
+  return Object.freeze({
+    minDistinctNamedSnapshotValues,
+    minNamedSnapshotChangesAfterNonWait,
+    minNonWaitActions,
+    requireStableTargetUrl,
+    requiredActionKinds: Object.freeze(requiredActionKinds),
+    requiredNamedSnapshots: Object.freeze(requiredNamedSnapshots),
+  });
+}
+
 export function validateDirectBombadilFuzzConfig(
   config: DirectBombadilFuzzConfig,
   baseUrlOverride?: string,
@@ -782,6 +1567,8 @@ export function validateDirectBombadilFuzzConfig(
   const entryPath = config.entryPath ?? "/";
   validateEntryPath(entryPath);
   const targetQuery = validateTargetQuery(config.targetQuery ?? {});
+  const viewport = validateViewport(config.viewport);
+  const explorationPolicy = validateExplorationPolicy(config.explorationPolicy);
   const startupTimeoutMs = config.server.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
   if (
     !Number.isSafeInteger(startupTimeoutMs)
@@ -803,8 +1590,10 @@ export function validateDirectBombadilFuzzConfig(
     artifactRoot: join(repositoryRoot, "artifacts", "direct-bombadil", config.artifactName),
     bombadilExecutable: bombadilNativeBinary(repositoryRoot),
     entryPath,
+    explorationPolicy,
     port,
     targetQuery,
+    viewport,
     server: {
       ...config.server,
       cwd: serverCwd,
@@ -834,7 +1623,9 @@ export function createDirectBombadilInvocation(options: {
   readonly specificationPath: string;
   readonly targetQuery?: Readonly<Record<string, string>>;
   readonly timeLimitSeconds: number;
+  readonly viewport?: DirectBombadilViewportConfig;
 }): DirectBombadilInvocation {
+  const viewport = validateViewport(options.viewport);
   const target = new URL(options.entryPath ?? "/", `${options.baseUrl}/`);
   target.searchParams.set(SCENARIO_QUERY_KEY, options.scenario);
   for (const [name, value] of Object.entries(options.targetQuery ?? {})) {
@@ -850,6 +1641,12 @@ export function createDirectBombadilInvocation(options: {
     options.outputPath,
     "--headless",
     "--instrument-javascript=",
+    "--width",
+    String(viewport.width),
+    "--height",
+    String(viewport.height),
+    "--device-scale-factor",
+    String(viewport.deviceScaleFactor),
   ];
   if (options.replayPath === null) {
     command.push(
@@ -1181,6 +1978,100 @@ function helpText(defaultBaseUrl: string): string {
   ].join("\n");
 }
 
+function parseMatrixCampaignArgument(arguments_: readonly string[]): {
+  readonly arguments: readonly string[];
+  readonly campaignId: string | null;
+  readonly help: boolean;
+} {
+  const forwarded: string[] = [];
+  let campaignId: string | null = null;
+  let help = false;
+  for (let index = 0; index < arguments_.length; index += 1) {
+    const argument = arguments_[index];
+    if (argument === undefined) continue;
+    if (argument === "--help" || argument === "-h") help = true;
+    if (argument === "--campaign" || argument.startsWith("--campaign=")) {
+      if (campaignId !== null) throw new Error("--campaign may be provided only once");
+      if (argument === "--campaign") {
+        const next = readOptionValue(arguments_, index, "--campaign");
+        campaignId = next.value;
+        index = next.index;
+      } else {
+        campaignId = argument.slice("--campaign=".length);
+      }
+      if (campaignId.length === 0) throw new Error("--campaign requires a value");
+      continue;
+    }
+    forwarded.push(argument);
+  }
+  return { arguments: Object.freeze(forwarded), campaignId, help };
+}
+
+function validateCampaignMatrix(
+  campaigns: readonly DirectBombadilFuzzCampaign[],
+): readonly DirectBombadilFuzzCampaign[] {
+  if (campaigns.length === 0 || campaigns.length > 32) {
+    throw new Error("Bombadil campaign matrix must contain 1-32 campaigns");
+  }
+  const ids = new Set<string>();
+  for (const campaign of campaigns) {
+    if (!ARTIFACT_NAME_PATTERN.test(campaign.id) || ids.has(campaign.id)) {
+      throw new Error("Bombadil campaign IDs must be unique lowercase kebab identifiers");
+    }
+    ids.add(campaign.id);
+  }
+  return campaigns;
+}
+
+/** Runs a bounded product-owned campaign matrix serially. */
+export async function runDirectBombadilFuzzMatrix(
+  campaignsInput: readonly DirectBombadilFuzzCampaign[],
+  arguments_: readonly string[] = process.argv.slice(2),
+  dependencyOverrides: Partial<DirectBombadilRunnerDependencies> = {},
+): Promise<DirectBombadilFuzzMatrixResult> {
+  const campaigns = validateCampaignMatrix(campaignsInput);
+  const parsed = parseMatrixCampaignArgument(arguments_);
+  if (parsed.help) {
+    process.stdout.write(`${[
+      helpText(campaigns[0]?.config.baseUrl ?? ""),
+      "  --campaign <id>   Run one campaign; required with --replay",
+      "",
+      `Campaigns: ${campaigns.map((campaign) => campaign.id).join(", ")}`,
+    ].join("\n")}\n`);
+    return { kind: "help" };
+  }
+  const selected = parsed.campaignId === null
+    ? campaigns
+    : campaigns.filter((campaign) => campaign.id === parsed.campaignId);
+  if (selected.length === 0) {
+    throw new Error(`Unknown Bombadil campaign ${parsed.campaignId ?? ""}`);
+  }
+  if (
+    parsed.campaignId === null
+    && parsed.arguments.some((argument) =>
+      argument === "--replay" || argument.startsWith("--replay=")
+    )
+  ) {
+    throw new Error("--replay requires exactly one --campaign in matrix mode");
+  }
+  const results: Array<{
+    readonly campaignId: string;
+    readonly result: Extract<DirectBombadilFuzzResult, { readonly kind: "run" }>;
+  }> = [];
+  for (const campaign of selected) {
+    const result = await runDirectBombadilFuzz(
+      campaign.config,
+      parsed.arguments,
+      dependencyOverrides,
+    );
+    if (result.kind !== "run") {
+      throw new Error("Bombadil campaign unexpectedly returned help during matrix execution");
+    }
+    results.push({ campaignId: campaign.id, result });
+  }
+  return { kind: "matrix", results: Object.freeze(results) };
+}
+
 /** Runs one bounded diagnostic Bombadil campaign and always releases its server lease. */
 export async function runDirectBombadilFuzz(
   config: DirectBombadilFuzzConfig,
@@ -1224,6 +2115,7 @@ export async function runDirectBombadilFuzz(
     specificationPath: validated.specificationPath,
     targetQuery: validated.targetQuery,
     timeLimitSeconds: parsed.timeLimitSeconds,
+    viewport: validated.viewport,
   });
   const abortableInvocation = { ...invocation, abortSignal: abortController.signal };
   const serverCommand = validated.server.command.map((argument) =>
@@ -1236,6 +2128,8 @@ export async function runDirectBombadilFuzz(
   let processResult: BombadilProcessResult | null = null;
   let attestation: DirectBombadilTraceAttestation | null = null;
   let attestationFailure: unknown = null;
+  let explorationSummary: DirectBombadilExplorationSummary | null = null;
+  let explorationSummaryFailure: unknown = null;
   let rawTracePath: string | null = null;
   let serverOutput = "";
   let serverOutputFailure: unknown = null;
@@ -1291,6 +2185,17 @@ export async function runDirectBombadilFuzz(
       } catch (error) {
         attestationFailure = error;
       }
+      try {
+        explorationSummary = await summarizeDirectBombadilTrace({
+          ...(validated.explorationPolicy === null
+            ? {}
+            : { explorationPolicy: validated.explorationPolicy }),
+          targetUrl: invocation.targetUrl,
+          tracePath,
+        });
+      } catch (error) {
+        explorationSummaryFailure = error;
+      }
       if (processFailure !== null) {
         throw processFailure instanceof Error
           ? processFailure
@@ -1312,6 +2217,16 @@ export async function runDirectBombadilFuzz(
         throw attestationFailure instanceof Error
           ? attestationFailure
           : new Error(renderUnknown(attestationFailure));
+      }
+      if (explorationSummaryFailure !== null) {
+        throw explorationSummaryFailure instanceof Error
+          ? explorationSummaryFailure
+          : new Error(renderUnknown(explorationSummaryFailure));
+      }
+      if (explorationSummary?.policy.satisfied !== true) {
+        throw new Error(
+          `Bombadil exploration policy was not satisfied: ${explorationSummary?.policy.failures.join("; ") ?? "summary unavailable"}`,
+        );
       }
     } catch (error) {
       failure = error;
@@ -1351,6 +2266,10 @@ export async function runDirectBombadilFuzz(
   const status = failure === null ? "passed" : "failed";
   const logPath = join(artifactRun.runDirectory, "bombadil.log");
   const serverLogPath = join(artifactRun.runDirectory, "server.log");
+  const explorationSummaryPath = join(
+    artifactRun.runDirectory,
+    "exploration-summary.json",
+  );
   const record = {
     schema: ARTIFACT_SCHEMA,
     evidenceClass: "diagnostic-fuzz",
@@ -1366,6 +2285,8 @@ export async function runDirectBombadilFuzz(
     entryPath: validated.entryPath,
     targetQuery: validated.targetQuery,
     targetUrl: invocation.targetUrl,
+    viewport: validated.viewport,
+    explorationPolicy: validated.explorationPolicy,
     specificationPath: validated.specificationPath,
     replayPath,
     timeLimitSeconds: replayPath === null ? parsed.timeLimitSeconds : null,
@@ -1387,6 +2308,11 @@ export async function runDirectBombadilFuzz(
     },
     attestation,
     attestationFailure: attestationFailure === null ? null : renderUnknown(attestationFailure),
+    explorationSummary,
+    explorationSummaryPath: explorationSummary === null ? null : explorationSummaryPath,
+    explorationSummaryFailure: explorationSummaryFailure === null
+      ? null
+      : renderUnknown(explorationSummaryFailure),
     initialDirect: attestation?.initial ?? null,
     interruptedSignal: capturedSignal,
     failure: failure === null ? null : renderUnknown(failure),
@@ -1401,6 +2327,9 @@ export async function runDirectBombadilFuzz(
       `${serverOutput}${serverOutput.length > 0 ? "\n" : ""}`,
       "utf8",
     );
+    if (explorationSummary !== null) {
+      await writeJsonAtomically(explorationSummaryPath, explorationSummary);
+    }
     await writeJsonAtomically(join(artifactRun.runDirectory, "run.json"), record);
     await writeJsonAtomically(artifactRun.manifestPath, record);
 

@@ -215,7 +215,7 @@ A quiet probe means the declared deterministic work settled. It does not prove t
 | `@hraness/direct/web` | Atomic browser installation, with low-level bridge and firewall escape hatches | Browser only |
 | `@hraness/direct/tooling/browser-verification` | Protocol-bound bridge reads, bounded agent-browser commands, local server leases, and artifact writes | Bun 1.3.14 with Node APIs |
 | `@hraness/direct/tooling/bombadil-campaign` | Direct property and conservative action factories for a Bombadil specification | Bombadil 0.7.2 specification compiler |
-| `@hraness/direct/tooling/bombadil` | Local server ownership, native Bombadil lifecycle, trace attestation, replay, and diagnostic artifacts | Bun 1.3.14 with Node APIs |
+| `@hraness/direct/tooling/bombadil` | Local server ownership, native Bombadil lifecycle, serial campaign matrices, trace attestation and summaries, replay, and diagnostic artifacts | Bun 1.3.14 with Node APIs |
 | `@hraness/direct/tooling/bundle-boundary` | Deterministic emitted-file scans and exact versioned-wire evidence | Bun 1.3.14 with Node APIs |
 
 The tooling subpaths are development-only. They are built separately from the
@@ -272,7 +272,23 @@ path, and any additional safe actions. Call `runDirectBombadilFuzz` from
 `@hraness/direct/tooling/bombadil` in a small Bun wrapper. The runner accepts
 only an explicit local HTTP origin, starts an argv-only server command, invokes
 the exact native 0.7.2 binary, attests the bounded trace with Direct's canonical
-parsers, writes pass or failure artifacts, and releases its owned processes.
+parsers, writes pass or failure artifacts plus a compact exploration summary,
+and releases its owned processes. Use `runDirectBombadilFuzzMatrix` when a
+product owns several scenarios; it runs them serially and requires one exact
+campaign selector for replay.
+
+Keep liveness formulas time-bounded. Prefer guarded product actions with
+explicit weights over unrestricted browser actions, and name small JSON
+snapshots that expose semantic state without retaining page content. Run short
+12–30 second campaigns while editing and longer 60–300 second matrices in a
+scheduled diagnostic lane. Inspect and replay a retained failing trace, then
+promote the smallest readable failure to a deterministic product regression.
+When a campaign must exercise an interaction, require a named product value to
+change after a non-Wait action so bootstrap and idle transitions do not satisfy
+the exploration policy.
+The raw trace remains authoritative and may contain screenshots, URLs, typed
+text, accessible labels, and local paths; treat it as potentially sensitive.
+Summary counts and hashes help triage exploration but are not Direct coverage.
 See [Verification](./docs/verification.md#run-a-bounded-bombadil-campaign) for
 the complete configuration and proof limits.
 

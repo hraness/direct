@@ -9,6 +9,7 @@ import {
   extract,
   weighted,
   type ActionGenerator,
+  type Cell,
   type Formula,
   type JSON as BombadilJson,
   type Tree,
@@ -29,6 +30,16 @@ const DIRECT_PROBE_SCHEMA = "direct.probe/v1";
 const MAX_RAW_CONTRACT_CHARACTERS = 2_000_000;
 const BRIDGE_KEYS = new Set(["manifest", "reset", "schema", "snapshot"]);
 const UNSAFE_CLICK_INPUT_TYPES = new Set(["image", "reset", "submit"]);
+const SNAPSHOT_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.:/-]*$/u;
+const RESOURCE_LEAK_OPTION_KEYS = new Set(["growthLimit", "metric", "windowMillis"]);
+const RESOURCE_METRICS = [
+  "dom_nodes",
+  "js_event_listeners",
+  "js_heap_total",
+  "js_heap_used",
+  "layout_objects",
+] as const;
+const RESOURCE_METRIC_SET = new Set<string>(RESOURCE_METRICS);
 
 export interface DirectBombadilObservation {
   readonly [key: string | number | symbol]: BombadilJson;
@@ -52,6 +63,14 @@ export interface DirectBombadilProperties {
   readonly stableCatalog: Formula;
   readonly noDeclaredViolations: Formula;
   readonly eventualQuiescence: Formula;
+}
+
+export type DirectBombadilResourceMetric = (typeof RESOURCE_METRICS)[number];
+
+export interface DirectBombadilResourceLeakOptions {
+  readonly growthLimit: number;
+  readonly metric: DirectBombadilResourceMetric;
+  readonly windowMillis: number;
 }
 
 function safeClickAction(action: ActionTemplate): boolean {
@@ -126,6 +145,72 @@ function hasExactKeys(
   return keys.length === expected.size && keys.every((key) => expected.has(key));
 }
 
+/**
+ * Builds Bombadil's documented sliding-window resource growth invariant from
+ * the public browser state because 0.7.2 omits its extras module from exports.
+ */
+export function createDirectBombadilResourceLeakProperty(
+  options: DirectBombadilResourceLeakOptions,
+): Formula {
+  if (!isRecord(options) || !hasExactKeys(options, RESOURCE_LEAK_OPTION_KEYS)) {
+    throw new Error("Bombadil resource leak options must contain metric, growthLimit, and windowMillis");
+  }
+  if (typeof options.metric !== "string" || !RESOURCE_METRIC_SET.has(options.metric)) {
+    throw new Error("Bombadil resource leak metric is unsupported");
+  }
+  if (
+    typeof options.growthLimit !== "number"
+    || !Number.isFinite(options.growthLimit)
+    || options.growthLimit <= 0
+    || options.growthLimit > Number.MAX_SAFE_INTEGER
+  ) {
+    throw new Error("Bombadil resource leak growthLimit must be a positive finite safe number");
+  }
+  if (
+    typeof options.windowMillis !== "number"
+    || !Number.isSafeInteger(options.windowMillis)
+    || options.windowMillis < 1
+    || options.windowMillis > 300_000
+  ) {
+    throw new Error("Bombadil resource leak windowMillis must be an integer between 1 and 300000");
+  }
+  const metric = options.metric;
+  const samples: Array<{ readonly timestamp: number; readonly value: number }> = [];
+  let previousTimestamp = -1;
+  const window = extract<BombadilBrowserState, {
+    readonly baseline: number;
+    readonly valid: boolean;
+    readonly value: number;
+  }>((state) => {
+    const timestamp = state.resources.timestamp * 1_000;
+    const value = state.resources[metric];
+    if (
+      !Number.isFinite(timestamp)
+      || timestamp < 0
+      || timestamp < previousTimestamp
+      || !Number.isFinite(value)
+      || value < 0
+    ) {
+      return { baseline: 0, valid: false, value: 0 };
+    }
+    previousTimestamp = timestamp;
+    samples.push({ timestamp, value });
+    const cutoff = timestamp - options.windowMillis;
+    while (samples.length > 2 && (samples[1]?.timestamp ?? Number.POSITIVE_INFINITY) <= cutoff) {
+      samples.shift();
+    }
+    return {
+      baseline: samples[0]?.value ?? value,
+      valid: true,
+      value,
+    };
+  });
+  return always(() =>
+    window.current.valid
+    && window.current.value - window.current.baseline <= options.growthLimit
+  );
+}
+
 function invalidObservation(bridgePresent = false): DirectBombadilObservation {
   return {
     activationHash: "",
@@ -148,6 +233,41 @@ function boundedJsonClone(value: unknown): BombadilJson | null {
   const source = JSON.stringify(value);
   if (source === undefined || source.length > MAX_RAW_CONTRACT_CHARACTERS) return null;
   return JSON.parse(source) as BombadilJson;
+}
+
+function optionalBoundedJsonClone(value: unknown): BombadilJson | undefined {
+  const source = JSON.stringify(value);
+  if (source === undefined || source.length > MAX_RAW_CONTRACT_CHARACTERS) return undefined;
+  return JSON.parse(source) as BombadilJson;
+}
+
+/**
+ * Creates a named, bounded JSON extractor that fails closed to an explicit
+ * fallback when a page getter throws or returns non-JSON or oversized data.
+ */
+export function createDirectBombadilNamedSnapshot<T extends BombadilJson>(options: {
+  readonly fallback: T;
+  readonly name: string;
+  readonly read: (state: BombadilBrowserState) => unknown;
+}): Cell<T> {
+  if (
+    options.name.length === 0
+    || options.name.length > 128
+    || !SNAPSHOT_NAME_PATTERN.test(options.name)
+  ) {
+    throw new Error("Bombadil snapshot name must be a safe 1-128 character identifier");
+  }
+  const fallback = optionalBoundedJsonClone(options.fallback);
+  if (fallback === undefined) {
+    throw new Error("Bombadil snapshot fallback must be bounded JSON");
+  }
+  return extract<BombadilBrowserState, T>((state) => {
+    try {
+      return (optionalBoundedJsonClone(options.read(state)) ?? fallback) as T;
+    } catch {
+      return fallback as T;
+    }
+  }).named(options.name);
 }
 
 function readNonNegativeCounters(value: unknown): {
