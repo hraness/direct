@@ -1375,19 +1375,20 @@ function validateViewport(value: unknown): ValidatedViewport {
   if (!isRecord(value) || !Object.keys(value).every((key) => VIEWPORT_KEYS.has(key))) {
     throw new Error("viewport must contain only width, height, and deviceScaleFactor");
   }
-  const width = value.width ?? DEFAULT_VIEWPORT_WIDTH;
-  const height = value.height ?? DEFAULT_VIEWPORT_HEIGHT;
-  const deviceScaleFactor = value.deviceScaleFactor ?? DEFAULT_DEVICE_SCALE_FACTOR;
-  for (const [name, dimension] of [["width", width], ["height", height]] as const) {
+  const validateDimension = (name: "height" | "width", input: unknown): number => {
     if (
-      typeof dimension !== "number"
-      || !Number.isSafeInteger(dimension)
-      || dimension < 1
-      || dimension > 65_535
+      typeof input !== "number"
+      || !Number.isSafeInteger(input)
+      || input < 1
+      || input > 65_535
     ) {
       throw new Error(`viewport.${name} must be an integer between 1 and 65535`);
     }
-  }
+    return input;
+  };
+  const width = validateDimension("width", value.width ?? DEFAULT_VIEWPORT_WIDTH);
+  const height = validateDimension("height", value.height ?? DEFAULT_VIEWPORT_HEIGHT);
+  const deviceScaleFactor = value.deviceScaleFactor ?? DEFAULT_DEVICE_SCALE_FACTOR;
   if (
     typeof deviceScaleFactor !== "number"
     || !Number.isFinite(deviceScaleFactor)

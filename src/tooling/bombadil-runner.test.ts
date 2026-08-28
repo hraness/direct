@@ -435,6 +435,14 @@ describe("Direct Bombadil configuration and invocation", () => {
       height: 768,
       width: 1_024,
     });
+    expect(validateDirectBombadilFuzzConfig({
+      ...config,
+      viewport: { deviceScaleFactor: 1.5, height: 720, width: 1_280 },
+    }).viewport).toEqual({
+      deviceScaleFactor: 1.5,
+      height: 720,
+      width: 1_280,
+    });
     expect(validated.bombadilExecutable).toEndWith(
       `node_modules/@antithesishq/bombadil/binaries/${nativeBinaryName()}`,
     );
