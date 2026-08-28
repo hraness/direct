@@ -291,11 +291,13 @@ export const no_dom_node_leak = createDirectBombadilResourceLeakProperty({
 ```
 
 The Direct action generator deliberately excludes reload, history traversal,
-visible links, anchors, href targets, form submission, reset controls, and the
-Enter key. It retains ordinary buttons, text input, scrolling, and an
+visible links, anchors, href targets, form submission, reset controls,
+destructive labels such as delete, remove, clear, discard, unlink, and close,
+and the Enter key. It retains ordinary buttons, text input, scrolling, and an
 always-eligible low-weight wait. This preserves the post-handshake contract
-within one document. Add product actions only when their navigation and form
-effects are understood, and keep product-specific assertions in the campaign.
+within one document. Add product actions only when their navigation, form, and
+destructive effects are understood, and keep product-specific assertions in
+the campaign.
 Guard domain actions on the state that makes them valid, then weight valuable
 state-changing actions above Wait. Do not increase throughput by admitting
 reload, navigation, submission, destructive controls, or arbitrary generated

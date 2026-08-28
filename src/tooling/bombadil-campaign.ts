@@ -138,7 +138,8 @@ function pruneActionTree<Action>(
 
 /**
  * Builds a browser action generator without reload/history actions or visible
- * navigation and submission click targets, keeping Direct continuously bound.
+ * navigation, submission, reset, or destructive click targets, keeping Direct
+ * continuously bound.
  */
 export function createDirectBombadilActions(): ActionGenerator<ActionTemplate> {
   const safeClicks = actions(() => pruneActionTree(clicks.generate(), safeClickAction) ?? []);

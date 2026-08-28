@@ -351,7 +351,7 @@ function clickAction(overrides: Readonly<Record<string, string | null>> = {}): u
 }
 
 describe("Direct Bombadil actions", () => {
-  test("prunes nested visible navigation and submission clicks", () => {
+  test("prunes nested navigation, submission, and destructive clicks", () => {
     fakeClicks.generate = () => ({
       branches: [
         [7, { value: clickAction() }],
