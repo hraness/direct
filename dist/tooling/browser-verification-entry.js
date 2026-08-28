@@ -1393,23 +1393,54 @@ async function stopVerificationServerWithOutput(server, stopTimeoutMs = DEFAULT_
 async function stopVerificationServer(server, stopTimeoutMs = DEFAULT_STOP_TIMEOUT_MS) {
   await stopVerificationServerWithOutput(server, stopTimeoutMs);
 }
+function verificationServerAcquisitionAbortError() {
+  return new Error("Verification server acquisition was aborted");
+}
+function throwIfVerificationServerAcquisitionAborted(signal) {
+  if (signal?.aborted === true)
+    throw verificationServerAcquisitionAbortError();
+}
+async function waitForVerificationServerAcquisitionStep(promise, signal) {
+  if (signal === undefined)
+    return await promise;
+  throwIfVerificationServerAcquisitionAborted(signal);
+  let abortListener;
+  const aborted = new Promise((_resolve, reject) => {
+    abortListener = () => reject(verificationServerAcquisitionAbortError());
+    signal.addEventListener("abort", abortListener, { once: true });
+    if (signal.aborted)
+      abortListener();
+  });
+  let value;
+  try {
+    value = await Promise.race([promise, aborted]);
+  } finally {
+    if (abortListener !== undefined)
+      signal.removeEventListener("abort", abortListener);
+  }
+  throwIfVerificationServerAcquisitionAborted(signal);
+  return value;
+}
 async function acquireVerificationServer(options) {
   const probeTimeoutMs = options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
   const readinessPath = options.readinessPath ?? "/";
   const isReachable = options.isReachable ?? serverIsReachable;
   const canStartLocally = canAutomaticallyStartLocalServer(options.baseUrl, options.localHosts);
-  if (await isReachable(options.baseUrl, probeTimeoutMs, readinessPath)) {
+  throwIfVerificationServerAcquisitionAborted(options.abortSignal);
+  if (await waitForVerificationServerAcquisitionStep(Promise.resolve(isReachable(options.baseUrl, probeTimeoutMs, readinessPath)), options.abortSignal)) {
     if (canStartLocally && options.reuseExistingLocalServer === false) {
       throw new Error(`A local server is already reachable at ${options.baseUrl}; ` + "verification will not reuse a server whose worktree ownership is unknown");
     }
-    await Bun.sleep(options.reuseProbeIntervalMs ?? DEFAULT_REUSE_PROBE_INTERVAL_MS);
-    if (await isReachable(options.baseUrl, probeTimeoutMs, readinessPath)) {
+    await waitForVerificationServerAcquisitionStep(Bun.sleep(options.reuseProbeIntervalMs ?? DEFAULT_REUSE_PROBE_INTERVAL_MS), options.abortSignal);
+    if (await waitForVerificationServerAcquisitionStep(Promise.resolve(isReachable(options.baseUrl, probeTimeoutMs, readinessPath)), options.abortSignal)) {
+      throwIfVerificationServerAcquisitionAborted(options.abortSignal);
       return { source: "reused" };
     }
   }
   if (!canStartLocally) {
     throw new Error(`No server is reachable at ${options.baseUrl}; automatic startup is limited to local HTTP URLs`);
   }
+  throwIfVerificationServerAcquisitionAborted(options.abortSignal);
   const server = options.startServer();
   let exitedWithCode = null;
   try {
@@ -1420,10 +1451,11 @@ async function acquireVerificationServer(options) {
         exitedWithCode = exitCode;
         break;
       }
-      if (await isReachable(options.baseUrl, probeTimeoutMs, readinessPath)) {
+      if (await waitForVerificationServerAcquisitionStep(Promise.resolve(isReachable(options.baseUrl, probeTimeoutMs, readinessPath)), options.abortSignal)) {
+        throwIfVerificationServerAcquisitionAborted(options.abortSignal);
         return { source: "started", server };
       }
-      await Bun.sleep(options.pollIntervalMs ?? 200);
+      await waitForVerificationServerAcquisitionStep(Bun.sleep(options.pollIntervalMs ?? 200), options.abortSignal);
     }
   } catch (error) {
     await stopVerificationServer(server);

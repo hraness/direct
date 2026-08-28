@@ -1046,23 +1046,54 @@ async function stopVerificationServerWithOutput(server, stopTimeoutMs = DEFAULT_
 async function stopVerificationServer(server, stopTimeoutMs = DEFAULT_STOP_TIMEOUT_MS) {
   await stopVerificationServerWithOutput(server, stopTimeoutMs);
 }
+function verificationServerAcquisitionAbortError() {
+  return new Error("Verification server acquisition was aborted");
+}
+function throwIfVerificationServerAcquisitionAborted(signal) {
+  if (signal?.aborted === true)
+    throw verificationServerAcquisitionAbortError();
+}
+async function waitForVerificationServerAcquisitionStep(promise, signal) {
+  if (signal === undefined)
+    return await promise;
+  throwIfVerificationServerAcquisitionAborted(signal);
+  let abortListener;
+  const aborted = new Promise((_resolve, reject) => {
+    abortListener = () => reject(verificationServerAcquisitionAbortError());
+    signal.addEventListener("abort", abortListener, { once: true });
+    if (signal.aborted)
+      abortListener();
+  });
+  let value;
+  try {
+    value = await Promise.race([promise, aborted]);
+  } finally {
+    if (abortListener !== undefined)
+      signal.removeEventListener("abort", abortListener);
+  }
+  throwIfVerificationServerAcquisitionAborted(signal);
+  return value;
+}
 async function acquireVerificationServer(options) {
   const probeTimeoutMs = options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
   const readinessPath = options.readinessPath ?? "/";
   const isReachable = options.isReachable ?? serverIsReachable;
   const canStartLocally = canAutomaticallyStartLocalServer(options.baseUrl, options.localHosts);
-  if (await isReachable(options.baseUrl, probeTimeoutMs, readinessPath)) {
+  throwIfVerificationServerAcquisitionAborted(options.abortSignal);
+  if (await waitForVerificationServerAcquisitionStep(Promise.resolve(isReachable(options.baseUrl, probeTimeoutMs, readinessPath)), options.abortSignal)) {
     if (canStartLocally && options.reuseExistingLocalServer === false) {
       throw new Error(`A local server is already reachable at ${options.baseUrl}; ` + "verification will not reuse a server whose worktree ownership is unknown");
     }
-    await Bun.sleep(options.reuseProbeIntervalMs ?? DEFAULT_REUSE_PROBE_INTERVAL_MS);
-    if (await isReachable(options.baseUrl, probeTimeoutMs, readinessPath)) {
+    await waitForVerificationServerAcquisitionStep(Bun.sleep(options.reuseProbeIntervalMs ?? DEFAULT_REUSE_PROBE_INTERVAL_MS), options.abortSignal);
+    if (await waitForVerificationServerAcquisitionStep(Promise.resolve(isReachable(options.baseUrl, probeTimeoutMs, readinessPath)), options.abortSignal)) {
+      throwIfVerificationServerAcquisitionAborted(options.abortSignal);
       return { source: "reused" };
     }
   }
   if (!canStartLocally) {
     throw new Error(`No server is reachable at ${options.baseUrl}; automatic startup is limited to local HTTP URLs`);
   }
+  throwIfVerificationServerAcquisitionAborted(options.abortSignal);
   const server = options.startServer();
   let exitedWithCode = null;
   try {
@@ -1073,10 +1104,11 @@ async function acquireVerificationServer(options) {
         exitedWithCode = exitCode;
         break;
       }
-      if (await isReachable(options.baseUrl, probeTimeoutMs, readinessPath)) {
+      if (await waitForVerificationServerAcquisitionStep(Promise.resolve(isReachable(options.baseUrl, probeTimeoutMs, readinessPath)), options.abortSignal)) {
+        throwIfVerificationServerAcquisitionAborted(options.abortSignal);
         return { source: "started", server };
       }
-      await Bun.sleep(options.pollIntervalMs ?? 200);
+      await waitForVerificationServerAcquisitionStep(Bun.sleep(options.pollIntervalMs ?? 200), options.abortSignal);
     }
   } catch (error) {
     await stopVerificationServer(server);
@@ -1424,9 +1456,9 @@ var RESOURCE_FIELD_MAP = {
   task_duration: "taskDurationSeconds",
   thread_time: "threadTimeSeconds"
 };
-function canonicalJson2(value, depth = 0) {
-  if (depth > TRACE_MAX_JSON_DEPTH) {
-    throw new Error(`Bombadil named snapshot exceeds JSON depth ${String(TRACE_MAX_JSON_DEPTH)}`);
+function canonicalJson2(value, depth = 0, maximumDepth = TRACE_MAX_JSON_DEPTH) {
+  if (depth > maximumDepth) {
+    throw new Error(`Bombadil named snapshot exceeds JSON depth ${String(maximumDepth)}`);
   }
   if (value === null || typeof value === "boolean" || typeof value === "string") {
     return JSON.stringify(value);
@@ -1437,20 +1469,21 @@ function canonicalJson2(value, depth = 0) {
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) {
-    return `[${value.map((entry) => canonicalJson2(entry, depth + 1)).join(",")}]`;
+    return `[${value.map((entry) => canonicalJson2(entry, depth + 1, maximumDepth)).join(",")}]`;
   }
   if (!isRecord2(value))
     throw new Error("Bombadil named snapshot is not JSON");
-  const entries = Object.keys(value).sort(compareCodeUnits).map((key) => `${JSON.stringify(key)}:${canonicalJson2(value[key], depth + 1)}`);
+  const entries = Object.keys(value).sort(compareCodeUnits).map((key) => `${JSON.stringify(key)}:${canonicalJson2(value[key], depth + 1, maximumDepth)}`);
   return `{${entries.join(",")}}`;
 }
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
-function namedSnapshotValueSha256(value) {
-  const canonical = canonicalJson2(value);
-  if (Buffer.byteLength(canonical, "utf8") > TRACE_MAX_CANONICAL_SNAPSHOT_BYTES) {
-    throw new Error(`Bombadil named snapshot exceeds ${String(TRACE_MAX_CANONICAL_SNAPSHOT_BYTES)} canonical bytes`);
+function namedSnapshotValueSha256(value, options = {}) {
+  const maximumBytes = options.maximumBytes ?? TRACE_MAX_CANONICAL_SNAPSHOT_BYTES;
+  const canonical = canonicalJson2(value, 0, options.maximumDepth ?? TRACE_MAX_JSON_DEPTH);
+  if (Buffer.byteLength(canonical, "utf8") > maximumBytes) {
+    throw new Error(`Bombadil named snapshot exceeds ${String(maximumBytes)} canonical bytes`);
   }
   return sha256(canonical);
 }
@@ -1588,7 +1621,7 @@ function parseTraceState(value, lineNumber) {
     url
   };
 }
-function parseTraceLine(line, lineNumber) {
+function parseTraceEnvelope(line, lineNumber) {
   let input;
   try {
     input = JSON.parse(line);
@@ -1601,28 +1634,16 @@ function parseTraceLine(line, lineNumber) {
   if (!Number.isSafeInteger(input.timestamp) || typeof input.timestamp !== "number" || input.timestamp < 0 || !Array.isArray(input.snapshots) || input.snapshots.length > TRACE_MAX_SNAPSHOTS_PER_LINE || !Array.isArray(input.violations)) {
     throw new Error(`Bombadil trace line ${String(lineNumber)} has invalid state fields`);
   }
-  const state = parseTraceState(input.state, lineNumber);
-  const action = parseTraceAction(input.action, lineNumber);
-  const snapshots = input.snapshots;
-  const namedSnapshots = [];
-  const namedSnapshotNames = new Set;
-  for (const snapshotValue of snapshots) {
-    if (!isRecord2(snapshotValue) || !hasExactKeys(snapshotValue, TRACE_SNAPSHOT_KEYS) || !Number.isSafeInteger(snapshotValue.index) || !Number.isSafeInteger(snapshotValue.time) || snapshotValue.index < 0 || snapshotValue.time < 0 || snapshotValue.name !== null && typeof snapshotValue.name !== "string") {
-      throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid snapshot`);
-    }
-    if (snapshotValue.name !== null) {
-      const name = validateSnapshotName(snapshotValue.name, `Bombadil trace line ${String(lineNumber)} snapshot name`);
-      if (namedSnapshotNames.has(name)) {
-        throw new Error(`Bombadil trace line ${String(lineNumber)} repeats named snapshot ${name}`);
-      }
-      namedSnapshotNames.add(name);
-      namedSnapshots.push({
-        name,
-        valueSha256: namedSnapshotValueSha256(snapshotValue.value)
-      });
-    }
-  }
-  const directSnapshots = snapshots.filter((snapshot2) => isRecord2(snapshot2) && snapshot2.name === "direct");
+  return {
+    action: input.action,
+    snapshots: input.snapshots,
+    state: input.state,
+    timestamp: input.timestamp,
+    violations: input.violations
+  };
+}
+function parseDirectTraceObservation(envelope, lineNumber) {
+  const directSnapshots = envelope.snapshots.filter((snapshot2) => isRecord2(snapshot2) && snapshot2.name === "direct");
   if (directSnapshots.length !== 1) {
     throw new Error(`Bombadil trace line ${String(lineNumber)} must contain one named direct snapshot`);
   }
@@ -1630,8 +1651,65 @@ function parseTraceLine(line, lineNumber) {
   if (snapshot === undefined || !hasExactKeys(snapshot, TRACE_SNAPSHOT_KEYS) || !Number.isSafeInteger(snapshot.index) || !Number.isSafeInteger(snapshot.time) || snapshot.index < 0 || snapshot.time < 0) {
     throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid direct snapshot`);
   }
+  return {
+    observation: parseTraceDirectObservation(snapshot.value),
+    value: snapshot.value
+  };
+}
+function parseDirectTraceLine(line, lineNumber) {
+  return parseDirectTraceObservation(parseTraceEnvelope(line, lineNumber), lineNumber).observation;
+}
+function parseTraceLine(line, lineNumber, strictDiagnosticSnapshotNames) {
+  const envelope = parseTraceEnvelope(line, lineNumber);
+  const state = parseTraceState(envelope.state, lineNumber);
+  const action = parseTraceAction(envelope.action, lineNumber);
+  const snapshots = envelope.snapshots;
+  const direct = parseDirectTraceObservation(envelope, lineNumber);
+  const namedSnapshots = [{
+    name: "direct",
+    valueSha256: namedSnapshotValueSha256(direct.value, {
+      maximumBytes: TRACE_MAX_LINE_BYTES,
+      maximumDepth: TRACE_MAX_JSON_DEPTH + 4
+    })
+  }];
+  const diagnosticSnapshotValues = new Map;
+  for (const snapshotValue of snapshots) {
+    if (!isRecord2(snapshotValue) || !hasExactKeys(snapshotValue, TRACE_SNAPSHOT_KEYS) || !Number.isSafeInteger(snapshotValue.index) || !Number.isSafeInteger(snapshotValue.time) || snapshotValue.index < 0 || snapshotValue.time < 0 || snapshotValue.name !== null && typeof snapshotValue.name !== "string") {
+      throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid snapshot`);
+    }
+    if (snapshotValue.name === null || snapshotValue.name === "direct")
+      continue;
+    let name;
+    try {
+      name = validateSnapshotName(snapshotValue.name, `Bombadil trace line ${String(lineNumber)} snapshot name`);
+    } catch (error) {
+      if (strictDiagnosticSnapshotNames.has(snapshotValue.name))
+        throw error;
+      continue;
+    }
+    const values = diagnosticSnapshotValues.get(name) ?? [];
+    values.push(snapshotValue.value);
+    diagnosticSnapshotValues.set(name, values);
+  }
+  for (const [name, values] of diagnosticSnapshotValues) {
+    if (values.length !== 1) {
+      if (strictDiagnosticSnapshotNames.has(name)) {
+        throw new Error(`Bombadil trace line ${String(lineNumber)} repeats named snapshot ${name}`);
+      }
+      continue;
+    }
+    try {
+      namedSnapshots.push({
+        name,
+        valueSha256: namedSnapshotValueSha256(values[0])
+      });
+    } catch (error) {
+      if (strictDiagnosticSnapshotNames.has(name))
+        throw error;
+    }
+  }
   const propertyViolationNames = [];
-  for (const violation of input.violations) {
+  for (const violation of envelope.violations) {
     if (!isRecord2(violation) || !hasExactKeys(violation, TRACE_VIOLATION_KEYS)) {
       throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid property violation`);
     }
@@ -1642,7 +1720,7 @@ function parseTraceLine(line, lineNumber) {
   }
   return {
     action,
-    directObservation: parseTraceDirectObservation(snapshot.value),
+    directObservation: direct.observation,
     namedSnapshots,
     propertyViolationNames,
     state
@@ -1673,7 +1751,7 @@ async function attestDirectBombadilTrace(options) {
       if (Buffer.byteLength(line, "utf8") > TRACE_MAX_LINE_BYTES) {
         throw new Error(`Bombadil trace line ${String(observationCount)} is too large`);
       }
-      const observation = parseTraceLine(line, observationCount).directObservation;
+      const observation = parseDirectTraceLine(line, observationCount);
       const exact = exactTraceDirectObservation(observation);
       if (exact === null) {
         if (initial !== null) {
@@ -1759,6 +1837,7 @@ async function summarizeDirectBombadilTrace(options) {
     throw new Error("targetUrl must be an absolute URL");
   }
   const policy = validateExplorationPolicy(options.explorationPolicy);
+  const strictDiagnosticSnapshotNames = explorationPolicySnapshotNames(policy);
   const actionCounts = new Map;
   const targetTags = new Map;
   const urlFingerprints = new Set;
@@ -1788,6 +1867,8 @@ async function summarizeDirectBombadilTrace(options) {
   let policyObservationCount = 0;
   let previousObservationWasExact = false;
   let stableTarget = true;
+  let trackedUnrelatedSnapshotNameCount = 0;
+  const unrelatedSnapshotNameLimit = Math.max(0, TRACE_MAX_NAMED_SNAPSHOT_NAMES - strictDiagnosticSnapshotNames.size);
   const stream = createReadStream(options.tracePath, { encoding: "utf8" });
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
   try {
@@ -1799,7 +1880,7 @@ async function summarizeDirectBombadilTrace(options) {
       if (Buffer.byteLength(line, "utf8") > TRACE_MAX_LINE_BYTES) {
         throw new Error(`Bombadil trace line ${String(lineCount)} is too large`);
       }
-      const parsed = parseTraceLine(line, lineCount);
+      const parsed = parseTraceLine(line, lineCount, strictDiagnosticSnapshotNames);
       const rawRelativeUrl = `${parsed.state.url.pathname}${parsed.state.url.search}${parsed.state.url.hash}`;
       rawUrlFingerprints.add(sha256(rawRelativeUrl));
       if (rawUrlFingerprints.size > TRACE_MAX_DISTINCT_URLS) {
@@ -1858,6 +1939,10 @@ async function summarizeDirectBombadilTrace(options) {
       for (const snapshot of parsed.namedSnapshots) {
         let entry = snapshots.get(snapshot.name);
         if (entry === undefined) {
+          const isStrictSnapshot = snapshot.name === "direct" || strictDiagnosticSnapshotNames.has(snapshot.name);
+          if (!isStrictSnapshot && trackedUnrelatedSnapshotNameCount >= unrelatedSnapshotNameLimit) {
+            continue;
+          }
           if (snapshots.size >= TRACE_MAX_NAMED_SNAPSHOT_NAMES) {
             throw new Error(`Bombadil trace exceeds ${String(TRACE_MAX_NAMED_SNAPSHOT_NAMES)} named snapshots`);
           }
@@ -1870,6 +1955,14 @@ async function summarizeDirectBombadilTrace(options) {
             values: new Set
           };
           snapshots.set(snapshot.name, entry);
+          if (!isStrictSnapshot)
+            trackedUnrelatedSnapshotNameCount += 1;
+        }
+        if (!entry.values.has(snapshot.valueSha256) && entry.values.size >= TRACE_MAX_DISTINCT_SNAPSHOT_VALUES_PER_NAME) {
+          if (snapshot.name === "direct" || strictDiagnosticSnapshotNames.has(snapshot.name)) {
+            throw new Error(`Bombadil trace named snapshot ${snapshot.name} exceeds ${String(TRACE_MAX_DISTINCT_SNAPSHOT_VALUES_PER_NAME)} distinct values`);
+          }
+          continue;
         }
         const changedAfterRecordedAction = recordedActionKind !== null && entry.lastObservationIndex === policyObservationCount - 1 && entry.lastValueSha256 !== null && entry.lastValueSha256 !== snapshot.valueSha256;
         if (changedAfterRecordedAction) {
@@ -1882,9 +1975,6 @@ async function summarizeDirectBombadilTrace(options) {
         entry.lastValueSha256 = snapshot.valueSha256;
         entry.observationCount += 1;
         entry.values.add(snapshot.valueSha256);
-        if (entry.values.size > TRACE_MAX_DISTINCT_SNAPSHOT_VALUES_PER_NAME) {
-          throw new Error(`Bombadil trace named snapshot ${snapshot.name} exceeds ${String(TRACE_MAX_DISTINCT_SNAPSHOT_VALUES_PER_NAME)} distinct values`);
-        }
       }
       previousObservationWasExact = true;
     }
@@ -2159,6 +2249,20 @@ function validateSnapshotActionMinimumMap(options) {
   }
   return Object.freeze(validated);
 }
+function explorationPolicySnapshotNames(policy) {
+  const names = new Set(["direct"]);
+  if (policy === null)
+    return names;
+  for (const name of policy.requiredNamedSnapshots)
+    names.add(name);
+  for (const name of Object.keys(policy.minDistinctNamedSnapshotValues))
+    names.add(name);
+  for (const name of Object.keys(policy.minNamedSnapshotChangesAfterNonWait))
+    names.add(name);
+  for (const name of Object.keys(policy.minNamedSnapshotChangesAfterActionKind))
+    names.add(name);
+  return names;
+}
 function validateExplorationPolicy(value) {
   if (value === undefined)
     return null;
@@ -2205,7 +2309,7 @@ function validateExplorationPolicy(value) {
   if (typeof requireStableTargetUrl !== "boolean") {
     throw new Error("explorationPolicy.requireStableTargetUrl must be a boolean");
   }
-  return Object.freeze({
+  const validated = Object.freeze({
     minDistinctNamedSnapshotValues,
     minNamedSnapshotChangesAfterActionKind,
     minNamedSnapshotChangesAfterNonWait,
@@ -2214,6 +2318,10 @@ function validateExplorationPolicy(value) {
     requiredActionKinds: Object.freeze(requiredActionKinds),
     requiredNamedSnapshots: Object.freeze(requiredNamedSnapshots)
   });
+  if (explorationPolicySnapshotNames(validated).size > TRACE_MAX_NAMED_SNAPSHOT_NAMES) {
+    throw new Error(`explorationPolicy may reference at most ${String(TRACE_MAX_NAMED_SNAPSHOT_NAMES - 1)} distinct non-Direct snapshots`);
+  }
+  return validated;
 }
 function validateDirectBombadilFuzzConfig(config, baseUrlOverride) {
   const repositoryRoot = resolve(config.repositoryRoot);
@@ -2450,6 +2558,7 @@ async function runBombadilNativeProcess(invocation) {
 }
 var defaultDependencies = {
   acquireServer: acquireVerificationServer,
+  createAbortController: () => new AbortController,
   now: () => new Date,
   runBombadil: runBombadilNativeProcess,
   serverOutputTimeoutMs: SERVER_OUTPUT_TIMEOUT_MS,
@@ -2652,6 +2761,17 @@ async function runDirectBombadilFuzzMatrix(campaignsInput, arguments_ = process2
   }
   return { kind: "matrix", results: Object.freeze(results) };
 }
+function throwIfBombadilRunAborted(signal) {
+  if (signal.aborted)
+    throw new Error("Bombadil fuzzing was interrupted");
+}
+function terminateAbortedOwnedServer(signal, server) {
+  if (!signal.aborted)
+    return;
+  if (server.exitCode() === null)
+    server.terminate();
+  throwIfBombadilRunAborted(signal);
+}
 async function runDirectBombadilFuzz(config, arguments_ = process2.argv.slice(2), dependencyOverrides = {}) {
   const parsed = parseDirectBombadilFuzzArguments(arguments_, config.baseUrl);
   if (parsed.kind === "help") {
@@ -2672,7 +2792,7 @@ async function runDirectBombadilFuzz(config, arguments_ = process2.argv.slice(2)
   });
   const outputPath = join2(artifactRun.runDirectory, "bombadil");
   const tracePath = join2(outputPath, "trace.jsonl");
-  const abortController = new AbortController;
+  const abortController = dependencies.createAbortController?.() ?? new AbortController;
   const invocation = createDirectBombadilInvocation({
     baseUrl: validated.baseUrl,
     bombadilExecutable: validated.bombadilExecutable,
@@ -2715,23 +2835,37 @@ async function runDirectBombadilFuzz(config, arguments_ = process2.argv.slice(2)
     try {
       await requireRegularFile(validated.bombadilExecutable, "The root Bombadil executable");
       bombadilVersion = await readExactBombadilVersion(validated.repositoryRoot);
-      if (abortController.signal.aborted)
-        throw new Error("Bombadil fuzzing was interrupted");
-      lease = await dependencies.acquireServer({
-        baseUrl: validated.baseUrl,
-        label: validated.label,
-        readinessPath: validated.server.readinessPath,
-        reuseExistingLocalServer: false,
-        startupTimeoutMs: validated.server.startupTimeoutMs,
-        startServer: () => {
-          ownedServer = dependencies.spawnServer({
-            command: serverCommand,
-            cwd: validated.server.cwd,
-            ...validated.server.env === undefined ? {} : { env: validated.server.env }
-          });
-          return ownedServer;
-        }
-      });
+      throwIfBombadilRunAborted(abortController.signal);
+      try {
+        lease = await dependencies.acquireServer({
+          abortSignal: abortController.signal,
+          baseUrl: validated.baseUrl,
+          label: validated.label,
+          readinessPath: validated.server.readinessPath,
+          reuseExistingLocalServer: false,
+          startupTimeoutMs: validated.server.startupTimeoutMs,
+          startServer: () => {
+            throwIfBombadilRunAborted(abortController.signal);
+            ownedServer = dependencies.spawnServer({
+              command: serverCommand,
+              cwd: validated.server.cwd,
+              ...validated.server.env === undefined ? {} : { env: validated.server.env }
+            });
+            terminateAbortedOwnedServer(abortController.signal, ownedServer);
+            return ownedServer;
+          }
+        });
+      } catch (error) {
+        if (abortController.signal.aborted)
+          throwIfBombadilRunAborted(abortController.signal);
+        throw error;
+      }
+      if (abortController.signal.aborted) {
+        const acquiredOwnedServer = ownedServer;
+        if (acquiredOwnedServer?.exitCode() === null)
+          acquiredOwnedServer.terminate();
+        throwIfBombadilRunAborted(abortController.signal);
+      }
       let processFailure = null;
       try {
         processResult = await dependencies.runBombadil(abortableInvocation);

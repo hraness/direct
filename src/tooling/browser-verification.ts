@@ -813,7 +813,38 @@ export async function stopVerificationServer(
   await stopVerificationServerWithOutput(server, stopTimeoutMs);
 }
 
+function verificationServerAcquisitionAbortError(): Error {
+  return new Error("Verification server acquisition was aborted");
+}
+
+function throwIfVerificationServerAcquisitionAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) throw verificationServerAcquisitionAbortError();
+}
+
+async function waitForVerificationServerAcquisitionStep<Value>(
+  promise: Promise<Value>,
+  signal: AbortSignal | undefined,
+): Promise<Value> {
+  if (signal === undefined) return await promise;
+  throwIfVerificationServerAcquisitionAborted(signal);
+  let abortListener: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    abortListener = () => reject(verificationServerAcquisitionAbortError());
+    signal.addEventListener("abort", abortListener, { once: true });
+    if (signal.aborted) abortListener();
+  });
+  let value: Value;
+  try {
+    value = await Promise.race([promise, aborted]);
+  } finally {
+    if (abortListener !== undefined) signal.removeEventListener("abort", abortListener);
+  }
+  throwIfVerificationServerAcquisitionAborted(signal);
+  return value;
+}
+
 export async function acquireVerificationServer(options: {
+  readonly abortSignal?: AbortSignal;
   readonly baseUrl: string;
   readonly label: string;
   readonly localHosts?: ReadonlySet<string>;
@@ -837,7 +868,11 @@ export async function acquireVerificationServer(options: {
     options.baseUrl,
     options.localHosts,
   );
-  if (await isReachable(options.baseUrl, probeTimeoutMs, readinessPath)) {
+  throwIfVerificationServerAcquisitionAborted(options.abortSignal);
+  if (await waitForVerificationServerAcquisitionStep(
+    Promise.resolve(isReachable(options.baseUrl, probeTimeoutMs, readinessPath)),
+    options.abortSignal,
+  )) {
     if (canStartLocally && options.reuseExistingLocalServer === false) {
       throw new Error(
         `A local server is already reachable at ${options.baseUrl}; `
@@ -847,8 +882,15 @@ export async function acquireVerificationServer(options: {
     // A verifier-owned command can exit before its child listener has finished
     // shutting down. Require the listener to survive a bounded interval before
     // another verifier trusts it as independently managed infrastructure.
-    await Bun.sleep(options.reuseProbeIntervalMs ?? DEFAULT_REUSE_PROBE_INTERVAL_MS);
-    if (await isReachable(options.baseUrl, probeTimeoutMs, readinessPath)) {
+    await waitForVerificationServerAcquisitionStep(
+      Bun.sleep(options.reuseProbeIntervalMs ?? DEFAULT_REUSE_PROBE_INTERVAL_MS),
+      options.abortSignal,
+    );
+    if (await waitForVerificationServerAcquisitionStep(
+      Promise.resolve(isReachable(options.baseUrl, probeTimeoutMs, readinessPath)),
+      options.abortSignal,
+    )) {
+      throwIfVerificationServerAcquisitionAborted(options.abortSignal);
       return { source: "reused" };
     }
   }
@@ -858,6 +900,7 @@ export async function acquireVerificationServer(options: {
     );
   }
 
+  throwIfVerificationServerAcquisitionAborted(options.abortSignal);
   const server = options.startServer();
   let exitedWithCode: number | null = null;
   try {
@@ -868,10 +911,17 @@ export async function acquireVerificationServer(options: {
         exitedWithCode = exitCode;
         break;
       }
-      if (await isReachable(options.baseUrl, probeTimeoutMs, readinessPath)) {
+      if (await waitForVerificationServerAcquisitionStep(
+        Promise.resolve(isReachable(options.baseUrl, probeTimeoutMs, readinessPath)),
+        options.abortSignal,
+      )) {
+        throwIfVerificationServerAcquisitionAborted(options.abortSignal);
         return { source: "started", server };
       }
-      await Bun.sleep(options.pollIntervalMs ?? 200);
+      await waitForVerificationServerAcquisitionStep(
+        Bun.sleep(options.pollIntervalMs ?? 200),
+        options.abortSignal,
+      );
     }
   } catch (error) {
     await stopVerificationServer(server);
