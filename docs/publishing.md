@@ -74,10 +74,11 @@ cookie, one-time password, recovery code, or write token to GitHub.
      tarball, `npm-pack.json`, and `npm-package.sha256`.
    - The only job with OIDC authority checks out no source and runs no
      repository code. It downloads the three-file artifact, validates its
-     complete npm inventory, rehashes all three files, resolves the current tag
-     and default branch in a new bare Git directory, proves the version is newer
-     than every published stable version, and publishes that exact tarball with
-     `npm publish`.
+     complete npm inventory, rehashes all three files, resolves every remote
+     stable tag and the default branch in a new bare Git directory, requires the
+     candidate to remain the newest remote stable tag, proves its version is
+     newer than every published stable version, and publishes that exact tarball
+     with `npm publish`.
    - A read-only verification job rebuilds the tagged package and compares it
      with the public registry package by safe path, entry type, mode, size, and
      regular-file hashes. Each transport must also match its own npm SHA-1,
@@ -94,6 +95,10 @@ The workflow does not use `NODE_AUTH_TOKEN` or a long-lived npm credential.
 If a tag run is retried after npm accepted the package, the OIDC job leaves the
 existing version unchanged and the later canonical comparison proves that it
 matches the tagged source.
+
+The terminal tag check does not depend on GitHub's concurrency order. It reads
+the remote stable-tag set before publication and stops if a newer stable tag
+exists.
 
 ## Package identity
 
