@@ -28,6 +28,8 @@ const DIRECT_BROWSER_BRIDGE_SCHEMA = "direct.browser-bridge/v2";
 const DIRECT_SESSION_MANIFEST_SCHEMA = "direct.session-manifest/v1";
 const DIRECT_PROBE_SCHEMA = "direct.probe/v1";
 const MAX_RAW_CONTRACT_CHARACTERS = 2_000_000;
+const MAX_NAMED_SNAPSHOT_CANONICAL_BYTES = 2 * 1024 * 1024;
+const MAX_NAMED_SNAPSHOT_JSON_DEPTH = 64;
 const BRIDGE_KEYS = new Set(["manifest", "reset", "schema", "snapshot"]);
 const UNSAFE_CLICK_INPUT_TYPES = new Set(["image", "reset", "submit"]);
 const UNSAFE_CLICK_LABEL_PHRASES = [
@@ -43,6 +45,12 @@ const UNSAFE_CLICK_LABEL_PHRASES = [
   "unlink",
 ] as const;
 const SNAPSHOT_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.:/-]*$/u;
+const RESERVED_SNAPSHOT_NAMES = new Set([
+  "direct",
+  "__proto__",
+  "constructor",
+  "prototype",
+]);
 const RESOURCE_LEAK_OPTION_KEYS = new Set(["growthLimit", "metric", "windowMillis"]);
 const RESOURCE_METRICS = [
   "dom_nodes",
@@ -71,10 +79,22 @@ export interface DirectBombadilObservation {
 }
 
 export interface DirectBombadilProperties {
+  readonly startupContract: Formula;
   readonly exactContract: Formula;
   readonly stableCatalog: Formula;
   readonly noDeclaredViolations: Formula;
   readonly eventualQuiescence: Formula;
+}
+
+function observationHasExactContract(
+  observation: DirectBombadilObservation,
+): boolean {
+  return observation.contractValid
+    && observation.activeSource === "scenario"
+    && observation.activeScenario.length > 0
+    && observation.activeRoute.length > 0
+    && observation.activationHash.length > 0
+    && observation.catalogHash.length > 0;
 }
 
 export type DirectBombadilResourceMetric = (typeof RESOURCE_METRICS)[number];
@@ -108,6 +128,7 @@ function safeClickAction(action: ActionTemplate): boolean {
   });
   return fingerprint.href === null
     && tag !== "a"
+    && tag !== "label"
     && fingerprint.role?.toLowerCase() !== "link"
     && !hasUnsafeLabel
     && !UNSAFE_CLICK_INPUT_TYPES.has(inputType)
@@ -255,10 +276,53 @@ function boundedJsonClone(value: unknown): BombadilJson | null {
   return JSON.parse(source) as BombadilJson;
 }
 
-function optionalBoundedJsonClone(value: unknown): BombadilJson | undefined {
-  const source = JSON.stringify(value);
-  if (source === undefined || source.length > MAX_RAW_CONTRACT_CHARACTERS) return undefined;
-  return JSON.parse(source) as BombadilJson;
+function cloneNamedSnapshotJson(
+  value: unknown,
+  depth = 0,
+  ancestors: WeakSet<object> = new WeakSet<object>(),
+): BombadilJson | undefined {
+  if (depth > MAX_NAMED_SNAPSHOT_JSON_DEPTH) return undefined;
+  if (value === null || typeof value === "boolean" || typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value !== "object") return undefined;
+  if (ancestors.has(value)) return undefined;
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const cloned: BombadilJson[] = [];
+      for (const entry of value) {
+        const child = cloneNamedSnapshotJson(entry, depth + 1, ancestors);
+        if (child === undefined) return undefined;
+        cloned.push(child);
+      }
+      return cloned;
+    }
+    const clonedEntries: [string, BombadilJson][] = [];
+    for (const key of Object.keys(value)) {
+      const child = cloneNamedSnapshotJson(
+        Reflect.get(value, key),
+        depth + 1,
+        ancestors,
+      );
+      if (child === undefined) return undefined;
+      clonedEntries.push([key, child]);
+    }
+    return Object.fromEntries(clonedEntries) as BombadilJson;
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function boundedNamedSnapshotJson(value: unknown): BombadilJson | undefined {
+  const cloned = cloneNamedSnapshotJson(value);
+  if (cloned === undefined) return undefined;
+  const source = JSON.stringify(cloned);
+  return new TextEncoder().encode(source).byteLength
+      <= MAX_NAMED_SNAPSHOT_CANONICAL_BYTES
+    ? cloned
+    : undefined;
 }
 
 /**
@@ -268,24 +332,43 @@ function optionalBoundedJsonClone(value: unknown): BombadilJson | undefined {
 export function createDirectBombadilNamedSnapshot<T extends BombadilJson>(options: {
   readonly fallback: T;
   readonly name: string;
+  readonly parse: (value: BombadilJson) => T | null;
   readonly read: (state: BombadilBrowserState) => unknown;
 }): Cell<T> {
   if (
     options.name.length === 0
     || options.name.length > 128
     || !SNAPSHOT_NAME_PATTERN.test(options.name)
+    || RESERVED_SNAPSHOT_NAMES.has(options.name)
   ) {
-    throw new Error("Bombadil snapshot name must be a safe 1-128 character identifier");
+    throw new Error(
+      "Bombadil snapshot name must be a safe, unreserved 1-128 character identifier",
+    );
   }
-  const fallback = optionalBoundedJsonClone(options.fallback);
-  if (fallback === undefined) {
-    throw new Error("Bombadil snapshot fallback must be bounded JSON");
+  const parse = (value: unknown): T | null => {
+    const cloned = boundedNamedSnapshotJson(value);
+    if (cloned === undefined) return null;
+    const parsed = options.parse(cloned);
+    return parsed !== null && boundedNamedSnapshotJson(parsed) !== undefined
+      ? parsed
+      : null;
+  };
+  let fallback: T | null = null;
+  try {
+    fallback = parse(options.fallback);
+  } catch {
+    fallback = null;
+  }
+  if (fallback === null) {
+    throw new Error(
+      "Bombadil snapshot fallback must be bounded JSON accepted by parse",
+    );
   }
   return extract<BombadilBrowserState, T>((state) => {
     try {
-      return (optionalBoundedJsonClone(options.read(state)) ?? fallback) as T;
+      return parse(options.read(state)) ?? fallback;
     } catch {
-      return fallback as T;
+      return fallback;
     }
   }).named(options.name);
 }
@@ -387,39 +470,50 @@ export function readDirectBombadilObservation(
   }
 }
 
-/** Builds the four Direct invariants used by Bombadil browser campaigns. */
+/** Builds bounded startup plus strict recurring Direct browser invariants. */
 export function createDirectBombadilProperties(): DirectBombadilProperties {
-  const direct = extract<BombadilBrowserState, DirectBombadilObservation>((state) =>
-    readDirectBombadilObservation(state.window)
-  ).named("direct");
+  let initial: Readonly<{
+    activationHash: string;
+    activeRoute: string;
+    activeScenario: string;
+    catalogHash: string;
+  }> | null = null;
+  const direct = extract<BombadilBrowserState, DirectBombadilObservation>((state) => {
+    const observation = readDirectBombadilObservation(state.window);
+    if (initial === null && observationHasExactContract(observation)) {
+      initial = Object.freeze({
+        activationHash: observation.activationHash,
+        activeRoute: observation.activeRoute,
+        activeScenario: observation.activeScenario,
+        catalogHash: observation.catalogHash,
+      });
+    }
+    return observation;
+  }).named("direct");
 
-  const exactContract = always(
-    eventually(() =>
-      direct.current.contractValid
-      && direct.current.activeSource === "scenario"
-      && direct.current.activeScenario.length > 0
-      && direct.current.activeRoute.length > 0
-      && direct.current.activationHash.length > 0
-    ).within(10, "seconds"),
-  );
-  const stableCatalog = always(
-    eventually(() =>
-      direct.current.contractValid
-      && direct.current.catalogHash.length > 0
-    ).within(10, "seconds"),
-  );
-  const noDeclaredViolations = always(
-    eventually(() =>
-      direct.current.contractValid
-      && direct.current.violationsValid
-      && direct.current.violations.every((value: number) => value === 0)
-    ).within(10, "seconds"),
-  );
+  const startupContract = eventually(() => initial !== null).within(10, "seconds");
+  const exactContract = always(() => initial === null || (
+    observationHasExactContract(direct.current)
+    && direct.current.activationHash === initial.activationHash
+    && direct.current.activeRoute === initial.activeRoute
+    && direct.current.activeScenario === initial.activeScenario
+  ));
+  const stableCatalog = always(() => initial === null || (
+    observationHasExactContract(direct.current)
+    && direct.current.catalogHash === initial.catalogHash
+  ));
+  const noDeclaredViolations = always(() => initial === null || (
+    observationHasExactContract(direct.current)
+    && direct.current.violationsValid
+    && direct.current.violations.every((value: number) => value === 0)
+  ));
   const eventualQuiescence = always(
-    eventually(() => direct.current.isQuiescent).within(10, "seconds"),
+    eventually(() => initial !== null && direct.current.isQuiescent)
+      .within(10, "seconds"),
   );
 
   return Object.freeze({
+    startupContract,
     exactContract,
     stableCatalog,
     noDeclaredViolations,

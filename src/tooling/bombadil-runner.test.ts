@@ -448,6 +448,46 @@ describe("Direct Bombadil configuration and invocation", () => {
     );
   });
 
+  test("orders query and policy artifacts by explicit code units", async () => {
+    const { config } = await fixture();
+    const validated = validateDirectBombadilFuzzConfig({
+      ...config,
+      targetQuery: { z: "4", "a.": "3", A: "1", "a-": "2" },
+      explorationPolicy: {
+        minDistinctNamedSnapshotValues: {
+          z: 4,
+          "a.": 3,
+          A: 1,
+          "a-": 2,
+        },
+        minNamedSnapshotChangesAfterNonWait: {
+          z: 4,
+          "a.": 3,
+          A: 1,
+          "a-": 2,
+        },
+        requiredActionKinds: ["Wait", "TypeText", "Click"],
+        requiredNamedSnapshots: ["z", "a.", "A", "a-"],
+      },
+    });
+    const expectedNames = ["A", "a-", "a.", "z"];
+    expect(Object.keys(validated.targetQuery)).toEqual(expectedNames);
+    expect(validated.explorationPolicy?.requiredActionKinds).toEqual([
+      "Click",
+      "TypeText",
+      "Wait",
+    ]);
+    expect(validated.explorationPolicy?.requiredNamedSnapshots).toEqual(
+      expectedNames,
+    );
+    expect(Object.keys(
+      validated.explorationPolicy?.minDistinctNamedSnapshotValues ?? {},
+    )).toEqual(expectedNames);
+    expect(Object.keys(
+      validated.explorationPolicy?.minNamedSnapshotChangesAfterNonWait ?? {},
+    )).toEqual(expectedNames);
+  });
+
   test("rejects unsafe artifact, scenario, route, path, readiness, and server command inputs", async () => {
     const { config, repositoryRoot } = await fixture();
     expect(() => validateDirectBombadilFuzzConfig({
@@ -923,6 +963,103 @@ describe("Direct Bombadil exploration summary", () => {
       failures: [expect.stringContaining("post-non-Wait change minimum")],
       satisfied: false,
     });
+  });
+
+  test("uses the first exact Direct observation only as the policy baseline", async () => {
+    const tracePath = await summaryTrace([
+      traceLine(absentObservation(), 1, {
+        namedSnapshots: [{ name: "phase", value: "loading" }],
+      }),
+      traceLine(absentObservation(), 2, {
+        action: {
+          Click: {
+            fingerprint: { tag: "button" },
+            point: { x: 1, y: 1 },
+          },
+        },
+        namedSnapshots: [{ name: "phase", value: "pre-handshake-click" }],
+      }),
+      traceLine(directObservation(), 3, {
+        action: {
+          Click: {
+            fingerprint: { tag: "button" },
+            point: { x: 1, y: 1 },
+          },
+        },
+        namedSnapshots: [{ name: "phase", value: "ready" }],
+      }),
+    ]);
+    const summary = await summarizeDirectBombadilTrace({
+      explorationPolicy: {
+        minDistinctNamedSnapshotValues: { phase: 2 },
+        minNamedSnapshotChangesAfterNonWait: { phase: 1 },
+        minNonWaitActions: 1,
+        requiredActionKinds: ["Click"],
+        requiredNamedSnapshots: ["phase"],
+      },
+      targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+      tracePath,
+    });
+    expect(summary.actions).toMatchObject({
+      byKind: {},
+      nonWaitCount: 0,
+      total: 0,
+    });
+    expect(summary.urls.observationCount).toBe(1);
+    expect(summary.transitions).toEqual({
+      distinctNonNullHashCount: 1,
+      nonNullHashCount: 1,
+    });
+    expect(summary.namedSnapshots.find((entry) => entry.name === "phase"))
+      .toMatchObject({
+        changeAfterNonWaitCount: 0,
+        distinctValueCount: 1,
+        observationCount: 1,
+      });
+    expect(summary.policy).toMatchObject({
+      failures: [
+        expect.stringContaining("minimum non-Wait"),
+        expect.stringContaining("required action kind Click"),
+        expect.stringContaining("distinct-value minimum"),
+        expect.stringContaining("post-non-Wait change minimum"),
+      ],
+      satisfied: false,
+    });
+  });
+
+  test("orders mixed-case and punctuation summary names by code unit", async () => {
+    const observation = directObservation();
+    const tracePath = await summaryTrace([traceLine(observation, 1, {
+      namedSnapshots: [
+        { name: "z", value: 4 },
+        { name: "a.", value: 3 },
+        { name: "A", value: 1 },
+        { name: "a-", value: 2 },
+      ],
+      violations: [
+        { name: "z", violation: { False: {} } },
+        { name: "a.", violation: { False: {} } },
+        { name: "A", violation: { False: {} } },
+        { name: "a-", violation: { False: {} } },
+      ],
+    })]);
+    const summary = await summarizeDirectBombadilTrace({
+      targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+      tracePath,
+    });
+    expect(summary.namedSnapshots.map(({ name }) => name)).toEqual([
+      "A",
+      "a-",
+      "a.",
+      "direct",
+      "z",
+    ]);
+    expect(Object.keys(summary.propertyViolations.byName)).toEqual([
+      "A",
+      "a-",
+      "a.",
+      "z",
+    ]);
   });
 
   test("rejects hostile envelopes, action targets, and excessively deep snapshot JSON", async () => {

@@ -272,10 +272,12 @@ const direct = createDirectBombadilProperties();
 const phase = createDirectBombadilNamedSnapshot({
   fallback: "unavailable",
   name: "todos.phase",
+  parse: (value) => typeof value === "string" ? value : null,
   read: ({ window }) => Reflect.get(window, "__todosPhase"),
 });
 
 export const direct_safe_actions = createDirectBombadilActions();
+export const direct_startup_contract = direct.startupContract;
 export const direct_exact_contract = direct.exactContract;
 export const direct_stable_catalog = direct.stableCatalog;
 export const direct_no_declared_violations = direct.noDeclaredViolations;
@@ -293,7 +295,9 @@ export const no_dom_node_leak = createDirectBombadilResourceLeakProperty({
 The Direct action generator deliberately excludes reload, history traversal,
 visible links, anchors, href targets, form submission, reset controls,
 destructive labels such as delete, remove, clear, discard, unlink, and close,
-and the Enter key. It retains ordinary buttons, text input, scrolling, and an
+all labels because their fingerprints do not expose the associated control's
+submit, reset, or button type, and the Enter key. It retains ordinary buttons,
+text input, scrolling, and an
 always-eligible low-weight wait. This preserves the post-handshake contract
 within one document. Add product actions only when their navigation, form, and
 destructive effects are understood, and keep product-specific assertions in
@@ -305,12 +309,13 @@ input. A generated action sequence is useful only while it preserves the
 scenario boundary and exercises behavior the product can interpret.
 
 `createDirectBombadilNamedSnapshot` gives product properties and post-run
-diagnostics a small semantic signal. It requires a safe bounded name, clones no
-more than two million JSON characters, and fails closed to the explicit
-fallback when a page getter throws or returns unsuitable data. Extract state,
-not page content or credentials. Named values are represented only by canonical
-SHA-256 hashes in the exploration summary; the authoritative raw trace still
-contains the original values.
+diagnostics a small semantic signal. It requires a safe bounded name distinct
+from `direct` and JavaScript prototype names, an explicit product parser, at
+most 64 JSON levels, and at most 2 MiB of UTF-8 JSON. It fails closed to the
+parsed fallback when a page getter throws or returns unsuitable data. Extract
+state, not page content or credentials. Named values are represented only by
+canonical SHA-256 hashes in the exploration summary; the authoritative raw
+trace still contains the original values.
 
 Bombadil's 0.7.2 manual documents a sliding-window resource property at
 `@antithesishq/bombadil/browser/extras/resources`, but the published npm
@@ -459,14 +464,16 @@ and server configuration for replay. Bombadil rejects a replay that diverges,
 so reproduction is strong debugging evidence but not guaranteed after the
 product changes.
 
-The browser formulas require an exact scenario contract, a nonempty catalog,
-zero declared violations, and quiescence to recur within ten seconds from every
-observed state. Keep every liveness obligation bounded to a product latency
-budget. A finite run cannot decide an unbounded future obligation, and nesting
-unbounded `always` inside bounded `eventually` does not make it decidable.
-Continuous identity and catalog binding therefore stay in the host attestation
-below. A formula result and Bombadil exit status are not sufficient evidence
-because a short or incomplete trace could otherwise pass vacuously.
+The startup formula requires an exact scenario contract within ten seconds.
+After that first exact sample, the browser formulas require continuous
+activation identity, catalog identity, and zero declared violations. Only
+quiescence may recover within a bounded ten-second liveness window. Keep every
+liveness obligation bounded to a product latency budget. A finite run cannot
+decide an unbounded future obligation, and nesting unbounded `always` inside
+bounded `eventually` does not make it decidable. The host attestation below
+rechecks the full trace independently. A formula result and Bombadil exit status
+are not sufficient evidence because a short or incomplete trace could otherwise
+pass vacuously.
 
 After every random run or replay, the host runner streams the bounded 0.7.2
 JSONL trace from foreign input and requires one named `direct` observation per

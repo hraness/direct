@@ -261,6 +261,7 @@ export * from "@antithesishq/bombadil/browser/defaults/properties";
 
 const direct = createDirectBombadilProperties();
 export const direct_safe_actions = createDirectBombadilActions();
+export const direct_startup_contract = direct.startupContract;
 export const direct_exact_contract = direct.exactContract;
 export const direct_stable_catalog = direct.stableCatalog;
 export const direct_no_declared_violations = direct.noDeclaredViolations;
@@ -276,6 +277,11 @@ parsers, writes pass or failure artifacts plus a compact exploration summary,
 and releases its owned processes. Use `runDirectBombadilFuzzMatrix` when a
 product owns several scenarios; it runs them serially and requires one exact
 campaign selector for replay.
+
+Startup is the only repairable contract phase. It must reach one exact Direct
+observation within ten seconds. From that sample onward, activation identity,
+route, scenario, catalog, and zero declared violations are immediate safety
+invariants; only quiescence remains bounded liveness.
 
 Keep liveness formulas time-bounded. Prefer guarded product actions with
 explicit weights over unrestricted browser actions, and name small JSON

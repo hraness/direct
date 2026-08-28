@@ -457,6 +457,12 @@ function hasExactKeys(
   return keys.length === expected.size && keys.every((key) => expected.has(key));
 }
 
+function compareCodeUnits(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
 function parseTraceDirectObservation(value: unknown): TraceDirectObservation {
   if (!isRecord(value) || !hasExactKeys(value, DIRECT_OBSERVATION_KEYS)) {
     throw new Error("Bombadil trace has an invalid named direct observation");
@@ -650,7 +656,7 @@ function canonicalJson(value: unknown, depth = 0): string {
     return `[${value.map((entry) => canonicalJson(entry, depth + 1)).join(",")}]`;
   }
   if (!isRecord(value)) throw new Error("Bombadil named snapshot is not JSON");
-  const entries = Object.keys(value).sort().map((key) =>
+  const entries = Object.keys(value).sort(compareCodeUnits).map((key) =>
     `${JSON.stringify(key)}:${canonicalJson(value[key], depth + 1)}`
   );
   return `{${entries.join(",")}}`;
@@ -975,7 +981,7 @@ function sortedCountRecord<K extends string>(
   values: ReadonlyMap<K, number>,
 ): Readonly<Partial<Record<K, number>>> {
   return Object.freeze(Object.fromEntries(
-    [...values.entries()].sort(([left], [right]) => left.localeCompare(right)),
+    [...values.entries()].sort(([left], [right]) => compareCodeUnits(left, right)),
   ) as Partial<Record<K, number>>);
 }
 
@@ -1030,6 +1036,9 @@ export async function summarizeDirectBombadilTrace(options: {
   let waitStreak = 0;
   let maxWaitStreak = 0;
   let nonNullHashCount = 0;
+  let policyObservationCount = 0;
+  let reachedExactObservation = false;
+  let previousObservationWasExact = false;
   let stableTarget = true;
   const stream = createReadStream(options.tracePath, { encoding: "utf8" });
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
@@ -1043,7 +1052,17 @@ export async function summarizeDirectBombadilTrace(options: {
         throw new Error(`Bombadil trace line ${String(lineCount)} is too large`);
       }
       const parsed = parseTraceLine(line, lineCount);
-      if (parsed.action !== null) {
+      const currentObservationIsExact =
+        exactTraceDirectObservation(parsed.directObservation) !== null;
+      if (!reachedExactObservation && !currentObservationIsExact) {
+        previousObservationWasExact = false;
+        continue;
+      }
+      if (!reachedExactObservation) reachedExactObservation = true;
+      policyObservationCount += 1;
+      const actionFollowsExactObservation = previousObservationWasExact;
+
+      if (actionFollowsExactObservation && parsed.action !== null) {
         totalActions += 1;
         actionCounts.set(parsed.action.kind, (actionCounts.get(parsed.action.kind) ?? 0) + 1);
         if (parsed.action.kind === "Wait") {
@@ -1062,7 +1081,7 @@ export async function summarizeDirectBombadilTrace(options: {
             (targetTags.get(parsed.action.targetTag) ?? 0) + 1,
           );
         }
-      } else {
+      } else if (actionFollowsExactObservation) {
         waitStreak = 0;
       }
 
@@ -1096,7 +1115,8 @@ export async function summarizeDirectBombadilTrace(options: {
           snapshots.set(snapshot.name, entry);
         }
         if (
-          parsed.action !== null
+          actionFollowsExactObservation
+          && parsed.action !== null
           && parsed.action.kind !== "Wait"
           && entry.lastValueSha256 !== null
           && entry.lastValueSha256 !== snapshot.valueSha256
@@ -1126,6 +1146,7 @@ export async function summarizeDirectBombadilTrace(options: {
           parsed.state.resources[sourceName as keyof typeof RESOURCE_FIELD_MAP],
         );
       }
+      previousObservationWasExact = currentObservationIsExact;
     }
   } finally {
     lines.close();
@@ -1183,8 +1204,8 @@ export async function summarizeDirectBombadilTrace(options: {
     }),
     urls: Object.freeze({
       distinctFingerprintCount: urlFingerprints.size,
-      fingerprintSha256: Object.freeze([...urlFingerprints].sort()),
-      observationCount: lineCount,
+      fingerprintSha256: Object.freeze([...urlFingerprints].sort(compareCodeUnits)),
+      observationCount: policyObservationCount,
       stableTarget,
     }),
     transitions: Object.freeze({
@@ -1192,11 +1213,11 @@ export async function summarizeDirectBombadilTrace(options: {
       nonNullHashCount,
     }),
     namedSnapshots: Object.freeze([...snapshots.entries()]
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => compareCodeUnits(left, right))
       .map(([name, entry]) => Object.freeze({
         changeAfterNonWaitCount: entry.changeAfterNonWaitCount,
         distinctValueCount: entry.values.size,
-        distinctValueSha256: Object.freeze([...entry.values].sort()),
+        distinctValueSha256: Object.freeze([...entry.values].sort(compareCodeUnits)),
         name,
         observationCount: entry.observationCount,
       }))),
@@ -1325,7 +1346,7 @@ function validateTargetQuery(value: unknown): Readonly<Record<string, string>> {
   }
   const validated: Record<string, string> = {};
   for (const [name, queryValue] of [...entries].sort(([left], [right]) =>
-    left.localeCompare(right)
+    compareCodeUnits(left, right)
   )) {
     if (
       name.length === 0
@@ -1410,7 +1431,7 @@ function validateSnapshotMinimumMap(options: {
   }
   const validated: Record<string, number> = {};
   for (const [rawName, minimum] of Object.entries(options.value).sort(([left], [right]) =>
-    left.localeCompare(right)
+    compareCodeUnits(left, right)
   )) {
     const name = validateSnapshotName(rawName, `${options.label} key`);
     if (
@@ -1462,7 +1483,7 @@ function validateExplorationPolicy(
   ) {
     throw new Error("explorationPolicy.requiredActionKinds contains an unknown or duplicate kind");
   }
-  requiredActionKinds.sort();
+  requiredActionKinds.sort(compareCodeUnits);
 
   const requiredNamedSnapshotsInput = value.requiredNamedSnapshots ?? [];
   if (!Array.isArray(requiredNamedSnapshotsInput) || requiredNamedSnapshotsInput.length > 32) {
@@ -1474,7 +1495,7 @@ function validateExplorationPolicy(
   if (new Set(requiredNamedSnapshots).size !== requiredNamedSnapshots.length) {
     throw new Error("explorationPolicy.requiredNamedSnapshots contains a duplicate name");
   }
-  requiredNamedSnapshots.sort();
+  requiredNamedSnapshots.sort(compareCodeUnits);
 
   const minDistinctNamedSnapshotValues = validateSnapshotMinimumMap({
     label: "explorationPolicy.minDistinctNamedSnapshotValues",
