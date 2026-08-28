@@ -246,11 +246,13 @@ describe("npm release workflows", () => {
       "ALREADY_PUBLIC: ${{ needs.verify.outputs.already_public }}",
       "Verified package version is not stable semantic version",
       'release_tag="v$EXPECTED_VERSION"',
-      '"refs/tags/$release_tag:refs/tags/$release_tag"',
+      '"refs/tags/v*:refs/tags/v*"',
       'current_tag_sha="$(git --git-dir="$current_repository" rev-parse',
       'merge-base --is-ancestor',
       "Tag $release_tag changed after artifact verification",
       "Tag $release_tag is no longer reachable from $DEFAULT_BRANCH",
+      'git --git-dir="$current_repository" tag --list \'v*\'',
+      "Tag $release_tag is not the newest stable tag $newest_stable_tag",
       'current_archive_sha256="$(sha256sum "$TARBALL"',
       'current_metadata_sha256="$(sha256sum "$METADATA"',
       'current_digest_sha256="$(sha256sum "$DIGEST"',
@@ -280,14 +282,18 @@ describe("npm release workflows", () => {
     const rebindIndex = publishJob.indexOf("Rebind downloaded package");
     const fetchIndex = publishJob.lastIndexOf('git --git-dir="$current_repository" fetch');
     const ancestryIndex = publishJob.lastIndexOf("merge-base --is-ancestor");
+    const newestTagIndex = publishJob.lastIndexOf('newest_stable_tag="$(git --git-dir="$current_repository" tag');
     const rehashIndex = publishJob.lastIndexOf('current_archive_sha256="$(sha256sum "$TARBALL"');
+    const versionOrderIndex = publishJob.lastIndexOf("published_versions_json=");
     const publishIndex = publishJob.indexOf('npm publish "$TARBALL"');
     expect(bindIndex).toBeLessThan(downloadIndex);
     expect(downloadIndex).toBeLessThan(rebindIndex);
     expect(rebindIndex).toBeLessThan(fetchIndex);
     expect(fetchIndex).toBeLessThan(ancestryIndex);
     expect(ancestryIndex).toBeLessThan(rehashIndex);
-    expect(rehashIndex).toBeLessThan(publishIndex);
+    expect(rehashIndex).toBeLessThan(versionOrderIndex);
+    expect(versionOrderIndex).toBeLessThan(newestTagIndex);
+    expect(newestTagIndex).toBeLessThan(publishIndex);
 
     expect(workflow).not.toContain("secrets.NPM_TOKEN");
     expect(workflow).not.toContain("NODE_AUTH_TOKEN");
@@ -335,7 +341,7 @@ describe("npm release workflows", () => {
         writeFile(metadata, "reviewed metadata fixture\n", "utf8"),
         writeFile(digest, "reviewed digest fixture\n", "utf8"),
       ]);
-      await writeFile(gitStub, `#!/bin/bash\nset -euo pipefail\nprintf 'git %s\\n' "$*" >> "$COMMAND_LOG"\ncase "$*" in\n  *"rev-parse refs/heads/main"*) printf '%s\\n' "$DEFAULT_SHA" ;;\n  *"rev-parse refs/tags/v0.7.5^{commit}"*) printf '%s\\n' "$TAG_SHA" ;;\n  *"merge-base --is-ancestor"*) [[ "$ANCESTRY_STATE" == ancestor ]] ;;\nesac\n`, "utf8");
+      await writeFile(gitStub, `#!/bin/bash\nset -euo pipefail\nprintf 'git %s\\n' "$*" >> "$COMMAND_LOG"\ncase "$*" in\n  *"rev-parse refs/heads/main"*) printf '%s\\n' "$DEFAULT_SHA" ;;\n  *"rev-parse refs/tags/v0.7.5^{commit}"*) printf '%s\\n' "$TAG_SHA" ;;\n  *"merge-base --is-ancestor"*) [[ "$ANCESTRY_STATE" == ancestor ]] ;;\n  *"tag --list v*"*) printf '%s\\n' "$REMOTE_TAGS" ;;\nesac\n`, "utf8");
       await writeFile(sha256Stub, `#!/bin/bash\nset -euo pipefail\nprintf 'sha256sum %s\\n' "$*" >> "$COMMAND_LOG"\ncase "$1" in\n  "$TARBALL") value="$EXPECTED_ARCHIVE_SHA256" ;;\n  "$METADATA") value="$EXPECTED_METADATA_SHA256" ;;\n  "$DIGEST") value="$EXPECTED_DIGEST_SHA256" ;;\n  *) echo "unexpected hash target: $1" >&2; exit 1 ;;\nesac\nprintf '%s  %s\\n' "$value" "$1"\n`, "utf8");
       await writeFile(npmStub, `#!/bin/bash\nset -euo pipefail\nprintf 'npm %s\\n' "$*" >> "$COMMAND_LOG"\nif [[ "\${1-}" == view ]]; then\n  printf '%s\\n' "$PUBLISHED_VERSIONS_JSON"\n  exit 0\nfi\nprintf 'published\\n' > "$PUBLISH_MARKER"\n`, "utf8");
       await Promise.all([chmod(gitStub, 0o755), chmod(npmStub, 0o755), chmod(sha256Stub, 0o755)]);
@@ -359,6 +365,7 @@ describe("npm release workflows", () => {
         PATH: `${binaryDirectory}:${process.env.PATH ?? ""}`,
         PUBLISHED_VERSIONS_JSON: '["0.7.4"]',
         PUBLISH_MARKER: publishMarker,
+        REMOTE_TAGS: "v0.7.4\nv0.7.5",
         RUNNER_TEMP: directory,
         TAG_SHA: sourceSha,
         TARBALL: tarball,
@@ -370,12 +377,16 @@ describe("npm release workflows", () => {
       const commands = await readFile(commandLog, "utf8");
       const fetchIndex = commands.indexOf("fetch --quiet --no-tags");
       const ancestryIndex = commands.indexOf("merge-base --is-ancestor");
+      const newestTagIndex = commands.indexOf("tag --list v*");
       const hashIndex = commands.indexOf("sha256sum");
+      const versionOrderIndex = commands.indexOf("npm view");
       const publishIndex = commands.indexOf("npm publish");
       expect(fetchIndex).toBeGreaterThan(-1);
       expect(ancestryIndex).toBeGreaterThan(fetchIndex);
       expect(hashIndex).toBeGreaterThan(ancestryIndex);
-      expect(publishIndex).toBeGreaterThan(hashIndex);
+      expect(versionOrderIndex).toBeGreaterThan(hashIndex);
+      expect(newestTagIndex).toBeGreaterThan(versionOrderIndex);
+      expect(publishIndex).toBeGreaterThan(newestTagIndex);
 
       await rm(commandLog, { force: true });
       await rm(publishMarker, { force: true });
@@ -398,6 +409,18 @@ describe("npm release workflows", () => {
       expect(`${detached.stdout}${detached.stderr}`).toContain(
         "Tag v0.7.5 is no longer reachable from main",
       );
+      expect(await Bun.file(publishMarker).exists()).toBe(false);
+
+      await rm(commandLog, { force: true });
+      const superseded = await runWorkflowScript(script, {
+        ...baseEnvironment,
+        REMOTE_TAGS: "v0.7.4\nv0.7.5\nv0.7.6",
+      });
+      expect(superseded.exitCode).not.toBe(0);
+      expect(`${superseded.stdout}${superseded.stderr}`).toContain(
+        "Tag v0.7.5 is not the newest stable tag v0.7.6",
+      );
+      expect(await readFile(commandLog, "utf8")).not.toContain("npm publish");
       expect(await Bun.file(publishMarker).exists()).toBe(false);
 
       await rm(commandLog, { force: true });
@@ -573,6 +596,7 @@ describe("npm release workflows", () => {
       expect(normalizedGuide).toContain(required);
     }
     expect(normalizedGuide).toContain("new bare Git directory");
+    expect(normalizedGuide).toContain("newest remote stable tag");
     for (const required of [
       "rebinds the release helpers to their reviewed Git blobs",
       "invokes those files by absolute path",
@@ -588,7 +612,7 @@ describe("npm release workflows", () => {
     expect(normalizedGuide).toContain("Block updates and deletion with no bypass actors");
     expect(agents).toContain("only its minimal dependent publication job may request OIDC");
     expect(agents).toContain("Restrict version-tag creation to organization administrators");
-    expect(agents).toContain("rebind the downloaded exact artifact, immutable tag, and current `main`");
+    expect(agents).toContain("rebind the downloaded exact artifact, every remote stable tag, and current `main`");
     expect(agents).toContain("bind current helpers to reviewed Git blobs");
     expect(agents).toContain("recovery never runs a historical `prepack`");
   });

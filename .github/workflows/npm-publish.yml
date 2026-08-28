@@ -458,7 +458,7 @@ jobs:
           git --git-dir="$current_repository" fetch --quiet --no-tags \
             "https://github.com/$GITHUB_REPOSITORY.git" \
             "refs/heads/$DEFAULT_BRANCH:refs/heads/$DEFAULT_BRANCH" \
-            "refs/tags/$release_tag:refs/tags/$release_tag"
+            "refs/tags/v*:refs/tags/v*"
           current_default_sha="$(git --git-dir="$current_repository" rev-parse "refs/heads/$DEFAULT_BRANCH")"
           current_tag_sha="$(git --git-dir="$current_repository" rev-parse "refs/tags/$release_tag^{commit}")"
           if [[ "$GITHUB_REF" != "refs/tags/$release_tag" || \
@@ -521,6 +521,14 @@ jobs:
             }
           }
           NODE
+              newest_stable_tag="$(git --git-dir="$current_repository" tag --list 'v*' \
+                | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' \
+                | LC_ALL=C sort -V \
+                | tail -n 1)"
+              if [[ "$newest_stable_tag" != "$release_tag" ]]; then
+                echo "::error::Tag $release_tag is not the newest stable tag $newest_stable_tag"
+                exit 1
+              fi
               npm publish "$TARBALL" \
                 --access public \
                 --ignore-scripts \
