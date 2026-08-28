@@ -17,9 +17,9 @@ bun add --dev @hraness/direct@0.7.7
 npm install --save-dev @hraness/direct@0.7.7
 ```
 
-[npm](https://www.npmjs.com/package/@hraness/direct) ·
-[github](https://github.com/hraness/direct) ·
-[overview](https://hraness.com/direct)
+[Install @hraness/direct from npm](https://www.npmjs.com/package/@hraness/direct) ·
+[Direct source on GitHub](https://github.com/hraness/direct) ·
+[Direct overview](https://hraness.com/direct)
 
 ```text
 real interface and feature state
