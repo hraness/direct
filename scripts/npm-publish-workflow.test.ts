@@ -584,7 +584,10 @@ describe("npm release workflows", () => {
     expect(normalizedGuide).toContain("do not import a script from the tagged tree");
     expect(normalizedGuide).toContain("workflow filename: `release.yml`");
     expect(normalizedGuide).toContain("allowed action: `npm publish`");
+    expect(normalizedGuide).toContain("Restrict creation to organization administrators");
+    expect(normalizedGuide).toContain("Block updates and deletion with no bypass actors");
     expect(agents).toContain("only its minimal dependent publication job may request OIDC");
+    expect(agents).toContain("Restrict version-tag creation to organization administrators");
     expect(agents).toContain("rebind the downloaded exact artifact, immutable tag, and current `main`");
     expect(agents).toContain("bind current helpers to reviewed Git blobs");
     expect(agents).toContain("recovery never runs a historical `prepack`");

@@ -4,6 +4,19 @@ Direct publishes each new stable npm version from its protected version tag.
 The same release workflow verifies the public registry package before it
 creates the immutable GitHub Release.
 
+## Protect release authorization
+
+Keep two active GitHub tag rulesets on `refs/tags/v*`:
+
+- Restrict creation to organization administrators. A version-tag push is the
+  authorization to publish npm, so ordinary repository write access must not
+  be enough to create one.
+- Block updates and deletion with no bypass actors. After creation, no
+  maintainer or automation may move or remove a version tag.
+
+The publishing and release jobs also resolve the tag from GitHub immediately
+before each mutation. Repository rules and workflow checks are both required.
+
 ## Configure trusted publishing
 
 `@hraness/direct` must have one GitHub Actions trusted publisher with this
