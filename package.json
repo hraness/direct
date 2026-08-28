@@ -127,7 +127,7 @@
     "example:typecheck": "tsc -p examples/todos/tsconfig.json --noEmit",
     "example:verify": "bun run examples/todos/verify.ts",
     "lint": "eslint src examples scripts",
-    "test:npm-release": "bun test ./scripts/npm-stage-workflow.test.ts",
+    "test:npm-release": "bun test ./scripts/npm-publish-workflow.test.ts",
     "test:package": "bun run ./scripts/package-smoke.ts",
     "kb:refresh": "bunx --bun github:hraness/kb#v0.15.2 refresh --root kb",
     "kb:check:lane": "bunx --bun github:hraness/kb#v0.15.2 check --root kb --no-catalog",

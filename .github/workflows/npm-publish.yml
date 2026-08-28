@@ -1,13 +1,13 @@
-name: Stage npm package
+name: Publish npm package
 
 on:
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: npm-stage
+  group: npm-publish
   cancel-in-progress: false
 
 jobs:
@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     outputs:
+      already_public: ${{ steps.availability.outputs.already_public }}
       artifact_name: ${{ steps.artifact.outputs.artifact_name }}
       package_version: ${{ steps.artifact.outputs.package_version }}
       source_sha: ${{ steps.identity.outputs.source_sha }}
@@ -43,27 +44,50 @@ jobs:
             --registry=https://registry.npmjs.org
           test "$(npm --version)" = "11.19.0"
           [[ "$(node --version)" == v24.* ]]
-      - name: Require current default-branch head
+      - name: Verify release tag identity
         id: identity
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          expected_ref="refs/heads/$DEFAULT_BRANCH"
-          if [[ "$GITHUB_REF" != "$expected_ref" ]]; then
-            echo "::error::Dispatch this workflow from $expected_ref, received $GITHUB_REF"
+          if [[ "$GITHUB_EVENT_NAME" != push || \
+                "$GITHUB_REF" != "refs/tags/$GITHUB_REF_NAME" || \
+                ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::npm publication requires an exact stable tag push"
             exit 1
           fi
+          git check-ref-format "refs/tags/$GITHUB_REF_NAME"
+          git check-ref-format "refs/heads/$DEFAULT_BRANCH"
           git fetch --no-tags origin \
             "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
           default_head="$(git rev-parse "origin/$DEFAULT_BRANCH")"
           checked_out_head="$(git rev-parse HEAD)"
-          if [[ "$GITHUB_SHA" != "$default_head" || "$checked_out_head" != "$default_head" ]]; then
-            echo "::error::Dispatch commit $GITHUB_SHA is not current $DEFAULT_BRANCH head $default_head"
+          if [[ "$GITHUB_SHA" != "$checked_out_head" ]]; then
+            echo "::error::Tag event does not match the checked package commit"
             exit 1
           fi
-          printf 'source_sha=%s\n' "$default_head" >> "$GITHUB_OUTPUT"
-      - name: Verify package can be staged
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "$default_head"; then
+            echo "::error::Tag $GITHUB_REF_NAME is not reachable from current $DEFAULT_BRANCH"
+            exit 1
+          fi
+          package_name="$(node -p 'require("./package.json").name')"
+          package_version="$(node -p 'require("./package.json").version')"
+          if [[ "$package_name" != "@hraness/direct" || \
+                ! "$package_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ || \
+                "$GITHUB_REF_NAME" != "v$package_version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match the Direct package identity"
+            exit 1
+          fi
+          release_ref="refs/direct-npm-publish-tags/$GITHUB_REF_NAME"
+          git fetch --no-tags origin "refs/tags/$GITHUB_REF_NAME:$release_ref"
+          remote_tag_sha="$(git rev-parse "$release_ref^{commit}")"
+          if [[ "$remote_tag_sha" != "$GITHUB_SHA" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not resolve to the checked package commit"
+            exit 1
+          fi
+          printf 'source_sha=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+      - name: Verify package publication state
+        id: availability
         run: |
           set -euo pipefail
           package_name="$(node -p 'require("./package.json").name')"
@@ -76,26 +100,23 @@ jobs:
             echo "::error::Package version $package_version is not stable semantic version"
             exit 1
           fi
-          if git rev-parse --verify --quiet "refs/tags/v$package_version" >/dev/null; then
-            echo "::error::Create v$package_version only after exact npm delivery is verified"
-            exit 1
-          fi
           if ! npm view "$package_name" name --json \
             --registry=https://registry.npmjs.org >/dev/null; then
-            echo "::error::$package_name must be bootstrapped interactively before staged publishing can run"
+            echo "::error::$package_name must be bootstrapped before trusted publishing can run"
             exit 1
           fi
           version_error="$RUNNER_TEMP/npm-version-error.txt"
           if npm view "$package_name@$package_version" version --json \
             --registry=https://registry.npmjs.org >/dev/null 2>"$version_error"; then
-            echo "::error::$package_name@$package_version is already public"
-            exit 1
-          fi
-          if ! grep -q 'E404' "$version_error"; then
+            already_public=true
+          elif grep -q 'E404' "$version_error"; then
+            already_public=false
+          else
             cat "$version_error"
-            echo "::error::Could not prove that $package_name@$package_version is unpublished"
+            echo "::error::Could not determine whether $package_name@$package_version is published"
             exit 1
           fi
+          printf 'already_public=%s\n' "$already_public" >> "$GITHUB_OUTPUT"
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun run check
       - name: Verify generated tree
@@ -154,8 +175,8 @@ jobs:
           compression-level: 0
           retention-days: 30
 
-  stage:
-    name: Stage exact package
+  publish:
+    name: Publish exact package
     needs: verify
     permissions:
       id-token: write
@@ -196,7 +217,7 @@ jobs:
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: ${{ needs.verify.outputs.artifact_name }}
-          path: ${{ runner.temp }}/direct-npm-stage
+          path: ${{ runner.temp }}/direct-npm-publish
       - name: Rebind downloaded package
         id: artifact
         env:
@@ -205,7 +226,7 @@ jobs:
           EXPECTED_VERSION: ${{ needs.verify.outputs.package_version }}
         run: |
           set -euo pipefail
-          artifact_directory="$RUNNER_TEMP/direct-npm-stage"
+          artifact_directory="$RUNNER_TEMP/direct-npm-publish"
           metadata="$artifact_directory/npm-pack.json"
           digest="$artifact_directory/npm-package.sha256"
           if [[ ! "$EXPECTED_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]; then
@@ -411,8 +432,9 @@ jobs:
             >> "$GITHUB_OUTPUT"
           printf 'tarball=%s\nmetadata=%s\ndigest=%s\n' \
             "$tarball" "$metadata" "$digest" >> "$GITHUB_OUTPUT"
-      - name: Revalidate current main and stage exact package
+      - name: Revalidate release tag and publish exact package
         env:
+          ALREADY_PUBLIC: ${{ needs.verify.outputs.already_public }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           DIGEST: ${{ steps.artifact.outputs.digest }}
           EXPECTED_ARCHIVE_SHA256: ${{ steps.artifact.outputs.archive_sha256 }}
@@ -431,30 +453,24 @@ jobs:
           fi
           release_tag="v$EXPECTED_VERSION"
           git check-ref-format "refs/tags/$release_tag"
-          current_main="$RUNNER_TEMP/direct-current-main.git"
-          git init --quiet --bare "$current_main"
-          git --git-dir="$current_main" fetch --quiet --no-tags --depth=1 \
+          current_repository="$RUNNER_TEMP/direct-current-repository.git"
+          git init --quiet --bare "$current_repository"
+          git --git-dir="$current_repository" fetch --quiet --no-tags \
             "https://github.com/$GITHUB_REPOSITORY.git" \
-            "refs/heads/$DEFAULT_BRANCH"
-          current_default_sha="$(git --git-dir="$current_main" rev-parse FETCH_HEAD)"
-          if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" || \
+            "refs/heads/$DEFAULT_BRANCH:refs/heads/$DEFAULT_BRANCH" \
+            "refs/tags/$release_tag:refs/tags/$release_tag"
+          current_default_sha="$(git --git-dir="$current_repository" rev-parse "refs/heads/$DEFAULT_BRANCH")"
+          current_tag_sha="$(git --git-dir="$current_repository" rev-parse "refs/tags/$release_tag^{commit}")"
+          if [[ "$GITHUB_REF" != "refs/tags/$release_tag" || \
                 "$GITHUB_SHA" != "$EXPECTED_SOURCE_SHA" || \
-                "$GITHUB_SHA" != "$current_default_sha" ]]; then
-            echo "::error::$DEFAULT_BRANCH advanced to $current_default_sha after artifact verification"
+                "$current_tag_sha" != "$EXPECTED_SOURCE_SHA" ]]; then
+            echo "::error::Tag $release_tag changed after artifact verification"
             exit 1
           fi
-          tag_lookup_output="$RUNNER_TEMP/direct-stage-tag-lookup.txt"
-          if git ls-remote --exit-code --refs \
-            "https://github.com/$GITHUB_REPOSITORY.git" \
-            "refs/tags/$release_tag" > "$tag_lookup_output"; then
-            echo "::error::Tag $release_tag was created after package verification"
+          if ! git --git-dir="$current_repository" merge-base --is-ancestor \
+            "$EXPECTED_SOURCE_SHA" "$current_default_sha"; then
+            echo "::error::Tag $release_tag is no longer reachable from $DEFAULT_BRANCH"
             exit 1
-          else
-            tag_lookup_status=$?
-            if [[ "$tag_lookup_status" -ne 2 || -s "$tag_lookup_output" ]]; then
-              echo "::error::Could not prove that tag $release_tag is still absent from origin"
-              exit 1
-            fi
           fi
           current_archive_sha256="$(sha256sum "$TARBALL" | cut -d ' ' -f 1)"
           current_metadata_sha256="$(sha256sum "$METADATA" | cut -d ' ' -f 1)"
@@ -462,11 +478,57 @@ jobs:
           if [[ "$current_archive_sha256" != "$EXPECTED_ARCHIVE_SHA256" || \
                 "$current_metadata_sha256" != "$EXPECTED_METADATA_SHA256" || \
                 "$current_digest_sha256" != "$EXPECTED_DIGEST_SHA256" ]]; then
-            echo "::error::Downloaded package changed after current-main verification"
+            echo "::error::Downloaded package changed after release-tag verification"
             exit 1
           fi
-          npm stage publish "$TARBALL" \
-            --access public \
-            --ignore-scripts \
-            --provenance \
-            --registry=https://registry.npmjs.org
+          case "$ALREADY_PUBLIC" in
+            true)
+              echo "@hraness/direct@$EXPECTED_VERSION is already public; registry verification will prove identity"
+              ;;
+            false)
+              published_versions_json="$(npm view @hraness/direct versions --json \
+                --registry=https://registry.npmjs.org)"
+              EXPECTED_VERSION="$EXPECTED_VERSION" \
+                PUBLISHED_VERSIONS_JSON="$published_versions_json" node <<'NODE'
+          const pattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
+          const parse = (version) => {
+            const match = pattern.exec(version);
+            return match === null ? null : match.slice(1).map(BigInt);
+          };
+          const compare = (left, right) => {
+            for (let index = 0; index < 3; index += 1) {
+              if (left[index] !== right[index]) return left[index] > right[index] ? 1 : -1;
+            }
+            return 0;
+          };
+          const expectedVersion = process.env.EXPECTED_VERSION ?? "";
+          const expected = parse(expectedVersion);
+          const input = JSON.parse(process.env.PUBLISHED_VERSIONS_JSON ?? "null");
+          const publishedVersions = Array.isArray(input) ? input : [input];
+          if (expected === null || publishedVersions.length === 0) {
+            throw new Error("Published-version ordering proof is incomplete");
+          }
+          for (const publishedVersion of publishedVersions) {
+            if (typeof publishedVersion !== "string") {
+              throw new Error("Published-version ordering proof is invalid");
+            }
+            const published = parse(publishedVersion);
+            if (published === null) continue;
+            if (compare(expected, published) <= 0) {
+              throw new Error(
+                `@hraness/direct@${expectedVersion} is not newer than published stable ${publishedVersion}`,
+              );
+            }
+          }
+          NODE
+              npm publish "$TARBALL" \
+                --access public \
+                --ignore-scripts \
+                --provenance \
+                --registry=https://registry.npmjs.org
+              ;;
+            *)
+              echo "::error::Verified package publication state is invalid"
+              exit 1
+              ;;
+          esac
