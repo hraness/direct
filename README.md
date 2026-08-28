@@ -11,9 +11,9 @@ state with predictable local stand-ins. it does not click through the browser
 or test the systems it replaces.
 
 ```sh
-bun add --dev @hraness/direct@0.7.5
+bun add --dev @hraness/direct@0.7.6
 # or
-npm install --save-dev @hraness/direct@0.7.5
+npm install --save-dev @hraness/direct@0.7.6
 ```
 
 [overview](https://hraness.com/direct)
