@@ -79,9 +79,41 @@ const TRACE_RESOURCE_KEYS = new Set([
   "timestamp",
 ]);
 const TRACE_VIOLATION_KEYS = new Set(["name", "violation"]);
+const TRACE_POINT_KEYS = new Set(["x", "y"]);
+const TRACE_FINGERPRINT_KEYS = new Set([
+  "accessible_name",
+  "href",
+  "id",
+  "input_type",
+  "name_attr",
+  "placeholder",
+  "role",
+  "structural_path",
+  "tag",
+  "test_id",
+  "text_content",
+]);
+const TRACE_CLICK_ACTION_KEYS = new Set(["fingerprint", "point"]);
+const TRACE_DOUBLE_CLICK_ACTION_KEYS = new Set([
+  "delay_millis",
+  "fingerprint",
+  "point",
+]);
+const TRACE_TYPE_TEXT_ACTION_KEYS = new Set(["delay_millis", "text"]);
+const TRACE_PRESS_KEY_ACTION_KEYS = new Set(["code"]);
+const TRACE_SCROLL_ACTION_KEYS = new Set(["distance", "origin"]);
+const TRACE_FILE_INPUT_ACTION_KEYS = new Set(["files", "selector"]);
+const TRACE_MOUSE_DRAG_ACTION_KEYS = new Set([
+  "delay_millis",
+  "from",
+  "steps",
+  "to",
+]);
+const TRACE_VIEWPORT_ACTION_KEYS = new Set(["height", "width"]);
 const VIEWPORT_KEYS = new Set(["deviceScaleFactor", "height", "width"]);
 const EXPLORATION_POLICY_KEYS = new Set([
   "minDistinctNamedSnapshotValues",
+  "minNamedSnapshotChangesAfterActionKind",
   "minNamedSnapshotChangesAfterNonWait",
   "minNonWaitActions",
   "requireStableTargetUrl",
@@ -114,10 +146,6 @@ const UNIT_ACTION_KINDS = new Set<DirectBombadilActionKind>([
   "Forward",
   "Reload",
   "Wait",
-]);
-const TARGETED_ACTION_KINDS = new Set<DirectBombadilActionKind>([
-  "Click",
-  "DoubleClick",
 ]);
 const DIRECT_OBSERVATION_KEYS = new Set([
   "activationHash",
@@ -153,6 +181,10 @@ export interface DirectBombadilViewportConfig {
 
 export interface DirectBombadilExplorationPolicy {
   readonly minDistinctNamedSnapshotValues?: Readonly<Record<string, number>>;
+  readonly minNamedSnapshotChangesAfterActionKind?: Readonly<Record<
+    string,
+    Readonly<Partial<Record<DirectBombadilActionKind, number>>>
+  >>;
   readonly minNamedSnapshotChangesAfterNonWait?: Readonly<Record<string, number>>;
   readonly minNonWaitActions?: number;
   readonly requireStableTargetUrl?: boolean;
@@ -161,7 +193,7 @@ export interface DirectBombadilExplorationPolicy {
 }
 
 export interface DirectBombadilExplorationSummary {
-  readonly schema: "direct.bombadil-exploration-summary/v1";
+  readonly schema: "direct.bombadil-exploration-summary/v2";
   readonly trace: {
     readonly bytes: number;
     readonly lineCount: number;
@@ -178,13 +210,21 @@ export interface DirectBombadilExplorationSummary {
     readonly distinctFingerprintCount: number;
     readonly fingerprintSha256: readonly string[];
     readonly observationCount: number;
+    readonly rawDistinctFingerprintCount: number;
+    readonly rawFingerprintSha256: readonly string[];
+    readonly rawObservationCount: number;
     readonly stableTarget: boolean;
   };
   readonly transitions: {
     readonly distinctNonNullHashCount: number;
     readonly nonNullHashCount: number;
+    readonly rawDistinctNonNullHashCount: number;
+    readonly rawNonNullHashCount: number;
   };
   readonly namedSnapshots: readonly {
+    readonly changeAfterActionKind: Readonly<
+      Partial<Record<DirectBombadilActionKind, number>>
+    >;
     readonly changeAfterNonWaitCount: number;
     readonly distinctValueCount: number;
     readonly distinctValueSha256: readonly string[];
@@ -364,6 +404,10 @@ interface ValidatedViewport {
 
 interface ValidatedExplorationPolicy {
   readonly minDistinctNamedSnapshotValues: Readonly<Record<string, number>>;
+  readonly minNamedSnapshotChangesAfterActionKind: Readonly<Record<
+    string,
+    Readonly<Partial<Record<DirectBombadilActionKind, number>>>
+  >>;
   readonly minNamedSnapshotChangesAfterNonWait: Readonly<Record<string, number>>;
   readonly minNonWaitActions: number;
   readonly requireStableTargetUrl: boolean;
@@ -676,43 +720,163 @@ function namedSnapshotValueSha256(value: unknown): string {
   return sha256(canonical);
 }
 
+function validTracePoint(value: unknown): boolean {
+  return isRecord(value)
+    && hasExactKeys(value, TRACE_POINT_KEYS)
+    && typeof value.x === "number"
+    && Number.isFinite(value.x)
+    && typeof value.y === "number"
+    && Number.isFinite(value.y);
+}
+
+function parseTraceFingerprintTag(value: unknown, lineNumber: number): string {
+  if (
+    !isRecord(value)
+    || !Object.keys(value).every((key) => TRACE_FINGERPRINT_KEYS.has(key))
+  ) {
+    throw new Error(
+      `Bombadil trace line ${String(lineNumber)} has an invalid action target`,
+    );
+  }
+  for (const [key, candidate] of Object.entries(value)) {
+    if (key !== "tag" && typeof candidate !== "string") {
+      throw new Error(
+        `Bombadil trace line ${String(lineNumber)} has an invalid action target`,
+      );
+    }
+  }
+  const tag = value.tag;
+  if (
+    typeof tag !== "string"
+    || tag.length === 0
+  ) {
+    throw new Error(
+      `Bombadil trace line ${String(lineNumber)} has an invalid action target tag`,
+    );
+  }
+  if (
+    typeof value.structural_path === "string"
+    && Object.keys(value).some((key) => (
+      key !== "tag" && key !== "structural_path"
+    ))
+  ) {
+    throw new Error(
+      `Bombadil trace line ${String(lineNumber)} has an invalid action target`,
+    );
+  }
+  return tag.length <= 64 && TARGET_TAG_PATTERN.test(tag)
+    ? tag
+    : `sha256:${sha256(tag)}`;
+}
+
+function isSafeIntegerBetween(
+  value: unknown,
+  minimum: number,
+  maximum: number,
+): value is number {
+  return typeof value === "number"
+    && Number.isSafeInteger(value)
+    && value >= minimum
+    && value <= maximum;
+}
+
+function invalidTraceAction(lineNumber: number): never {
+  throw new Error(
+    `Bombadil trace line ${String(lineNumber)} has an invalid action`,
+  );
+}
+
 function parseTraceAction(value: unknown, lineNumber: number): ParsedTraceAction | null {
   if (value === null) return null;
   if (typeof value === "string") {
     if (!ACTION_KIND_SET.has(value) || !UNIT_ACTION_KINDS.has(value as DirectBombadilActionKind)) {
-      throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid action`);
+      return invalidTraceAction(lineNumber);
     }
     return { kind: value as DirectBombadilActionKind, targetTag: null };
   }
   if (!isRecord(value) || Object.keys(value).length !== 1) {
-    throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid action`);
+    return invalidTraceAction(lineNumber);
   }
   const kind = Object.keys(value)[0];
+  const payload = kind === undefined ? undefined : value[kind];
   if (
     kind === undefined
     || !ACTION_KIND_SET.has(kind)
     || UNIT_ACTION_KINDS.has(kind as DirectBombadilActionKind)
-    || !isRecord(value[kind])
+    || !isRecord(payload)
   ) {
-    throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid action`);
+    return invalidTraceAction(lineNumber);
   }
   const actionKind = kind as DirectBombadilActionKind;
   let targetTag: string | null = null;
-  if (TARGETED_ACTION_KINDS.has(actionKind)) {
-    const fingerprint = value[kind].fingerprint;
-    if (!isRecord(fingerprint)) {
-      throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid action target`);
-    }
-    const tag = fingerprint.tag;
-    if (
-      typeof tag !== "string"
-      || tag.length === 0
-      || tag.length > 64
-      || !TARGET_TAG_PATTERN.test(tag)
-    ) {
-      throw new Error(`Bombadil trace line ${String(lineNumber)} has an invalid action target tag`);
-    }
-    targetTag = tag;
+  switch (actionKind) {
+    case "Click":
+      if (
+        !hasExactKeys(payload, TRACE_CLICK_ACTION_KEYS)
+        || !validTracePoint(payload.point)
+      ) {
+        return invalidTraceAction(lineNumber);
+      }
+      targetTag = parseTraceFingerprintTag(payload.fingerprint, lineNumber);
+      break;
+    case "DoubleClick":
+      if (
+        !hasExactKeys(payload, TRACE_DOUBLE_CLICK_ACTION_KEYS)
+        || !isSafeIntegerBetween(payload.delay_millis, 0, 1_000)
+        || !validTracePoint(payload.point)
+      ) return invalidTraceAction(lineNumber);
+      targetTag = parseTraceFingerprintTag(payload.fingerprint, lineNumber);
+      break;
+    case "TypeText":
+      if (
+        !hasExactKeys(payload, TRACE_TYPE_TEXT_ACTION_KEYS)
+        || !isSafeIntegerBetween(payload.delay_millis, 0, Number.MAX_SAFE_INTEGER)
+        || typeof payload.text !== "string"
+      ) return invalidTraceAction(lineNumber);
+      break;
+    case "PressKey":
+      if (
+        !hasExactKeys(payload, TRACE_PRESS_KEY_ACTION_KEYS)
+        || !isSafeIntegerBetween(payload.code, 0, 255)
+      ) {
+        return invalidTraceAction(lineNumber);
+      }
+      break;
+    case "ScrollDown":
+    case "ScrollUp":
+      if (
+        !hasExactKeys(payload, TRACE_SCROLL_ACTION_KEYS)
+        || typeof payload.distance !== "number"
+        || !Number.isFinite(payload.distance)
+        || !validTracePoint(payload.origin)
+      ) return invalidTraceAction(lineNumber);
+      break;
+    case "SetFileInputFiles":
+      if (
+        !hasExactKeys(payload, TRACE_FILE_INPUT_ACTION_KEYS)
+        || typeof payload.selector !== "string"
+        || !Array.isArray(payload.files)
+        || !payload.files.every((file) => typeof file === "string")
+      ) return invalidTraceAction(lineNumber);
+      break;
+    case "MouseDrag":
+      if (
+        !hasExactKeys(payload, TRACE_MOUSE_DRAG_ACTION_KEYS)
+        || !isSafeIntegerBetween(payload.delay_millis, 0, 1_000)
+        || !isSafeIntegerBetween(payload.steps, 1, 255)
+        || !validTracePoint(payload.from)
+        || !validTracePoint(payload.to)
+      ) return invalidTraceAction(lineNumber);
+      break;
+    case "SetViewport":
+      if (
+        !hasExactKeys(payload, TRACE_VIEWPORT_ACTION_KEYS)
+        || !isSafeIntegerBetween(payload.height, 1, 10_000)
+        || !isSafeIntegerBetween(payload.width, 1, 10_000)
+      ) return invalidTraceAction(lineNumber);
+      break;
+    default:
+      return invalidTraceAction(lineNumber);
   }
   return { kind: actionKind, targetTag };
 }
@@ -1011,9 +1175,13 @@ export async function summarizeDirectBombadilTrace(options: {
   const actionCounts = new Map<DirectBombadilActionKind, number>();
   const targetTags = new Map<string, number>();
   const urlFingerprints = new Set<string>();
+  const rawUrlFingerprints = new Set<string>();
   const transitionHashes = new Set<string>();
+  const rawTransitionHashes = new Set<string>();
   const snapshots = new Map<string, {
+    readonly changeAfterActionKind: Map<DirectBombadilActionKind, number>;
     changeAfterNonWaitCount: number;
+    lastObservationIndex: number | null;
     lastValueSha256: string | null;
     observationCount: number;
     readonly values: Set<string>;
@@ -1036,8 +1204,8 @@ export async function summarizeDirectBombadilTrace(options: {
   let waitStreak = 0;
   let maxWaitStreak = 0;
   let nonNullHashCount = 0;
+  let rawNonNullHashCount = 0;
   let policyObservationCount = 0;
-  let reachedExactObservation = false;
   let previousObservationWasExact = false;
   let stableTarget = true;
   const stream = createReadStream(options.tracePath, { encoding: "utf8" });
@@ -1052,15 +1220,43 @@ export async function summarizeDirectBombadilTrace(options: {
         throw new Error(`Bombadil trace line ${String(lineCount)} is too large`);
       }
       const parsed = parseTraceLine(line, lineCount);
+      const rawRelativeUrl =
+        `${parsed.state.url.pathname}${parsed.state.url.search}${parsed.state.url.hash}`;
+      rawUrlFingerprints.add(sha256(rawRelativeUrl));
+      if (rawUrlFingerprints.size > TRACE_MAX_DISTINCT_URLS) {
+        throw new Error(
+          `Bombadil trace exceeds ${String(TRACE_MAX_DISTINCT_URLS)} distinct raw URL fingerprints`,
+        );
+      }
+      if (parsed.state.currentHash !== null) {
+        rawNonNullHashCount += 1;
+        rawTransitionHashes.add(String(parsed.state.currentHash));
+      }
+      for (const name of parsed.propertyViolationNames) {
+        if (!propertyViolations.has(name) && propertyViolations.size >= TRACE_MAX_PROPERTY_NAMES) {
+          throw new Error(
+            `Bombadil trace exceeds ${String(TRACE_MAX_PROPERTY_NAMES)} property names`,
+          );
+        }
+        propertyViolations.set(name, (propertyViolations.get(name) ?? 0) + 1);
+      }
+      for (const [sourceName, outputName] of Object.entries(RESOURCE_FIELD_MAP)) {
+        resources[outputName] = Math.max(
+          resources[outputName],
+          parsed.state.resources[sourceName as keyof typeof RESOURCE_FIELD_MAP],
+        );
+      }
       const currentObservationIsExact =
         exactTraceDirectObservation(parsed.directObservation) !== null;
-      if (!reachedExactObservation && !currentObservationIsExact) {
+      if (!currentObservationIsExact) {
         previousObservationWasExact = false;
         continue;
       }
-      if (!reachedExactObservation) reachedExactObservation = true;
       policyObservationCount += 1;
       const actionFollowsExactObservation = previousObservationWasExact;
+      const recordedActionKind = actionFollowsExactObservation
+        ? parsed.action?.kind ?? null
+        : null;
 
       if (actionFollowsExactObservation && parsed.action !== null) {
         totalActions += 1;
@@ -1107,22 +1303,30 @@ export async function summarizeDirectBombadilTrace(options: {
             );
           }
           entry = {
+            changeAfterActionKind: new Map<DirectBombadilActionKind, number>(),
             changeAfterNonWaitCount: 0,
+            lastObservationIndex: null,
             lastValueSha256: null,
             observationCount: 0,
             values: new Set<string>(),
           };
           snapshots.set(snapshot.name, entry);
         }
-        if (
-          actionFollowsExactObservation
-          && parsed.action !== null
-          && parsed.action.kind !== "Wait"
+        const changedAfterRecordedAction =
+          recordedActionKind !== null
+          && entry.lastObservationIndex === policyObservationCount - 1
           && entry.lastValueSha256 !== null
-          && entry.lastValueSha256 !== snapshot.valueSha256
-        ) {
+          && entry.lastValueSha256 !== snapshot.valueSha256;
+        if (changedAfterRecordedAction) {
+          entry.changeAfterActionKind.set(
+            recordedActionKind,
+            (entry.changeAfterActionKind.get(recordedActionKind) ?? 0) + 1,
+          );
+        }
+        if (changedAfterRecordedAction && recordedActionKind !== "Wait") {
           entry.changeAfterNonWaitCount += 1;
         }
+        entry.lastObservationIndex = policyObservationCount;
         entry.lastValueSha256 = snapshot.valueSha256;
         entry.observationCount += 1;
         entry.values.add(snapshot.valueSha256);
@@ -1132,21 +1336,7 @@ export async function summarizeDirectBombadilTrace(options: {
           );
         }
       }
-      for (const name of parsed.propertyViolationNames) {
-        if (!propertyViolations.has(name) && propertyViolations.size >= TRACE_MAX_PROPERTY_NAMES) {
-          throw new Error(
-            `Bombadil trace exceeds ${String(TRACE_MAX_PROPERTY_NAMES)} property names`,
-          );
-        }
-        propertyViolations.set(name, (propertyViolations.get(name) ?? 0) + 1);
-      }
-      for (const [sourceName, outputName] of Object.entries(RESOURCE_FIELD_MAP)) {
-        resources[outputName] = Math.max(
-          resources[outputName],
-          parsed.state.resources[sourceName as keyof typeof RESOURCE_FIELD_MAP],
-        );
-      }
-      previousObservationWasExact = currentObservationIsExact;
+      previousObservationWasExact = true;
     }
   } finally {
     lines.close();
@@ -1183,13 +1373,27 @@ export async function summarizeDirectBombadilTrace(options: {
         );
       }
     }
+    for (const [name, minimumByKind] of Object.entries(
+      policy.minNamedSnapshotChangesAfterActionKind,
+    )) {
+      for (const [kind, minimum] of Object.entries(minimumByKind) as [
+        DirectBombadilActionKind,
+        number,
+      ][]) {
+        if ((snapshots.get(name)?.changeAfterActionKind.get(kind) ?? 0) < minimum) {
+          policyFailures.push(
+            `named snapshot ${name} did not reach its post-${kind} change minimum`,
+          );
+        }
+      }
+    }
     if (policy.requireStableTargetUrl && !stableTarget) {
       policyFailures.push("the browser did not remain on the exact target URL");
     }
   }
   const traceBytes = await readFile(options.tracePath);
   return Object.freeze({
-    schema: "direct.bombadil-exploration-summary/v1",
+    schema: "direct.bombadil-exploration-summary/v2",
     trace: Object.freeze({
       bytes: metadata.size,
       lineCount,
@@ -1206,15 +1410,23 @@ export async function summarizeDirectBombadilTrace(options: {
       distinctFingerprintCount: urlFingerprints.size,
       fingerprintSha256: Object.freeze([...urlFingerprints].sort(compareCodeUnits)),
       observationCount: policyObservationCount,
+      rawDistinctFingerprintCount: rawUrlFingerprints.size,
+      rawFingerprintSha256: Object.freeze(
+        [...rawUrlFingerprints].sort(compareCodeUnits),
+      ),
+      rawObservationCount: lineCount,
       stableTarget,
     }),
     transitions: Object.freeze({
       distinctNonNullHashCount: transitionHashes.size,
       nonNullHashCount,
+      rawDistinctNonNullHashCount: rawTransitionHashes.size,
+      rawNonNullHashCount,
     }),
     namedSnapshots: Object.freeze([...snapshots.entries()]
       .sort(([left], [right]) => compareCodeUnits(left, right))
       .map(([name, entry]) => Object.freeze({
+        changeAfterActionKind: sortedCountRecord(entry.changeAfterActionKind),
         changeAfterNonWaitCount: entry.changeAfterNonWaitCount,
         distinctValueCount: entry.values.size,
         distinctValueSha256: Object.freeze([...entry.values].sort(compareCodeUnits)),
@@ -1449,6 +1661,53 @@ function validateSnapshotMinimumMap(options: {
   return Object.freeze(validated);
 }
 
+function validateSnapshotActionMinimumMap(options: {
+  readonly label: string;
+  readonly value: unknown;
+}): Readonly<Record<
+  string,
+  Readonly<Partial<Record<DirectBombadilActionKind, number>>>
+>> {
+  if (!isRecord(options.value) || Object.keys(options.value).length > 32) {
+    throw new Error(`${options.label} must be a bounded object`);
+  }
+  const validated: Record<
+    string,
+    Readonly<Partial<Record<DirectBombadilActionKind, number>>>
+  > = {};
+  for (const [rawName, rawMinimumByKind] of Object.entries(options.value)
+    .sort(([left], [right]) => compareCodeUnits(left, right))) {
+    const name = validateSnapshotName(rawName, `${options.label} key`);
+    if (
+      !isRecord(rawMinimumByKind)
+      || Object.keys(rawMinimumByKind).length === 0
+      || Object.keys(rawMinimumByKind).length > ACTION_KINDS.length
+    ) {
+      throw new Error(`${options.label} ${name} must be a bounded action map`);
+    }
+    const minimumByKind: Partial<Record<DirectBombadilActionKind, number>> = {};
+    for (const [rawKind, minimum] of Object.entries(rawMinimumByKind)
+      .sort(([left], [right]) => compareCodeUnits(left, right))) {
+      if (!ACTION_KIND_SET.has(rawKind)) {
+        throw new Error(`${options.label} ${name} contains an unknown action kind`);
+      }
+      if (
+        typeof minimum !== "number"
+        || !Number.isSafeInteger(minimum)
+        || minimum < 1
+        || minimum > TRACE_MAX_LINES
+      ) {
+        throw new Error(
+          `${options.label} ${name}.${rawKind} must be an integer between 1 and ${String(TRACE_MAX_LINES)}`,
+        );
+      }
+      minimumByKind[rawKind as DirectBombadilActionKind] = minimum;
+    }
+    validated[name] = Object.freeze(minimumByKind);
+  }
+  return Object.freeze(validated);
+}
+
 function validateExplorationPolicy(
   value: unknown,
 ): ValidatedExplorationPolicy | null {
@@ -1502,6 +1761,11 @@ function validateExplorationPolicy(
     maximum: TRACE_MAX_DISTINCT_SNAPSHOT_VALUES_PER_NAME,
     value: value.minDistinctNamedSnapshotValues ?? {},
   });
+  const minNamedSnapshotChangesAfterActionKind =
+    validateSnapshotActionMinimumMap({
+      label: "explorationPolicy.minNamedSnapshotChangesAfterActionKind",
+      value: value.minNamedSnapshotChangesAfterActionKind ?? {},
+    });
   const minNamedSnapshotChangesAfterNonWait = validateSnapshotMinimumMap({
     label: "explorationPolicy.minNamedSnapshotChangesAfterNonWait",
     maximum: TRACE_MAX_LINES,
@@ -1513,6 +1777,7 @@ function validateExplorationPolicy(
   }
   return Object.freeze({
     minDistinctNamedSnapshotValues,
+    minNamedSnapshotChangesAfterActionKind,
     minNamedSnapshotChangesAfterNonWait,
     minNonWaitActions,
     requireStableTargetUrl,

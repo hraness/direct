@@ -310,9 +310,10 @@ scenario boundary and exercises behavior the product can interpret.
 
 `createDirectBombadilNamedSnapshot` gives product properties and post-run
 diagnostics a small semantic signal. It requires a safe bounded name distinct
-from `direct` and JavaScript prototype names, an explicit product parser, at
+from `direct` and JavaScript prototype names, an explicit product type
+predicate over Direct's owned plain-JSON clone, at
 most 64 JSON levels, and at most 2 MiB of UTF-8 JSON. It fails closed to the
-parsed fallback when a page getter throws or returns unsuitable data. Extract
+validated fallback when a page getter throws or returns unsuitable data. Extract
 state, not page content or credentials. Named values are represented only by
 canonical SHA-256 hashes in the exploration summary; the authoritative raw
 trace still contains the original values.
@@ -355,6 +356,9 @@ await runDirectBombadilFuzz({
     minNonWaitActions: 1,
     requiredNamedSnapshots: ["direct", "todos.phase"],
     minDistinctNamedSnapshotValues: { "todos.phase": 2 },
+    minNamedSnapshotChangesAfterActionKind: {
+      "todos.phase": { Click: 1 },
+    },
     minNamedSnapshotChangesAfterNonWait: { "todos.phase": 1 },
     requireStableTargetUrl: true,
   },
@@ -399,11 +403,15 @@ responsive behavior that needs separate exploration.
 `explorationPolicy` is optional. When present, it can require a minimum count
 of non-Wait actions, particular action kinds and named snapshots, minimum
 distinct hashed values for named snapshots, named-value changes observed after
-a non-Wait action, and an exact stable target URL. The change requirement keeps
+a non-Wait action or one particular action kind, and an exact stable target
+URL. The change requirement keeps
 bootstrap or Wait-only transitions from satisfying a product-interaction
-threshold. The trace records the last action with the resulting state, so this
-count identifies a named value transition associated with an active product
-action. It does not prove causality. The policy detects a campaign that passed
+threshold. Per-kind attribution requires exact Direct observations and the
+same named snapshot in both immediately adjacent samples. The trace records
+the last action with the resulting state, so this count identifies a named
+value transition associated with an active product action. It does not prove
+causality. The runner strictly validates every 0.7.2 action payload before
+crediting its kind. The policy detects a campaign that passed
 its properties without doing the intended exploration. It is a diagnostic
 sufficiency check, not a coverage claim. Start with observed stable behavior
 and raise thresholds only when the action generator makes them reliably
@@ -500,12 +508,15 @@ Each attempt writes `run.json`, `exploration-summary.json`, `bombadil.log`, and 
 `artifacts/direct-bombadil/<artifactName>/<run>/`, including failures. The
 rolling `manifest.json` points to the latest record. `rawTracePath` reports a
 regular nonempty trace even if attestation fails; `tracePath` is present only
-after exact attestation. The summary strictly parses the 0.7.2 envelopes and
+after exact attestation. The v2 summary strictly parses the 0.7.2 envelopes and
 records the raw trace SHA-256, action-kind and safe target-tag counts, non-Wait
 count and longest Wait streak, origin-relative URL fingerprints, non-null
 transition-hash cardinality, canonical named-snapshot value hashes, property
-violation names and counts, named-value changes after non-Wait actions, and
-browser resource high-water marks. It excludes
+violation names and counts, named-value changes after non-Wait actions and
+specific action kinds, and browser resource high-water marks. Action, URL,
+transition, and named-snapshot policy evidence starts at the first exact Direct
+observation. Separate raw URL and transition hashes, property violations, and
+resource maxima retain strictly parsed startup-prefix diagnostics. It excludes
 typed text, accessible names, snapshot values, URLs, screenshots, and absolute
 paths. These diagnostics describe what Bombadil happened to explore. They do
 not measure code, state, interaction, or Direct catalog coverage, and the raw

@@ -460,6 +460,12 @@ describe("Direct Bombadil configuration and invocation", () => {
           A: 1,
           "a-": 2,
         },
+        minNamedSnapshotChangesAfterActionKind: {
+          z: { Wait: 4, Click: 3 },
+          "a.": { SetViewport: 3 },
+          A: { Wait: 1, Click: 2 },
+          "a-": { TypeText: 2 },
+        },
         minNamedSnapshotChangesAfterNonWait: {
           z: 4,
           "a.": 3,
@@ -483,6 +489,12 @@ describe("Direct Bombadil configuration and invocation", () => {
     expect(Object.keys(
       validated.explorationPolicy?.minDistinctNamedSnapshotValues ?? {},
     )).toEqual(expectedNames);
+    expect(Object.keys(
+      validated.explorationPolicy?.minNamedSnapshotChangesAfterActionKind ?? {},
+    )).toEqual(expectedNames);
+    expect(Object.keys(
+      validated.explorationPolicy?.minNamedSnapshotChangesAfterActionKind.A ?? {},
+    )).toEqual(["Click", "Wait"]);
     expect(Object.keys(
       validated.explorationPolicy?.minNamedSnapshotChangesAfterNonWait ?? {},
     )).toEqual(expectedNames);
@@ -546,6 +558,30 @@ describe("Direct Bombadil configuration and invocation", () => {
       ...config,
       explorationPolicy: { minNamedSnapshotChangesAfterNonWait: { phase: 10_001 } },
     })).toThrow("between 1 and 10000");
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
+      explorationPolicy: {
+        minNamedSnapshotChangesAfterActionKind: { phase: {} },
+      },
+    })).toThrow("bounded action map");
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
+      explorationPolicy: {
+        minNamedSnapshotChangesAfterActionKind: {
+          phase: { Unknown: 1 } as never,
+        },
+      },
+    })).toThrow("unknown action kind");
+    for (const minimum of [0, 10_001]) {
+      expect(() => validateDirectBombadilFuzzConfig({
+        ...config,
+        explorationPolicy: {
+          minNamedSnapshotChangesAfterActionKind: {
+            phase: { Click: minimum },
+          },
+        },
+      })).toThrow("between 1 and 10000");
+    }
   });
 
   test("rejects specification, server cwd, and replay symlinks that escape the repository", async () => {
@@ -871,6 +907,7 @@ describe("Direct Bombadil exploration summary", () => {
     const options = {
       explorationPolicy: {
         minDistinctNamedSnapshotValues: { phase: 2 },
+        minNamedSnapshotChangesAfterActionKind: { phase: { Click: 1 } },
         minNamedSnapshotChangesAfterNonWait: { phase: 1 },
         minNonWaitActions: 2,
         requireStableTargetUrl: true,
@@ -884,7 +921,7 @@ describe("Direct Bombadil exploration summary", () => {
     const second = await summarizeDirectBombadilTrace(options);
     expect(second).toEqual(first);
     expect(first).toMatchObject({
-      schema: "direct.bombadil-exploration-summary/v1",
+      schema: "direct.bombadil-exploration-summary/v2",
       actions: {
         byKind: { Click: 1, TypeText: 1, Wait: 1 },
         maxWaitStreak: 1,
@@ -895,9 +932,16 @@ describe("Direct Bombadil exploration summary", () => {
       urls: {
         distinctFingerprintCount: 1,
         observationCount: 4,
+        rawDistinctFingerprintCount: 1,
+        rawObservationCount: 4,
         stableTarget: true,
       },
-      transitions: { distinctNonNullHashCount: 4, nonNullHashCount: 4 },
+      transitions: {
+        distinctNonNullHashCount: 4,
+        nonNullHashCount: 4,
+        rawDistinctNonNullHashCount: 4,
+        rawNonNullHashCount: 4,
+      },
       propertyViolations: { byName: { noConsoleErrors: 1 }, total: 1 },
       resourceHighWaterMarks: {
         domNodes: 4,
@@ -906,6 +950,7 @@ describe("Direct Bombadil exploration summary", () => {
       policy: { configured: true, failures: [], satisfied: true },
     });
     expect(first.namedSnapshots.find((entry) => entry.name === "phase")).toMatchObject({
+      changeAfterActionKind: { Click: 1 },
       changeAfterNonWaitCount: 1,
       distinctValueCount: 2,
       observationCount: 4,
@@ -917,6 +962,82 @@ describe("Direct Bombadil exploration summary", () => {
     expect(serialized).not.toContain("sensitive formula source");
     expect(serialized).not.toContain("127.0.0.1");
     expect(serialized).not.toContain("/tmp/");
+  });
+
+  test("accepts every exact Bombadil 0.7.2 browser action payload", async () => {
+    const actions = [
+      "Back",
+      {
+        Click: {
+          fingerprint: { accessible_name: "private click label", tag: "button" },
+          point: { x: 1, y: 2 },
+        },
+      },
+      {
+        DoubleClick: {
+          delay_millis: 10,
+          fingerprint: {
+            structural_path: "private/path",
+            tag: "x-private.widget_\u00e9",
+          },
+          point: { x: 2, y: 3 },
+        },
+      },
+      "Forward",
+      {
+        MouseDrag: {
+          delay_millis: 5,
+          from: { x: 3, y: 4 },
+          steps: 10,
+          to: { x: 30, y: 40 },
+        },
+      },
+      { PressKey: { code: 13 } },
+      "Reload",
+      { ScrollDown: { distance: 100, origin: { x: 5, y: 6 } } },
+      { ScrollUp: { distance: 100, origin: { x: 5, y: 6 } } },
+      {
+        SetFileInputFiles: {
+          files: ["/private/file.txt"],
+          selector: "#private-file-input",
+        },
+      },
+      { SetViewport: { height: 720, width: 1_280 } },
+      { TypeText: { delay_millis: 5, text: "private typed text" } },
+      "Wait",
+    ] as const;
+    const observation = directObservation();
+    const tracePath = await summaryTrace([
+      traceLine(observation, 1),
+      ...actions.map((action, index) => traceLine(observation, index + 2, {
+        action,
+      })),
+    ]);
+    const summary = await summarizeDirectBombadilTrace({
+      targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+      tracePath,
+    });
+    expect(Object.keys(summary.actions.byKind)).toEqual([
+      "Back",
+      "Click",
+      "DoubleClick",
+      "Forward",
+      "MouseDrag",
+      "PressKey",
+      "Reload",
+      "ScrollDown",
+      "ScrollUp",
+      "SetFileInputFiles",
+      "SetViewport",
+      "TypeText",
+      "Wait",
+    ]);
+    expect(summary.actions.total).toBe(actions.length);
+    expect(Object.keys(summary.actions.targetTags)).toContain("button");
+    expect(Object.keys(summary.actions.targetTags).some((tag) =>
+      /^sha256:[a-f0-9]{64}$/u.test(tag)
+    )).toBeTrue();
+    expect(JSON.stringify(summary)).not.toContain("private");
   });
 
   test("reports strict policy misses while keeping the diagnostic summary", async () => {
@@ -965,10 +1086,133 @@ describe("Direct Bombadil exploration summary", () => {
     });
   });
 
+  test("attributes named changes to the exact action kind", async () => {
+    const observation = directObservation();
+    const noOpClickTrace = await summaryTrace([
+      traceLine(observation, 1, {
+        namedSnapshots: [{ name: "phase", value: 0 }],
+      }),
+      traceLine(observation, 2, {
+        action: {
+          Click: {
+            fingerprint: { tag: "button" },
+            point: { x: 1, y: 1 },
+          },
+        },
+        namedSnapshots: [{ name: "phase", value: 0 }],
+      }),
+      traceLine(observation, 3, {
+        action: { SetViewport: { height: 720, width: 1_280 } },
+        namedSnapshots: [{ name: "phase", value: 1 }],
+      }),
+    ]);
+    const failed = await summarizeDirectBombadilTrace({
+      explorationPolicy: {
+        minNamedSnapshotChangesAfterActionKind: {
+          phase: { Click: 1, SetViewport: 1 },
+        },
+        minNamedSnapshotChangesAfterNonWait: { phase: 1 },
+      },
+      targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+      tracePath: noOpClickTrace,
+    });
+    expect(failed.namedSnapshots.find((entry) => entry.name === "phase"))
+      .toMatchObject({
+        changeAfterActionKind: { SetViewport: 1 },
+        changeAfterNonWaitCount: 1,
+      });
+    expect(failed.policy).toMatchObject({
+      failures: [expect.stringContaining("post-Click change minimum")],
+      satisfied: false,
+    });
+
+    const attributedTrace = await summaryTrace([
+      traceLine(observation, 1, {
+        namedSnapshots: [{ name: "phase", value: 0 }],
+      }),
+      traceLine(observation, 2, {
+        action: {
+          Click: {
+            fingerprint: { tag: "button" },
+            point: { x: 1, y: 1 },
+          },
+        },
+        namedSnapshots: [{ name: "phase", value: 1 }],
+      }),
+      traceLine(observation, 3, {
+        action: { SetViewport: { height: 720, width: 1_280 } },
+        namedSnapshots: [{ name: "phase", value: 2 }],
+      }),
+    ]);
+    const attributed = await summarizeDirectBombadilTrace({
+      explorationPolicy: {
+        minNamedSnapshotChangesAfterActionKind: {
+          phase: { SetViewport: 1, Click: 1 },
+        },
+      },
+      targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+      tracePath: attributedTrace,
+    });
+    const phase = attributed.namedSnapshots.find((entry) => entry.name === "phase");
+    expect(phase?.changeAfterActionKind).toEqual({ Click: 1, SetViewport: 1 });
+    expect(phase?.changeAfterNonWaitCount).toBe(2);
+    expect(phase?.changeAfterNonWaitCount).toBe(
+      Object.entries(phase?.changeAfterActionKind ?? {})
+        .filter(([kind]) => kind !== "Wait")
+        .reduce((total, [, count]) => total + count, 0),
+    );
+    expect(attributed.policy.satisfied).toBeTrue();
+  });
+
+  test("requires adjacent exact observations for action attribution", async () => {
+    const exact = directObservation();
+    const click = {
+      Click: {
+        fingerprint: { tag: "button" },
+        point: { x: 1, y: 1 },
+      },
+    } as const;
+    const missingSnapshotTrace = await summaryTrace([
+      traceLine(exact, 1, {
+        namedSnapshots: [{ name: "phase", value: 0 }],
+      }),
+      traceLine(exact, 2),
+      traceLine(exact, 3, {
+        action: click,
+        namedSnapshots: [{ name: "phase", value: 1 }],
+      }),
+    ]);
+    const invalidCurrentTrace = await summaryTrace([
+      traceLine(exact, 1, {
+        namedSnapshots: [{ name: "phase", value: 0 }],
+      }),
+      traceLine(absentObservation(), 2, {
+        action: click,
+        namedSnapshots: [{ name: "phase", value: 1 }],
+      }),
+    ]);
+    for (const tracePath of [missingSnapshotTrace, invalidCurrentTrace]) {
+      const summary = await summarizeDirectBombadilTrace({
+        explorationPolicy: {
+          minNamedSnapshotChangesAfterActionKind: { phase: { Click: 1 } },
+        },
+        targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+        tracePath,
+      });
+      expect(summary.namedSnapshots.find((entry) => entry.name === "phase")
+        ?.changeAfterActionKind).toEqual({});
+      expect(summary.policy.satisfied).toBeFalse();
+    }
+  });
+
   test("uses the first exact Direct observation only as the policy baseline", async () => {
     const tracePath = await summaryTrace([
-      traceLine(absentObservation(), 1, {
+      traceLine(absentObservation(), 20, {
         namedSnapshots: [{ name: "phase", value: "loading" }],
+        violations: [{
+          name: "startup_contract",
+          violation: { False: {} },
+        }],
       }),
       traceLine(absentObservation(), 2, {
         action: {
@@ -992,6 +1236,7 @@ describe("Direct Bombadil exploration summary", () => {
     const summary = await summarizeDirectBombadilTrace({
       explorationPolicy: {
         minDistinctNamedSnapshotValues: { phase: 2 },
+        minNamedSnapshotChangesAfterActionKind: { phase: { Click: 1 } },
         minNamedSnapshotChangesAfterNonWait: { phase: 1 },
         minNonWaitActions: 1,
         requiredActionKinds: ["Click"],
@@ -1006,10 +1251,18 @@ describe("Direct Bombadil exploration summary", () => {
       total: 0,
     });
     expect(summary.urls.observationCount).toBe(1);
+    expect(summary.urls.rawObservationCount).toBe(3);
     expect(summary.transitions).toEqual({
       distinctNonNullHashCount: 1,
       nonNullHashCount: 1,
+      rawDistinctNonNullHashCount: 3,
+      rawNonNullHashCount: 3,
     });
+    expect(summary.propertyViolations).toEqual({
+      byName: { startup_contract: 1 },
+      total: 1,
+    });
+    expect(summary.resourceHighWaterMarks.domNodes).toBe(20);
     expect(summary.namedSnapshots.find((entry) => entry.name === "phase"))
       .toMatchObject({
         changeAfterNonWaitCount: 0,
@@ -1022,6 +1275,7 @@ describe("Direct Bombadil exploration summary", () => {
         expect.stringContaining("required action kind Click"),
         expect.stringContaining("distinct-value minimum"),
         expect.stringContaining("post-non-Wait change minimum"),
+        expect.stringContaining("post-Click change minimum"),
       ],
       satisfied: false,
     });
@@ -1065,12 +1319,41 @@ describe("Direct Bombadil exploration summary", () => {
   test("rejects hostile envelopes, action targets, and excessively deep snapshot JSON", async () => {
     const observation = directObservation();
     const badTarget = await summaryTrace([traceLine(observation, 1, {
-      action: { Click: { fingerprint: { tag: "unsafe tag" } } },
+      action: {
+        Click: {
+          fingerprint: { tag: "unsafe tag" },
+          point: { x: 1, y: 1 },
+        },
+      },
     })]);
     expect((await rejection(summarizeDirectBombadilTrace({
       targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
       tracePath: badTarget,
     }))).message).toContain("invalid action target tag");
+
+    for (const action of [
+      { PressKey: {} },
+      { PressKey: { code: 256 } },
+      { SetViewport: {} },
+      { SetViewport: { height: 720, width: 0 } },
+      {
+        MouseDrag: {
+          delay_millis: 0,
+          from: { x: 0, y: 0 },
+          steps: 0,
+          to: { x: 1, y: 1 },
+        },
+      },
+      { TypeText: { delay_millis: 0, text: "safe", unexpected: true } },
+    ]) {
+      const malformedAction = await summaryTrace([traceLine(observation, 1, {
+        action,
+      })]);
+      expect((await rejection(summarizeDirectBombadilTrace({
+        targetUrl: "http://127.0.0.1:4919/?__direct_scenario=surface.ready",
+        tracePath: malformedAction,
+      }))).message).toContain("invalid action");
+    }
 
     let deep: unknown = null;
     for (let index = 0; index < 70; index += 1) deep = [deep];
@@ -1218,7 +1501,7 @@ describe("Direct Bombadil run lifecycle", () => {
       initialDirect: { source: "scenario", scenario: "surface.ready", route: "/surface" },
       server: { logPresent: true },
       explorationSummary: {
-        schema: "direct.bombadil-exploration-summary/v1",
+        schema: "direct.bombadil-exploration-summary/v2",
         policy: { configured: false, satisfied: true },
       },
       viewport: { deviceScaleFactor: 2, height: 768, width: 1_024 },
@@ -1234,7 +1517,7 @@ describe("Direct Bombadil run lifecycle", () => {
     expect(await readFile(String(server.logPath), "utf8")).toContain("server output");
     const summaryPath = String(manifest.explorationSummaryPath);
     expect(JSON.parse(await readFile(summaryPath, "utf8"))).toMatchObject({
-      schema: "direct.bombadil-exploration-summary/v1",
+      schema: "direct.bombadil-exploration-summary/v2",
       trace: { lineCount: 2 },
     });
   });
@@ -1260,7 +1543,7 @@ describe("Direct Bombadil run lifecycle", () => {
       },
     });
     expect(await readFile(String(manifest.explorationSummaryPath), "utf8"))
-      .toContain("direct.bombadil-exploration-summary/v1");
+      .toContain("direct.bombadil-exploration-summary/v2");
   });
 
   test("retains an attested failure artifact and server log for a nonzero exit", async () => {

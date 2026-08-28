@@ -290,8 +290,10 @@ snapshots that expose semantic state without retaining page content. Run short
 scheduled diagnostic lane. Inspect and replay a retained failing trace, then
 promote the smallest readable failure to a deterministic product regression.
 When a campaign must exercise an interaction, require a named product value to
-change after a non-Wait action so bootstrap and idle transitions do not satisfy
-the exploration policy.
+change after the intended action kind, as well as after a non-Wait action, so
+bootstrap, idle, prerequisite, and unrelated transitions do not satisfy the
+exploration policy. Attribution requires adjacent exact Direct observations;
+it is temporal response evidence rather than proof of causality.
 If the full product snapshot includes viewport dimensions, put that requirement
 on a separate interaction snapshot without viewport fields and require an
 opposite-size `SetViewport` independently. Latch the first ready product state
