@@ -272,7 +272,7 @@ const direct = createDirectBombadilProperties();
 const phase = createDirectBombadilNamedSnapshot({
   fallback: "unavailable",
   name: "todos.phase",
-  parse: (value) => typeof value === "string" ? value : null,
+  parse: (value) => typeof value === "string" ? value : undefined,
   read: ({ window }) => Reflect.get(window, "__todosPhase"),
 });
 

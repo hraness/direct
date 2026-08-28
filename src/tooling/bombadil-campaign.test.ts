@@ -242,10 +242,10 @@ describe("Direct Bombadil named snapshots", () => {
       name: "product.phase",
       parse: (value) => {
         if (typeof value !== "object" || value === null || Array.isArray(value)) {
-          return null;
+          return undefined;
         }
         const status = Reflect.get(value, "status");
-        return typeof status === "string" ? { status } : null;
+        return typeof status === "string" ? { status } : undefined;
       },
       read: (state) => Reflect.get(state.window, "phase"),
     }) as unknown as FakeCell;
@@ -275,10 +275,10 @@ describe("Direct Bombadil named snapshots", () => {
       name: "product.compat",
       parse: (value) => {
         if (typeof value !== "object" || value === null || Array.isArray(value)) {
-          return null;
+          return undefined;
         }
         const status = Reflect.get(value, "status");
-        return typeof status === "string" ? { status } : null;
+        return typeof status === "string" ? { status } : undefined;
       },
       read: (state) => Reflect.get(state.window, "phase"),
     }) as unknown as FakeCell;
@@ -362,7 +362,7 @@ describe("Direct Bombadil named snapshots", () => {
     expect(() => createDirectBombadilNamedSnapshot({
       fallback: null,
       name: "safe",
-      parse: () => null,
+      parse: () => undefined,
       read: () => null,
     })).toThrow("accepted by parse");
     expect(() => createDirectBombadilNamedSnapshot<BombadilJson>({
