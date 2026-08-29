@@ -1,21 +1,14 @@
-# direct
+# Direct
 
 [![skills.sh](https://skills.sh/b/hraness/direct)](https://skills.sh/hraness/direct)
 
-a TypeScript harness for deterministic frontend development with repeatable
-scenarios, local fixtures, and browser verification for coding agents.
-
-name signed-in, empty, error, and other hard-to-reach app states once, then let
-coding agents open them by URL during development. your interface and feature
-code run normally. direct replaces only the outside systems needed for that
-state with predictable local fixtures. it does not click through the browser
-or test the systems it replaces.
-
-```sh
-bun add --dev @hraness/direct@0.7.8
-# or
-npm install --save-dev @hraness/direct@0.7.8
-```
+A TypeScript harness for deterministic frontend testing and development with
+repeatable scenarios, local fixtures, and browser verification for coding
+agents.
+Direct makes hard-to-reach frontend states addressable by URL. It runs your real
+interface and feature code against named, validated local fixture worlds, so
+signed-in, empty, and error states are repeatable without clicking through setup
+or depending on live systems.
 
 [Install @hraness/direct from npm](https://www.npmjs.com/package/@hraness/direct) ·
 [Direct source on GitHub](https://github.com/hraness/direct) ·
@@ -30,16 +23,58 @@ real interface and feature state
      adapter     harness
 ```
 
+## Why Direct
+
+- **Keep product behavior real.** The interface and feature logic keep using a
+  product-owned port. Only the external adapters needed for the scenario are
+  replaced. Direct does not automate browser actions, and fixture evidence does
+  not prove those live systems.
+- **Know when the page settled.** A versioned browser contract exposes the
+  active scenario, coverage catalog, and deterministic activity probe. A quiet
+  probe says declared work settled; product-owned assertions must still decide
+  whether the result is correct.
+
 ## Install
 
-### Install the Agent Skill
+Pin Direct as a development dependency:
+
+```sh
+bun add --dev @hraness/direct@0.7.9
+# or
+npm install --save-dev @hraness/direct@0.7.9
+```
+
+Keep Direct in `devDependencies`. A production entry must not import Direct,
+its fixture worlds, or its workbench.
+
+## Open one deterministic state
+
+The repository's Todo example runs the same React interface against a Direct
+composition. It requires Git and Bun 1.3.14, then downloads the source and its
+development dependencies:
+
+```sh
+git clone --branch v0.7.9 --depth 1 https://github.com/hraness/direct.git
+cd direct
+bun install --frozen-lockfile --ignore-scripts
+bun run example:direct
+```
+
+Open
+[`http://127.0.0.1:5173/direct/?__direct_scenario=todos.populated`](http://127.0.0.1:5173/direct/?__direct_scenario=todos.populated).
+The page starts with the named populated world and stays available for browser
+inspection. The example reserves that exact local address and exits instead of
+silently choosing another port when it is occupied. Stop the development server
+when the review is complete.
+
+## Install the Agent Skill
 
 Install Direct's single bundled skill from the public repository:
 
 ```sh
-npx skills add hraness/direct
+npx skills add hraness/direct#v0.7.9
 # or
-bunx skills add hraness/direct
+bunx skills add hraness/direct#v0.7.9
 ```
 
 The skill is invoked as `$direct`. It routes installation, adoption, and
@@ -53,7 +88,7 @@ Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
 Use $direct to install hraness/direct from
-the npm registry at the exact 0.7.8 version. Follow the repository README, add
+the npm registry at the exact 0.7.9 version. Follow the repository README, add
 `@hraness/direct` to devDependencies only, and verify that the production
 dependency graph excludes Direct. Do not add a fixture composition until I
 ask.
@@ -69,7 +104,7 @@ Pin the public npm package to an exact immutable version:
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "0.7.8"
+    "@hraness/direct": "0.7.9"
   }
 }
 ```
@@ -82,8 +117,6 @@ bun install
 npm install
 ```
 
-Keep Direct in `devDependencies`. A production entry must not import Direct, its fixture worlds, or its workbench.
-
 ## Agent skills
 
 Packages built from this source include one Agent Skill under
@@ -93,11 +126,11 @@ quiescence, coverage claims, cleanup, and emitted production boundaries. The
 package smoke test keeps that future packaged copy byte-identical to the
 repository skill.
 
-Prefer `npx skills add hraness/direct` or `bunx skills add hraness/direct` for
-runner discovery. You can also copy or link that one skill directory into a
-runner's configured location, then invoke `$direct`. Package installation
-leaves the skill inert: it does not run a `postinstall` hook or edit repository
-or user configuration.
+Prefer `npx skills add hraness/direct#v0.7.9` or
+`bunx skills add hraness/direct#v0.7.9` for runner discovery. You can also copy
+or link that one skill directory into a runner's configured location, then
+invoke `$direct`. Package installation leaves the skill inert: it does not run
+a `postinstall` hook or edit repository or user configuration.
 
 ## A complete browser composition
 
@@ -191,7 +224,11 @@ and Chromium roots, or one containing job; the roots can occupy different
 process groups. Direct supplies neither that supervisor nor browser or
 performance evidence.
 
-See the [Todo example](https://github.com/hraness/direct/tree/main/examples/todos) for a strict parser, product-owned port, React workbench, and emitted-graph boundary verifier. The [React Native example](https://github.com/hraness/direct/tree/main/examples/react-native) uses the same session model in a platform-resolved Expo composition while keeping native production graphs Direct-free.
+See the [Todo example](examples/todos) for a strict parser, product-owned port,
+React workbench, and emitted-graph boundary verifier. The
+[React Native example](examples/react-native) uses the same session model in a
+platform-resolved Expo composition while keeping native production graphs
+Direct-free.
 
 ## Keep evidence honest
 
@@ -390,7 +427,9 @@ agent-browser or Playwright
 
 A Direct world is validated JSON that describes one starting state. A scenario gives that world a name and route. It does not contain browser actions. The browser check still decides what to click and what outcome to assert.
 
-The [public Todo example](<https://github.com/hraness/direct/tree/main/examples/todos>) uses one `TodoPort` in both compositions. The component receives whichever implementation the entry point owns:
+The [public Todo example](examples/todos) uses one `TodoPort` in both
+compositions. The component receives whichever implementation the entry point
+owns:
 
 **One product port, two compositions**
 

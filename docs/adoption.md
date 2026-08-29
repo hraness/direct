@@ -3,8 +3,8 @@
 Add Direct after identifying the product behavior and external boundary under review. Do not begin by designing fixtures around a provider SDK.
 
 The repository carries one `$direct` Agent Skill under `skills/direct`.
-Install it with `npx skills add hraness/direct` or
-`bunx skills add hraness/direct`, or copy that directory into the runner's
+Install it with `npx skills add hraness/direct#v0.7.9` or
+`bunx skills add hraness/direct#v0.7.9`, or copy that directory into the runner's
 discovery location. Invoke `$direct` for installation, adoption, and
 verification work. Skill installation is independent from library package
 installation and does not activate Direct in a product.
@@ -81,7 +81,8 @@ authored definition. Wait for a stable quiet probe, reject relevant violations
 and runtime errors, assert behavior in product terms, and retain the evidence
 needed by each coverage claim.
 
-The [todo example](https://github.com/hraness/direct/tree/main/examples/todos) implements this sequence without a backend or credentials.
+The [todo example](../examples/todos) implements this sequence without a backend
+or credentials.
 
 ## React Native and Expo
 
@@ -107,4 +108,5 @@ Export iOS and Android independently with external source maps. Require at least
 
 These gates prove structural selection and exclusion. Native layout, modules, platform values, navigation chrome, operating-system behavior, and physical-device behavior remain direct evidence. Split coverage entries when the shared feature and the platform shell require different proof modes.
 
-The [React Native example](https://github.com/hraness/direct/tree/main/examples/react-native) is a minimal Expo implementation of this split.
+The [React Native example](../examples/react-native) is a minimal Expo
+implementation of this split.
