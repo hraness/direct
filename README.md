@@ -1,21 +1,13 @@
-# direct
+# Direct
 
 [![skills.sh](https://skills.sh/b/hraness/direct)](https://skills.sh/hraness/direct)
 
-a TypeScript harness for deterministic frontend development with repeatable
+A TypeScript harness for deterministic frontend development with repeatable
 scenarios, local fixtures, and browser verification for coding agents.
-
-name signed-in, empty, error, and other hard-to-reach app states once, then let
-coding agents open them by URL during development. your interface and feature
-code run normally. direct replaces only the outside systems needed for that
-state with predictable local fixtures. it does not click through the browser
-or test the systems it replaces.
-
-```sh
-bun add --dev @hraness/direct@0.7.7
-# or
-npm install --save-dev @hraness/direct@0.7.7
-```
+Direct makes hard-to-reach frontend states addressable by URL. It runs your real
+interface and feature code against named, validated local fixture worlds, so
+signed-in, empty, and error states are repeatable without clicking through setup
+or depending on live systems.
 
 [Install @hraness/direct from npm](https://www.npmjs.com/package/@hraness/direct) ·
 [Direct source on GitHub](https://github.com/hraness/direct) ·
@@ -30,9 +22,51 @@ real interface and feature state
      adapter     harness
 ```
 
+## Why Direct
+
+- **Keep product behavior real.** The interface and feature logic keep using a
+  product-owned port. Only the external adapters needed for the scenario are
+  replaced. Direct does not automate browser actions, and fixture evidence does
+  not prove those live systems.
+- **Know when the page settled.** A versioned browser contract exposes the
+  active scenario, coverage catalog, and deterministic activity probe. A quiet
+  probe says declared work settled; product-owned assertions must still decide
+  whether the result is correct.
+
 ## Install
 
-### Install the Agent Skill
+Pin Direct as a development dependency:
+
+```sh
+bun add --dev @hraness/direct@0.7.7
+# or
+npm install --save-dev @hraness/direct@0.7.7
+```
+
+Keep Direct in `devDependencies`. A production entry must not import Direct,
+its fixture worlds, or its workbench.
+
+## Open one deterministic state
+
+The repository's Todo example runs the same React interface against a Direct
+composition. It requires Git and Bun 1.3.14, then downloads the source and its
+development dependencies:
+
+```sh
+git clone https://github.com/hraness/direct.git
+cd direct
+bun install --frozen-lockfile --ignore-scripts
+bun run example:direct
+```
+
+Open
+[`http://127.0.0.1:5173/direct/?__direct_scenario=todos.populated`](http://127.0.0.1:5173/direct/?__direct_scenario=todos.populated).
+The page starts with the named populated world and stays available for browser
+inspection. The example reserves that exact local address and exits instead of
+silently choosing another port when it is occupied. Stop the development server
+when the review is complete.
+
+## Install the Agent Skill
 
 Install Direct's single bundled skill from the public repository:
 
@@ -81,8 +115,6 @@ bun install
 # or, in an npm project
 npm install
 ```
-
-Keep Direct in `devDependencies`. A production entry must not import Direct, its fixture worlds, or its workbench.
 
 ## Agent skills
 
