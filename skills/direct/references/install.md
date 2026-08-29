@@ -43,8 +43,8 @@ If the task starts with skill installation rather than a loaded skill, install
 the single repository skill with either command:
 
 ```sh
-npx skills add hraness/direct
-bunx skills add hraness/direct
+npx skills add hraness/direct#v0.7.8
+bunx skills add hraness/direct#v0.7.8
 ```
 
 Restart or reload the agent runner if it does not discover newly installed

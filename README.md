@@ -53,7 +53,7 @@ composition. It requires Git and Bun 1.3.14, then downloads the source and its
 development dependencies:
 
 ```sh
-git clone https://github.com/hraness/direct.git
+git clone --branch v0.7.8 --depth 1 https://github.com/hraness/direct.git
 cd direct
 bun install --frozen-lockfile --ignore-scripts
 bun run example:direct
@@ -71,9 +71,9 @@ when the review is complete.
 Install Direct's single bundled skill from the public repository:
 
 ```sh
-npx skills add hraness/direct
+npx skills add hraness/direct#v0.7.8
 # or
-bunx skills add hraness/direct
+bunx skills add hraness/direct#v0.7.8
 ```
 
 The skill is invoked as `$direct`. It routes installation, adoption, and
@@ -125,11 +125,11 @@ quiescence, coverage claims, cleanup, and emitted production boundaries. The
 package smoke test keeps that future packaged copy byte-identical to the
 repository skill.
 
-Prefer `npx skills add hraness/direct` or `bunx skills add hraness/direct` for
-runner discovery. You can also copy or link that one skill directory into a
-runner's configured location, then invoke `$direct`. Package installation
-leaves the skill inert: it does not run a `postinstall` hook or edit repository
-or user configuration.
+Prefer `npx skills add hraness/direct#v0.7.8` or
+`bunx skills add hraness/direct#v0.7.8` for runner discovery. You can also copy
+or link that one skill directory into a runner's configured location, then
+invoke `$direct`. Package installation leaves the skill inert: it does not run
+a `postinstall` hook or edit repository or user configuration.
 
 ## A complete browser composition
 
@@ -223,7 +223,11 @@ and Chromium roots, or one containing job; the roots can occupy different
 process groups. Direct supplies neither that supervisor nor browser or
 performance evidence.
 
-See the [Todo example](https://github.com/hraness/direct/tree/main/examples/todos) for a strict parser, product-owned port, React workbench, and emitted-graph boundary verifier. The [React Native example](https://github.com/hraness/direct/tree/main/examples/react-native) uses the same session model in a platform-resolved Expo composition while keeping native production graphs Direct-free.
+See the [Todo example](examples/todos) for a strict parser, product-owned port,
+React workbench, and emitted-graph boundary verifier. The
+[React Native example](examples/react-native) uses the same session model in a
+platform-resolved Expo composition while keeping native production graphs
+Direct-free.
 
 ## Keep evidence honest
 
@@ -402,7 +406,9 @@ agent-browser or Playwright
 
 A Direct world is validated JSON that describes one starting state. A scenario gives that world a name and route. It does not contain browser actions. The browser check still decides what to click and what outcome to assert.
 
-The [public Todo example](<https://github.com/hraness/direct/tree/main/examples/todos>) uses one `TodoPort` in both compositions. The component receives whichever implementation the entry point owns:
+The [public Todo example](examples/todos) uses one `TodoPort` in both
+compositions. The component receives whichever implementation the entry point
+owns:
 
 **One product port, two compositions**
 
