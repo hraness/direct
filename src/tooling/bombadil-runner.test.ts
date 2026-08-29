@@ -43,6 +43,7 @@ import type {
   ServerLease,
 } from "./browser-verification.js";
 
+const ARTIFACT_IO_TEST_TIMEOUT_MS = 30_000;
 const temporaryDirectories: string[] = [];
 
 function artifactRunPlan<
@@ -63,7 +64,7 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((path) =>
     rm(path, { force: true, recursive: true })
   ));
-});
+}, ARTIFACT_IO_TEST_TIMEOUT_MS);
 
 function nativeBinaryName(): string {
   if (process.platform === "darwin" && process.arch === "arm64") {
@@ -440,6 +441,7 @@ function dependencies(options: {
   readonly serverCommands: string[][];
 } {
   const calls: string[] = [];
+  const signals = controllableSignals();
   const serverCommands: string[][] = [];
   const server = fakeServer(
     calls,
@@ -475,7 +477,9 @@ function dependencies(options: {
           `node_modules/@antithesishq/bombadil/binaries/${nativeBinaryName()}`,
         );
         return (async () => {
-          if (options.noTrace !== true) {
+          if (options.noTrace === true) {
+            await mkdir(invocation.outputPath, { recursive: true });
+          } else {
             await writeTrace(
               join(invocation.outputPath, "trace.jsonl"),
               options.observations ?? [absentObservation(), directObservation()],
@@ -491,6 +495,7 @@ function dependencies(options: {
           };
         })();
       },
+      signalController: signals.controller,
       ...(options.serverOutputTimeoutMs === undefined
         ? {}
         : { serverOutputTimeoutMs: options.serverOutputTimeoutMs }),
@@ -786,12 +791,32 @@ describe("Direct Bombadil configuration and invocation", () => {
     const cwdLink = join(cwdFixture.repositoryRoot, "escaped-cwd");
     await symlink(outside, cwdLink);
     const cwdRuntime = dependencies();
-    expect((await rejection(runDirectBombadilFuzz({
+    const cwdPlan = artifactRunPlan(cwdFixture.repositoryRoot, 43);
+    const publicationFailure = new Error("forced sanitized receipt publication failure");
+    const cwdError = await rejection(runDirectBombadilFuzz({
       ...cwdFixture.config,
       server: { ...cwdFixture.config.server, cwd: cwdLink },
-    }, [], cwdRuntime.overrides))).message).toContain(
+    }, { arguments: [], artifactRun: cwdPlan }, {
+      ...cwdRuntime.overrides,
+      beforeArtifactCommit: () => {
+        throw publicationFailure;
+      },
+    }));
+    expect(cwdError).toBeInstanceOf(AggregateError);
+    expect(cwdError.message).toContain(
       "server.cwd resolves outside repositoryRoot",
     );
+    expect(cwdError.message).toContain(
+      "sanitized Bombadil receipt publication also failed",
+    );
+    const persistenceErrors = (cwdError as AggregateError).errors;
+    expect(persistenceErrors).toHaveLength(2);
+    expect(persistenceErrors[0]).toBeInstanceOf(Error);
+    expect((persistenceErrors[0] as Error).message).toBe(
+      "server.cwd resolves outside repositoryRoot",
+    );
+    expect(cwdError.cause).toBe(persistenceErrors[0]);
+    expect(persistenceErrors[1]).toBe(publicationFailure);
     expect(cwdRuntime.calls).toEqual([]);
 
     const replayFixture = await fixture();
@@ -804,7 +829,7 @@ describe("Direct Bombadil configuration and invocation", () => {
       replayRuntime.overrides,
     ))).message).toContain("--replay resolves outside repositoryRoot");
     expect(replayRuntime.calls).toEqual([]);
-  });
+  }, ARTIFACT_IO_TEST_TIMEOUT_MS);
 
   test("builds an argv-only native invocation with both Direct query bindings", () => {
     const invocation = createDirectBombadilInvocation({
@@ -940,7 +965,7 @@ describe("Direct Bombadil campaign matrix", () => {
       { id: "same", config },
       { id: "same", config: { ...config, artifactName: "other" } },
     ], []))).message).toContain("unique lowercase kebab");
-  });
+  }, ARTIFACT_IO_TEST_TIMEOUT_MS);
 
   test("publishes rejected and partially executed matrix terminal states", async () => {
     const { config, repositoryRoot } = await fixture();
@@ -1187,7 +1212,7 @@ describe("Direct Bombadil campaign matrix", () => {
         { campaignId: "secondary", status: "not-run" },
       ],
     });
-  });
+  }, ARTIFACT_IO_TEST_TIMEOUT_MS);
 
   test("converts a parent-publication interruption and releases child abort listeners", async () => {
     const { config, repositoryRoot } = await fixture();
@@ -1228,7 +1253,7 @@ describe("Direct Bombadil campaign matrix", () => {
       campaigns: [{ status: "passed" }, { status: "passed" }],
       status: "failed",
     });
-  });
+  }, ARTIFACT_IO_TEST_TIMEOUT_MS);
 
   test("removes a failed matrix publication staging leaf", async () => {
     const { config, repositoryRoot } = await fixture();
@@ -1642,13 +1667,13 @@ describe("Direct Bombadil trace attestation", () => {
       expectedRoute: "/surface",
       expectedScenario: "surface.ready",
       tracePath,
-    }))).message).toContain("nonempty trace.jsonl");
+    }))).message).toContain("not an openable regular file");
     await writeFile(tracePath, "", "utf8");
     expect((await rejection(attestDirectBombadilTrace({
       expectedRoute: "/surface",
       expectedScenario: "surface.ready",
       tracePath,
-    }))).message).toContain("nonempty trace.jsonl");
+    }))).message).toContain("not a bounded regular file");
   });
 });
 
@@ -2272,7 +2297,9 @@ describe("Direct Bombadil process lifecycle", () => {
       root: directory,
     }));
     expect(nestedFinal.name).toBe("BombadilArtifactPolicyError");
-    expect(nestedFinal.message).toContain("could not be opened safely");
+    expect(nestedFinal.message).toMatch(
+      /Bombadil artifact directory could not be (?:opened|inspected) safely:/u,
+    );
   });
 
   test("omits the upload coordination UUID from the native process environment", async () => {
@@ -3180,7 +3207,10 @@ describe("Direct Bombadil run lifecycle", () => {
       arguments: [],
       artifactRun: plan,
     }, runtime.overrides));
-    expect(error.message).toContain("inventory could not be proven safe");
+    expect(error.name).toBe("BombadilArtifactPolicyError");
+    expect(error.message).toContain(
+      "Bombadil artifact directory could not be inspected safely",
+    );
     expect(JSON.parse(await readFile(join(
       resolveDirectBombadilUploadLeaf(plan),
       "receipt.json",

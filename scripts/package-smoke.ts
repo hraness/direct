@@ -328,65 +328,17 @@ function typeScriptConfig(options: {
   }, null, 2)}\n`;
 }
 
-const repository = process.cwd();
-const packageManifest = await Bun.file(join(repository, "package.json")).json();
-if (
-  typeof packageManifest !== "object"
-  || packageManifest === null
-  || !("version" in packageManifest)
-  || typeof packageManifest.version !== "string"
-) {
-  throw new Error("package.json must declare a string version");
+type BombadilFeatureProfile = "artifact-delivery" | "baseline" | "matrix";
+
+function selectBombadilFeatureProfile(version: string): BombadilFeatureProfile {
+  if (Bun.semver.order(version, "0.7.8") >= 0) return "artifact-delivery";
+  if (Bun.semver.order(version, "0.7.6") >= 0) return "matrix";
+  return "baseline";
 }
-const work = await mkdtemp(join(tmpdir(), "hraness-package-smoke-"));
-try {
-  const packageInput = parsePackageInput(process.argv.slice(2), repository);
-  const suppliedArchive = packageInput.archive;
-  const archive = suppliedArchive === undefined
-    ? join(work, "package.tgz")
-    : suppliedArchive;
-  const consumer = join(work, "consumer");
-  const npmConsumer = join(work, "npm-consumer");
-  await mkdir(consumer);
-  if (suppliedArchive === undefined) {
-    await run([
-      process.execPath,
-      "pm",
-      "pack",
-      "--filename",
-      archive,
-      "--ignore-scripts",
-      "--quiet",
-    ], repository);
-  }
-  const inventory = await inspectPackageArtifact(archive);
-  if (packageInput.packJson !== undefined) {
-    await verifyExactNpmPackMetadata(
-      archive,
-      packageInput.packJson,
-      packageManifest.version,
-      inventory,
-    );
-  }
-  await writeFile(join(consumer, "package.json"), JSON.stringify({ private: true, type: "module" }));
-  await run([process.execPath, "add", archive, "--ignore-scripts"], consumer);
-  await verifyInstalledManifest(consumer, packageManifest.version);
-  await verifyPackagedSkill(consumer, packageManifest.version);
-  await run(["node", "--input-type=module", "-e", `await import(${JSON.stringify(packageName)})`], consumer);
-  for (const binName of binNames) {
-    await run([join(consumer, "node_modules", ".bin", binName), "--help"], consumer);
-  }
-  if (verificationPackages.length > 0) {
-    await run([process.execPath, "add", ...verificationPackages, "--ignore-scripts"], consumer);
-  }
-  await run([
-    "node",
-    "--input-type=module",
-    "-e",
-    `await Promise.all(${JSON.stringify(importSpecifiers)}.map((specifier) => import(specifier)))`,
-  ], consumer);
-  await writeFile(join(consumer, "runtime-index.ts"), typeImportSource(runtimeImportSpecifiers));
-  await writeFile(join(consumer, "tooling-index.ts"), `${typeImportSource(toolingTypeImportSpecifiers)}
+
+function bombadilToolingTypeChecks(profile: BombadilFeatureProfile): string {
+  if (profile === "artifact-delivery") {
+    return `
     type BombadilRunnerArity = Parameters<typeof surface1.runDirectBombadilFuzz>["length"];
     type BombadilRunnerInput = Parameters<typeof surface1.runDirectBombadilFuzz>[1];
     type BombadilMatrixInput = Parameters<typeof surface1.runDirectBombadilFuzzMatrix>[1];
@@ -420,84 +372,44 @@ try {
     // @ts-expect-error Public tooling does not expose dependency injection.
     const unsupportedBombadilRunnerArity: BombadilRunnerArity = 3;
     void [supportedBombadilMatrixInput, supportedBombadilRunnerArities, supportedBombadilRunnerInput, supportedBombadilTupleInput, unsupportedBombadilRunnerArity, unsupportedPrivateBombadilMatrixInput];
-  `);
-  await writeFile(join(consumer, "tsconfig.bundler.json"), typeScriptConfig({
-    include: "runtime-index.ts",
-    module: "Preserve",
-    moduleResolution: "Bundler",
-    tooling: false,
-  }));
-  await run([process.execPath, "x", "tsc", "-p", "./tsconfig.bundler.json"], consumer);
-  await writeFile(join(consumer, "tsconfig.nodenext.json"), typeScriptConfig({
-    include: "runtime-index.ts",
-    module: "NodeNext",
-    moduleResolution: "NodeNext",
-    tooling: false,
-  }));
-  await run([process.execPath, "x", "tsc", "-p", "./tsconfig.nodenext.json"], consumer);
-  await writeFile(join(consumer, "tsconfig.tooling-bundler.json"), typeScriptConfig({
-    include: "tooling-index.ts",
-    module: "Preserve",
-    moduleResolution: "Bundler",
-    tooling: true,
-  }));
-  await run([process.execPath, "x", "tsc", "-p", "./tsconfig.tooling-bundler.json"], consumer);
-  await writeFile(join(consumer, "tsconfig.tooling-nodenext.json"), typeScriptConfig({
-    include: "tooling-index.ts",
-    module: "NodeNext",
-    moduleResolution: "NodeNext",
-    tooling: true,
-  }));
-  await run([process.execPath, "x", "tsc", "-p", "./tsconfig.tooling-nodenext.json"], consumer);
-  await writeFile(join(consumer, "campaign-index.ts"), `
-    import {
-      createDirectBombadilActions,
-      createDirectBombadilProperties,
-    } from "@hraness/direct/tooling/bombadil-campaign";
-    void [createDirectBombadilActions, createDirectBombadilProperties];
-  `);
-  await writeFile(join(consumer, "tsconfig.campaign.json"), typeScriptConfig({
-    include: "campaign-index.ts",
-    module: "NodeNext",
-    moduleResolution: "NodeNext",
-    skipLibCheck: false,
-    tooling: false,
-  }));
-  await run([process.execPath, "x", "tsc", "-p", "./tsconfig.campaign.json"], consumer);
-  await writeFile(join(consumer, "installed-tooling-smoke.ts"), `
-    import type {
-      DirectBombadilProperties,
-    } from "@hraness/direct/tooling/bombadil-campaign";
-    import {
-      normalizeRootHttpOrigin,
-      readDirectBrowserContract,
-    } from "@hraness/direct/tooling/browser-verification";
-    import {
-      parseDirectBombadilArtifactReceipt,
-      parseDirectBombadilMatrixReceipt,
-      parseDirectBombadilMatrixSummary,
-      parseDirectBombadilSanitizedRunSummary,
-      resolveDirectBombadilUploadLeaf,
-      runDirectBombadilFuzz,
-    } from "@hraness/direct/tooling/bombadil";
-    import { findForbiddenMarkers } from "@hraness/direct/tooling/bundle-boundary";
+  `;
+  }
+  const matrixChecks = profile === "matrix"
+    ? `
+    type BombadilMatrixInput = Parameters<typeof surface1.runDirectBombadilFuzzMatrix>[1];
+    const supportedBombadilMatrixInput: BombadilMatrixInput = supportedBombadilArguments;
+    void supportedBombadilMatrixInput;
+  `
+    : "";
+  return `
+    type BombadilRunnerArity = Parameters<typeof surface1.runDirectBombadilFuzz>["length"];
+    type BombadilRunnerInput = Parameters<typeof surface1.runDirectBombadilFuzz>[1];
+    const supportedBombadilRunnerArities: readonly BombadilRunnerArity[] = [1, 2];
+    const supportedBombadilArguments = ["--time-limit=12s"] as const;
+    const supportedBombadilRunnerInput: BombadilRunnerInput = supportedBombadilArguments;
+    // @ts-expect-error Public tooling does not expose dependency injection.
+    const unsupportedBombadilRunnerArity: BombadilRunnerArity = 3;
+    void [supportedBombadilRunnerArities, supportedBombadilRunnerInput, unsupportedBombadilRunnerArity];
+  ${matrixChecks}`;
+}
 
-    if (normalizeRootHttpOrigin("https://example.test/") !== "https://example.test") {
-      throw new Error("browser verification tooling did not normalize the origin");
-    }
-    const found = findForbiddenMarkers(
-      Buffer.from("prefix\\0direct.fixture/v1\\0suffix"),
-      ["direct.fixture/v1"],
-    );
-    if (found.length !== 1 || found[0] !== "direct.fixture/v1") {
-      throw new Error("bundle-boundary tooling did not find the marker");
-    }
-    if (typeof readDirectBrowserContract !== "function") {
-      throw new Error("the package-bound Direct browser reader is missing");
-    }
-    if (typeof runDirectBombadilFuzz !== "function") {
-      throw new Error("Bombadil host tooling runner is missing");
-    }
+function bombadilRuntimeImports(profile: BombadilFeatureProfile): string {
+  const importedNames = profile === "artifact-delivery"
+    ? [
+        "parseDirectBombadilArtifactReceipt",
+        "parseDirectBombadilMatrixReceipt",
+        "parseDirectBombadilMatrixSummary",
+        "parseDirectBombadilSanitizedRunSummary",
+        "resolveDirectBombadilUploadLeaf",
+        "runDirectBombadilFuzz",
+      ]
+    : ["runDirectBombadilFuzz"];
+  return `import {\n${importedNames.map((name) => `      ${name},`).join("\n")}\n    } from "@hraness/direct/tooling/bombadil";`;
+}
+
+function bombadilArtifactDeliverySmoke(profile: BombadilFeatureProfile): string {
+  if (profile !== "artifact-delivery") return "";
+  return `
     const sha256 = "a".repeat(64);
     const policy = {
       maxDepth: 32,
@@ -587,6 +499,143 @@ try {
     if (uploadLeaf !== "/absolute/repository/artifacts/direct-bombadil-upload/" + runId) {
       throw new Error("Bombadil upload-leaf resolver returned an unexpected path");
     }
+  `;
+}
+
+const repository = process.cwd();
+const packageManifest = await Bun.file(join(repository, "package.json")).json();
+if (
+  typeof packageManifest !== "object"
+  || packageManifest === null
+  || !("version" in packageManifest)
+  || typeof packageManifest.version !== "string"
+) {
+  throw new Error("package.json must declare a string version");
+}
+const bombadilFeatureProfile = selectBombadilFeatureProfile(packageManifest.version);
+const work = await mkdtemp(join(tmpdir(), "hraness-package-smoke-"));
+try {
+  const packageInput = parsePackageInput(process.argv.slice(2), repository);
+  const suppliedArchive = packageInput.archive;
+  const archive = suppliedArchive === undefined
+    ? join(work, "package.tgz")
+    : suppliedArchive;
+  const consumer = join(work, "consumer");
+  const npmConsumer = join(work, "npm-consumer");
+  await mkdir(consumer);
+  if (suppliedArchive === undefined) {
+    await run([
+      process.execPath,
+      "pm",
+      "pack",
+      "--filename",
+      archive,
+      "--ignore-scripts",
+      "--quiet",
+    ], repository);
+  }
+  const inventory = await inspectPackageArtifact(archive);
+  if (packageInput.packJson !== undefined) {
+    await verifyExactNpmPackMetadata(
+      archive,
+      packageInput.packJson,
+      packageManifest.version,
+      inventory,
+    );
+  }
+  await writeFile(join(consumer, "package.json"), JSON.stringify({ private: true, type: "module" }));
+  await run([process.execPath, "add", archive, "--ignore-scripts"], consumer);
+  await verifyInstalledManifest(consumer, packageManifest.version);
+  await verifyPackagedSkill(consumer, packageManifest.version);
+  await run(["node", "--input-type=module", "-e", `await import(${JSON.stringify(packageName)})`], consumer);
+  for (const binName of binNames) {
+    await run([join(consumer, "node_modules", ".bin", binName), "--help"], consumer);
+  }
+  if (verificationPackages.length > 0) {
+    await run([process.execPath, "add", ...verificationPackages, "--ignore-scripts"], consumer);
+  }
+  await run([
+    "node",
+    "--input-type=module",
+    "-e",
+    `await Promise.all(${JSON.stringify(importSpecifiers)}.map((specifier) => import(specifier)))`,
+  ], consumer);
+  await writeFile(join(consumer, "runtime-index.ts"), typeImportSource(runtimeImportSpecifiers));
+  await writeFile(
+    join(consumer, "tooling-index.ts"),
+    `${typeImportSource(toolingTypeImportSpecifiers)}${bombadilToolingTypeChecks(bombadilFeatureProfile)}`,
+  );
+  await writeFile(join(consumer, "tsconfig.bundler.json"), typeScriptConfig({
+    include: "runtime-index.ts",
+    module: "Preserve",
+    moduleResolution: "Bundler",
+    tooling: false,
+  }));
+  await run([process.execPath, "x", "tsc", "-p", "./tsconfig.bundler.json"], consumer);
+  await writeFile(join(consumer, "tsconfig.nodenext.json"), typeScriptConfig({
+    include: "runtime-index.ts",
+    module: "NodeNext",
+    moduleResolution: "NodeNext",
+    tooling: false,
+  }));
+  await run([process.execPath, "x", "tsc", "-p", "./tsconfig.nodenext.json"], consumer);
+  await writeFile(join(consumer, "tsconfig.tooling-bundler.json"), typeScriptConfig({
+    include: "tooling-index.ts",
+    module: "Preserve",
+    moduleResolution: "Bundler",
+    tooling: true,
+  }));
+  await run([process.execPath, "x", "tsc", "-p", "./tsconfig.tooling-bundler.json"], consumer);
+  await writeFile(join(consumer, "tsconfig.tooling-nodenext.json"), typeScriptConfig({
+    include: "tooling-index.ts",
+    module: "NodeNext",
+    moduleResolution: "NodeNext",
+    tooling: true,
+  }));
+  await run([process.execPath, "x", "tsc", "-p", "./tsconfig.tooling-nodenext.json"], consumer);
+  await writeFile(join(consumer, "campaign-index.ts"), `
+    import {
+      createDirectBombadilActions,
+      createDirectBombadilProperties,
+    } from "@hraness/direct/tooling/bombadil-campaign";
+    void [createDirectBombadilActions, createDirectBombadilProperties];
+  `);
+  await writeFile(join(consumer, "tsconfig.campaign.json"), typeScriptConfig({
+    include: "campaign-index.ts",
+    module: "NodeNext",
+    moduleResolution: "NodeNext",
+    skipLibCheck: false,
+    tooling: false,
+  }));
+  await run([process.execPath, "x", "tsc", "-p", "./tsconfig.campaign.json"], consumer);
+  await writeFile(join(consumer, "installed-tooling-smoke.ts"), `
+    import type {
+      DirectBombadilProperties,
+    } from "@hraness/direct/tooling/bombadil-campaign";
+    import {
+      normalizeRootHttpOrigin,
+      readDirectBrowserContract,
+    } from "@hraness/direct/tooling/browser-verification";
+    ${bombadilRuntimeImports(bombadilFeatureProfile)}
+    import { findForbiddenMarkers } from "@hraness/direct/tooling/bundle-boundary";
+
+    if (normalizeRootHttpOrigin("https://example.test/") !== "https://example.test") {
+      throw new Error("browser verification tooling did not normalize the origin");
+    }
+    const found = findForbiddenMarkers(
+      Buffer.from("prefix\\0direct.fixture/v1\\0suffix"),
+      ["direct.fixture/v1"],
+    );
+    if (found.length !== 1 || found[0] !== "direct.fixture/v1") {
+      throw new Error("bundle-boundary tooling did not find the marker");
+    }
+    if (typeof readDirectBrowserContract !== "function") {
+      throw new Error("the package-bound Direct browser reader is missing");
+    }
+    if (typeof runDirectBombadilFuzz !== "function") {
+      throw new Error("Bombadil host tooling runner is missing");
+    }
+    ${bombadilArtifactDeliverySmoke(bombadilFeatureProfile)}
     type CampaignProperties = DirectBombadilProperties;
     void (undefined as unknown as CampaignProperties);
   `);
