@@ -954,18 +954,20 @@ function normalizeFuzzRunOptions(
       artifactRun: null,
     };
   }
-  if (!isRecord(input)) throw new Error("Bombadil run options must be an object or argument array");
-  const keys = Object.keys(input);
+  const options: DirectBombadilFuzzRunOptions | DirectBombadilMatrixRunOptions = input;
+  const artifactRun = options.artifactRun;
+  if (!isRecord(options)) throw new Error("Bombadil run options must be an object or argument array");
+  const keys = Object.keys(options);
   if (keys.some((key) => key !== "arguments" && key !== "artifactRun")) {
     throw new Error("Bombadil run options contain an unknown field");
   }
-  const arguments_ = input.arguments ?? [];
+  const arguments_ = options.arguments ?? [];
   if (!isReadonlyStringArray(arguments_)) {
     throw new Error("Bombadil run options arguments must be a string array");
   }
   return {
     arguments: Object.freeze([...arguments_]),
-    artifactRun: input.artifactRun ?? null,
+    artifactRun: artifactRun ?? null,
   };
 }
 
@@ -2716,7 +2718,8 @@ async function publishMatrixUpload(options: {
   readonly omittedCampaignCount?: number;
   readonly session: AtomicArtifactUploadSession;
 }): Promise<{ readonly failure: unknown }> {
-  if (options.session.mode !== "public-summary") {
+  const uploadMode = options.session.mode;
+  if (uploadMode !== "public-summary") {
     throw new BombadilArtifactPolicyError("Bombadil matrix upload session must be public-summary");
   }
   let failure = options.failure;
@@ -2748,7 +2751,7 @@ async function publishMatrixUpload(options: {
       schema: MATRIX_RECEIPT_SCHEMA,
       completedAt: options.completedAt.toISOString(),
       failureCode,
-      mode: options.session.mode,
+      mode: uploadMode,
       runId: options.session.runId,
       status,
       omittedCampaignCount: options.omittedCampaignCount ?? 0,
@@ -4529,7 +4532,10 @@ export async function runBombadilNativeProcess(
   invocation: DirectBombadilInvocation,
 ): Promise<BombadilProcessResult> {
   const artifactPolicy = validateArtifactPolicy(invocation.artifactPolicy);
-  const childEnvironment = { ...process.env, NO_COLOR: "1" };
+  const childEnvironment: Record<string, string | undefined> = {
+    ...process.env,
+    NO_COLOR: "1",
+  };
   delete childEnvironment[ARTIFACT_COORDINATION_ENVIRONMENT];
   const process_ = Bun.spawn([...invocation.command], {
     cwd: invocation.cwd,
@@ -4619,14 +4625,19 @@ export async function runBombadilNativeProcess(
       stderrCapture.stop();
     }
     const [stdout, stderr] = await outputPromise;
-    const artifactPolicyFailure = outcome.kind === "artifact-policy"
-      ? outcome.error
-      : finalMonitorOutcome.kind === "artifact-policy"
+    if (outcome.kind === "artifact-policy") {
+      throw outcome.error instanceof BombadilArtifactPolicyError
+        ? outcome.error
+        : new BombadilArtifactPolicyError("Bombadil artifact policy was violated");
+    }
+    if (finalMonitorOutcome.kind === "artifact-policy") {
+      throw finalMonitorOutcome.error instanceof BombadilArtifactPolicyError
         ? finalMonitorOutcome.error
-        : finalArtifactFailure;
-    if (artifactPolicyFailure !== null) {
-      throw artifactPolicyFailure instanceof BombadilArtifactPolicyError
-        ? artifactPolicyFailure
+        : new BombadilArtifactPolicyError("Bombadil artifact policy was violated");
+    }
+    if (finalArtifactFailure !== null) {
+      throw finalArtifactFailure instanceof BombadilArtifactPolicyError
+        ? finalArtifactFailure
         : new BombadilArtifactPolicyError("Bombadil artifact policy was violated");
     }
     return {
@@ -4991,7 +5002,7 @@ export async function runDirectBombadilFuzzMatrix(
         receipt: null,
         status: "rejected",
       }));
-      await publishFailureAndThrow(error, async () => {
+      return await publishFailureAndThrow(error, async () => {
         await publishMatrixUpload({
           abortSignal: matrixAbortController.signal,
           beforeCommitCheck: dependencies.beforeArtifactCommit,
@@ -5227,7 +5238,7 @@ async function runDirectBombadilFuzzInternal(
         return validateArtifactPolicy(undefined);
       }
     })();
-    await publishFailureAndThrow(error, async () => {
+    return await publishFailureAndThrow(error, async () => {
       await publishRunUpload({
         abortSignal: abortController.signal,
         artifactName: isBoundedArtifactIdentifier(config.artifactName)
@@ -5264,7 +5275,7 @@ async function runDirectBombadilFuzzInternal(
     });
     throwIfBombadilRunAborted(abortController.signal);
   } catch (error) {
-    await publishFailureAndThrow(error, async () => {
+    return await publishFailureAndThrow(error, async () => {
       await publishRunUpload({
         abortSignal: abortController.signal,
         artifactName: validated.artifactName,

@@ -938,6 +938,7 @@ describe("Direct Bombadil campaign matrix", () => {
       results: [{ campaignId: "secondary" }],
     });
     expect(selectedRuntime.calls.filter((call) => call === "run-bombadil")).toHaveLength(1);
+    if (selected.kind !== "matrix") throw new Error("Expected a matrix result");
     expect(JSON.parse(await readFile(selected.receiptPath, "utf8"))).toMatchObject({
       campaigns: [
         { campaignId: "primary", receipt: null, status: "not-selected" },
