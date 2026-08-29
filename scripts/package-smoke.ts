@@ -388,10 +388,38 @@ try {
   await writeFile(join(consumer, "runtime-index.ts"), typeImportSource(runtimeImportSpecifiers));
   await writeFile(join(consumer, "tooling-index.ts"), `${typeImportSource(toolingTypeImportSpecifiers)}
     type BombadilRunnerArity = Parameters<typeof surface1.runDirectBombadilFuzz>["length"];
+    type BombadilRunnerInput = Parameters<typeof surface1.runDirectBombadilFuzz>[1];
+    type BombadilMatrixInput = Parameters<typeof surface1.runDirectBombadilFuzzMatrix>[1];
     const supportedBombadilRunnerArities: readonly BombadilRunnerArity[] = [1, 2];
+    const supportedBombadilArguments = ["--time-limit=12s"] as const;
+    const supportedBombadilRunnerInput: BombadilRunnerInput = {
+      arguments: supportedBombadilArguments,
+      artifactRun: {
+        repositoryRoot: "/absolute/repository",
+        runId: "00000000-0000-4000-8000-000000000001",
+        uploadMode: "public-summary",
+      },
+    };
+    const supportedBombadilTupleInput: BombadilRunnerInput = supportedBombadilArguments;
+    const supportedBombadilMatrixInput: BombadilMatrixInput = {
+      arguments: supportedBombadilArguments,
+      artifactRun: {
+        repositoryRoot: "/absolute/repository",
+        runId: "00000000-0000-4000-8000-000000000002",
+        uploadMode: "public-summary",
+      },
+    };
+    const unsupportedPrivateBombadilMatrixInput: BombadilMatrixInput = {
+      artifactRun: {
+        repositoryRoot: "/absolute/repository",
+        runId: "00000000-0000-4000-8000-000000000003",
+        // @ts-expect-error Packaged matrix uploads are public-summary only.
+        uploadMode: "private-vetted",
+      },
+    };
     // @ts-expect-error Public tooling does not expose dependency injection.
     const unsupportedBombadilRunnerArity: BombadilRunnerArity = 3;
-    void [supportedBombadilRunnerArities, unsupportedBombadilRunnerArity];
+    void [supportedBombadilMatrixInput, supportedBombadilRunnerArities, supportedBombadilRunnerInput, supportedBombadilTupleInput, unsupportedBombadilRunnerArity, unsupportedPrivateBombadilMatrixInput];
   `);
   await writeFile(join(consumer, "tsconfig.bundler.json"), typeScriptConfig({
     include: "runtime-index.ts",
@@ -445,6 +473,11 @@ try {
       readDirectBrowserContract,
     } from "@hraness/direct/tooling/browser-verification";
     import {
+      parseDirectBombadilArtifactReceipt,
+      parseDirectBombadilMatrixReceipt,
+      parseDirectBombadilMatrixSummary,
+      parseDirectBombadilSanitizedRunSummary,
+      resolveDirectBombadilUploadLeaf,
       runDirectBombadilFuzz,
     } from "@hraness/direct/tooling/bombadil";
     import { findForbiddenMarkers } from "@hraness/direct/tooling/bundle-boundary";
@@ -464,6 +497,95 @@ try {
     }
     if (typeof runDirectBombadilFuzz !== "function") {
       throw new Error("Bombadil host tooling runner is missing");
+    }
+    const sha256 = "a".repeat(64);
+    const policy = {
+      maxDepth: 32,
+      maxEntries: 4096,
+      maxFileBytes: 67108864,
+      maxFiles: 2048,
+      maxPathBytes: 4096,
+      maxTotalBytes: 134217728,
+    };
+    const runId = "00000000-0000-4000-8000-000000000001";
+    const receipt = {
+      schema: "direct.bombadil-artifact-receipt/v1",
+      completedAt: "2026-08-29T00:00:00.000Z",
+      diagnosticsRetained: false,
+      failureCode: null,
+      inventory: { entryCount: 1, fileCount: 1, inventorySha256: sha256, totalBytes: 1 },
+      mode: "public-summary",
+      policy,
+      runId,
+      status: "passed",
+    };
+    const summary = {
+      schema: "direct.bombadil-upload-summary/v1",
+      artifactName: "package-smoke",
+      attestation: { invalidObservationCount: 0, observationCount: 1, validObservationCount: 1 },
+      exploration: {
+        actionCount: 0,
+        nonWaitActionCount: 0,
+        policySatisfied: true,
+        traceBytes: 1,
+        traceLineCount: 1,
+        traceSha256: sha256,
+      },
+      failureCode: null,
+      scenario: "package.ready",
+      status: "passed",
+    };
+    const matrixReceipt = {
+      schema: "direct.bombadil-matrix-receipt/v1",
+      campaigns: [{
+        campaignId: "package-smoke",
+        index: 0,
+        receipt: "campaigns/package-smoke/receipt.json",
+        status: "passed",
+      }],
+      completedAt: "2026-08-29T00:00:00.000Z",
+      failureCode: null,
+      mode: "public-summary",
+      omittedCampaignCount: 0,
+      runId,
+      status: "passed",
+    };
+    const matrixSummary = {
+      schema: "direct.bombadil-matrix-summary/v1",
+      campaigns: {
+        failed: 0,
+        notRun: 0,
+        notSelected: 0,
+        omitted: 0,
+        passed: 1,
+        rejected: 0,
+        total: 1,
+      },
+      failureCode: null,
+      status: "passed",
+    };
+    if (
+      !parseDirectBombadilArtifactReceipt(receipt).ok
+      || !parseDirectBombadilSanitizedRunSummary(summary).ok
+      || !parseDirectBombadilMatrixReceipt(matrixReceipt).ok
+      || !parseDirectBombadilMatrixSummary(matrixSummary).ok
+    ) {
+      throw new Error("Bombadil package evidence parsers rejected exact valid fixtures");
+    }
+    if (
+      parseDirectBombadilArtifactReceipt({ ...receipt, extra: true }).ok
+      || parseDirectBombadilMatrixReceipt({ ...matrixReceipt, schema: "wrong" }).ok
+      || parseDirectBombadilSanitizedRunSummary({ ...summary, failureCode: "unknown" }).ok
+    ) {
+      throw new Error("Bombadil package evidence parsers accepted malformed fixtures");
+    }
+    const uploadLeaf = resolveDirectBombadilUploadLeaf({
+      repositoryRoot: "/absolute/repository",
+      runId,
+      uploadMode: "public-summary",
+    });
+    if (uploadLeaf !== "/absolute/repository/artifacts/direct-bombadil-upload/" + runId) {
+      throw new Error("Bombadil upload-leaf resolver returned an unexpected path");
     }
     type CampaignProperties = DirectBombadilProperties;
     void (undefined as unknown as CampaignProperties);
@@ -501,6 +623,10 @@ try {
         "browser-verification",
         "@antithesishq/bombadil",
         "direct.bombadil-run/v1",
+        "direct.bombadil-artifact-receipt/v1",
+        "direct.bombadil-upload-summary/v1",
+        "direct.bombadil-matrix-receipt/v1",
+        "direct.bombadil-matrix-summary/v1",
         "bundle-boundary",
         "node:crypto",
         "node:fs",

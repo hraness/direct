@@ -243,6 +243,7 @@ export function createDirectBrowserContractReader<
 export interface ManagedVerificationServer {
   readonly exited: Promise<unknown>;
   readonly exitCode: () => number | null;
+  readonly killDescendants?: (timeoutMs: number) => void | Promise<void>;
   readonly output: Promise<string>;
   readonly terminate: () => void;
   readonly kill: () => void;
@@ -680,15 +681,44 @@ async function collectStream(stream: ReadableStream<Uint8Array>, logLimit: numbe
   }
 }
 
+function verificationProcessGroupExists(processId: number): boolean {
+  try {
+    process.kill(-processId, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+async function waitForVerificationProcessGroupExit(
+  processId: number,
+  timeoutMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (verificationProcessGroupExists(processId)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`verification server process group ${String(processId)} survived cleanup`);
+    }
+    await Bun.sleep(Math.min(25, Math.max(1, deadline - Date.now())));
+  }
+}
+
 export function spawnVerificationServer(options: {
   readonly command: readonly string[];
   readonly cwd: string;
+  readonly detachedProcessGroup?: boolean;
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly logLimit?: number;
+  readonly omitEnvironment?: readonly string[];
 }): ManagedVerificationServer {
+  const detachedProcessGroup = options.detachedProcessGroup ?? false;
+  const environment = { ...process.env, ...options.env };
+  for (const name of options.omitEnvironment ?? []) delete environment[name];
   const process_ = Bun.spawn([...options.command], {
     cwd: options.cwd,
-    env: { ...process.env, ...options.env },
+    detached: detachedProcessGroup,
+    env: environment,
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
@@ -699,12 +729,33 @@ export function spawnVerificationServer(options: {
     collectStream(process_.stderr, logLimit),
   ]).then(([stdout, stderr]) => tail(`${stdout}\n${stderr}`.trim(), logLimit));
 
+  const signal = (value: "SIGKILL" | "SIGTERM"): void => {
+    if (detachedProcessGroup) {
+      try {
+        process.kill(-process_.pid, value);
+        return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+        // The group may already be gone; fall back to the leader only while it lives.
+      }
+    }
+    if (process_.exitCode === null) process_.kill(value);
+  };
+
   return {
     exited: process_.exited,
     exitCode: () => process_.exitCode,
+    ...(detachedProcessGroup
+      ? {
+          killDescendants: async (timeoutMs: number): Promise<void> => {
+            signal("SIGKILL");
+            await waitForVerificationProcessGroupExit(process_.pid, timeoutMs);
+          },
+        }
+      : {}),
     output,
-    terminate: () => process_.kill("SIGTERM"),
-    kill: () => process_.kill("SIGKILL"),
+    terminate: () => signal("SIGTERM"),
+    kill: () => signal("SIGKILL"),
   };
 }
 
@@ -797,6 +848,9 @@ async function stopVerificationServerWithOutput(
       );
     }
   }
+  // A detached leader can exit before descendants close inherited output pipes.
+  // Reap only a process group that the verifier explicitly owns.
+  await server.killDescendants?.(stopTimeoutMs);
   const output = await settleWithin(server.output, stopTimeoutMs);
   if (!output.settled) {
     throw new Error(
@@ -960,7 +1014,7 @@ export async function writeJsonAtomically(path: string, value: unknown): Promise
     await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
     await rename(temporaryPath, path);
   } catch (error) {
-    await rm(temporaryPath, { force: true });
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
     throw error;
   }
 }

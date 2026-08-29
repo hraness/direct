@@ -1,9 +1,18 @@
-import { createReadStream } from "node:fs";
-import { readFile, realpath, stat, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { constants as fileSystemConstants, type BigIntStats } from "node:fs";
+import {
+  lstat,
+  mkdir,
+  open,
+  opendir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+} from "node:fs/promises";
+import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import process from "node:process";
-import { createInterface } from "node:readline";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
   parseDirectProbeSnapshot,
@@ -13,11 +22,12 @@ import {
   FIXTURE_QUERY_KEY,
   SCENARIO_QUERY_KEY,
 } from "@hraness/direct";
+import { parseJsonValue } from "../core/json.js";
+import { err, ok, type Result } from "../core/result.js";
 
 import {
   acquireVerificationServer,
   canAutomaticallyStartLocalServer,
-  createArtifactRun,
   normalizeRootHttpOrigin,
   renderUnknown,
   spawnVerificationServer,
@@ -36,8 +46,111 @@ const DEFAULT_STARTUP_TIMEOUT_MS = 60_000;
 const MAX_STARTUP_TIMEOUT_MS = 120_000;
 const LOG_LIMIT = 24_000;
 const ARTIFACT_SCHEMA = "direct.bombadil-run/v1";
+const ARTIFACT_RECEIPT_SCHEMA = "direct.bombadil-artifact-receipt/v1";
+const ARTIFACT_SUMMARY_SCHEMA = "direct.bombadil-upload-summary/v1";
+const MATRIX_RECEIPT_SCHEMA = "direct.bombadil-matrix-receipt/v1";
+const MATRIX_SUMMARY_SCHEMA = "direct.bombadil-matrix-summary/v1";
+const ARTIFACT_FAILURE_CODES = new Set<DirectBombadilArtifactFailureCode>([
+  "artifact-policy",
+  "configuration-rejected",
+  "exploration-policy",
+  "interrupted",
+  "persistence",
+  "process",
+  "server",
+  "trace-attestation",
+  "writer-settlement",
+  "unknown",
+]);
+const ARTIFACT_RECEIPT_KEYS = new Set([
+  "completedAt",
+  "diagnosticsRetained",
+  "failureCode",
+  "inventory",
+  "mode",
+  "policy",
+  "runId",
+  "schema",
+  "status",
+]);
+const ARTIFACT_RECEIPT_INVENTORY_KEYS = new Set([
+  "entryCount",
+  "fileCount",
+  "inventorySha256",
+  "totalBytes",
+]);
+const ARTIFACT_POLICY_RECEIPT_KEYS = new Set([
+  "maxDepth",
+  "maxEntries",
+  "maxFileBytes",
+  "maxFiles",
+  "maxPathBytes",
+  "maxTotalBytes",
+]);
+const RUN_SUMMARY_KEYS = new Set([
+  "artifactName",
+  "attestation",
+  "exploration",
+  "failureCode",
+  "scenario",
+  "schema",
+  "status",
+]);
+const RUN_SUMMARY_ATTESTATION_KEYS = new Set([
+  "invalidObservationCount",
+  "observationCount",
+  "validObservationCount",
+]);
+const RUN_SUMMARY_EXPLORATION_KEYS = new Set([
+  "actionCount",
+  "nonWaitActionCount",
+  "policySatisfied",
+  "traceBytes",
+  "traceLineCount",
+  "traceSha256",
+]);
+const MATRIX_RECEIPT_KEYS = new Set([
+  "campaigns",
+  "completedAt",
+  "failureCode",
+  "mode",
+  "omittedCampaignCount",
+  "runId",
+  "schema",
+  "status",
+]);
+const MATRIX_CAMPAIGN_RECEIPT_KEYS = new Set([
+  "campaignId",
+  "index",
+  "receipt",
+  "status",
+]);
+const MATRIX_SUMMARY_KEYS = new Set([
+  "campaigns",
+  "failureCode",
+  "schema",
+  "status",
+]);
+const MATRIX_SUMMARY_CAMPAIGNS_KEYS = new Set([
+  "failed",
+  "notRun",
+  "notSelected",
+  "omitted",
+  "passed",
+  "rejected",
+  "total",
+]);
+const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
+const ARTIFACT_EVIDENCE_JSON_LIMITS = Object.freeze({
+  maxDepth: 8,
+  maxNodes: 2_048,
+  maxStringBytes: 64 * 1024,
+});
 const SCENARIO_PATTERN = /^[a-z][a-z0-9]*(?:[._/-][a-z0-9]+)*$/u;
 const ARTIFACT_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+const MAX_ARTIFACT_IDENTIFIER_LENGTH = 80;
+const MAX_MATRIX_CAMPAIGNS = 32;
+const ARTIFACT_COORDINATION_ENVIRONMENT = "DIRECT_BOMBADIL_RUN_ID";
 const ENVIRONMENT_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const QUERY_PARAMETER_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_.-]*$/u;
 const PROTOTYPE_PROPERTY_NAMES = new Set(["__proto__", "constructor", "prototype"]);
@@ -56,6 +169,31 @@ const REPLAY_WALL_CLOCK_TIMEOUT_MS = MAX_TIME_LIMIT_SECONDS * 1_000 + RANDOM_RUN
 const PROCESS_TERMINATION_GRACE_MS = 5_000;
 const MIN_PROCESS_OUTPUT_DRAIN_MS = 500;
 const SERVER_OUTPUT_TIMEOUT_MS = 3_000;
+const ARTIFACT_MONITOR_INTERVAL_MS = 100;
+const DEFAULT_ARTIFACT_MAX_ENTRIES = 4_096;
+const DEFAULT_ARTIFACT_MAX_FILES = 2_048;
+const DEFAULT_ARTIFACT_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
+const DEFAULT_ARTIFACT_MAX_FILE_BYTES = 64 * 1024 * 1024;
+const DEFAULT_ARTIFACT_MAX_DEPTH = 32;
+const DEFAULT_ARTIFACT_MAX_PATH_BYTES = 4_096;
+const MAX_ARTIFACT_ENTRIES = 16_384;
+const MAX_ARTIFACT_FILES = 8_192;
+const MAX_ARTIFACT_TOTAL_BYTES = 256 * 1024 * 1024;
+const MAX_ARTIFACT_FILE_BYTES = 64 * 1024 * 1024;
+const MAX_ARTIFACT_DEPTH = 64;
+const MAX_ARTIFACT_PATH_BYTES = 4_096;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const ARTIFACT_PATH_PART_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
+const PRIVATE_DIAGNOSTIC_EXTENSIONS = new Set([
+  ".jpeg",
+  ".jpg",
+  ".json",
+  ".jsonl",
+  ".log",
+  ".png",
+  ".txt",
+  ".webp",
+]);
 const DIRECT_BROWSER_BRIDGE_SCHEMA = "direct.browser-bridge/v2";
 const TRACE_LINE_KEYS = new Set(["action", "snapshots", "state", "timestamp", "violations"]);
 const TRACE_SNAPSHOT_KEYS = new Set(["index", "name", "time", "value"]);
@@ -171,6 +309,138 @@ export interface DirectBombadilServerConfig {
   readonly startupTimeoutMs?: number;
 }
 
+export interface DirectBombadilArtifactPolicy {
+  readonly maxDepth?: number;
+  readonly maxEntries?: number;
+  readonly maxFileBytes?: number;
+  readonly maxFiles?: number;
+  readonly maxPathBytes?: number;
+  readonly maxTotalBytes?: number;
+}
+
+export type DirectBombadilUploadMode = "private-vetted" | "public-summary";
+
+export interface DirectBombadilArtifactRunPlan {
+  readonly repositoryRoot: string;
+  readonly runId: string;
+  readonly uploadMode?: DirectBombadilUploadMode;
+}
+
+export interface DirectBombadilFuzzRunOptions {
+  readonly arguments?: readonly string[];
+  readonly artifactRun?: DirectBombadilArtifactRunPlan;
+}
+
+export type DirectBombadilFuzzRunInput =
+  | readonly string[]
+  | DirectBombadilFuzzRunOptions;
+
+export interface DirectBombadilMatrixRunOptions {
+  readonly arguments?: readonly string[];
+  readonly artifactRun?: Omit<DirectBombadilArtifactRunPlan, "uploadMode"> & {
+    readonly uploadMode?: "public-summary";
+  };
+}
+
+export type DirectBombadilMatrixRunInput =
+  | readonly string[]
+  | DirectBombadilMatrixRunOptions;
+
+export type DirectBombadilArtifactFailureCode =
+  | "artifact-policy"
+  | "configuration-rejected"
+  | "exploration-policy"
+  | "interrupted"
+  | "persistence"
+  | "process"
+  | "server"
+  | "trace-attestation"
+  | "writer-settlement"
+  | "unknown";
+
+export interface DirectBombadilArtifactReceipt {
+  readonly schema: typeof ARTIFACT_RECEIPT_SCHEMA;
+  readonly completedAt: string;
+  readonly diagnosticsRetained: boolean;
+  readonly failureCode: DirectBombadilArtifactFailureCode | null;
+  readonly inventory: {
+    readonly entryCount: number;
+    readonly fileCount: number;
+    readonly inventorySha256: string | null;
+    readonly totalBytes: number;
+  };
+  readonly mode: DirectBombadilUploadMode;
+  readonly policy: Required<DirectBombadilArtifactPolicy>;
+  readonly runId: string;
+  readonly status: "failed" | "passed" | "rejected";
+}
+
+export interface DirectBombadilArtifactParseError {
+  readonly code: "invalid-bombadil-artifact-evidence";
+  readonly message: string;
+}
+
+export interface DirectBombadilSanitizedRunSummary {
+  readonly schema: typeof ARTIFACT_SUMMARY_SCHEMA;
+  readonly artifactName: string;
+  readonly attestation: null | {
+    readonly invalidObservationCount: number;
+    readonly observationCount: number;
+    readonly validObservationCount: number;
+  };
+  readonly exploration: null | {
+    readonly actionCount: number;
+    readonly nonWaitActionCount: number;
+    readonly policySatisfied: boolean;
+    readonly traceBytes: number;
+    readonly traceLineCount: number;
+    readonly traceSha256: string;
+  };
+  readonly failureCode: DirectBombadilArtifactFailureCode | null;
+  readonly scenario: string;
+  readonly status: "failed" | "passed" | "rejected";
+}
+
+export type DirectBombadilMatrixCampaignStatus =
+  | "failed"
+  | "not-run"
+  | "not-selected"
+  | "passed"
+  | "rejected";
+
+export interface DirectBombadilMatrixCampaignReceiptEntry {
+  readonly campaignId: string | null;
+  readonly index: number;
+  readonly receipt: string | null;
+  readonly status: DirectBombadilMatrixCampaignStatus;
+}
+
+export interface DirectBombadilMatrixReceipt {
+  readonly schema: typeof MATRIX_RECEIPT_SCHEMA;
+  readonly campaigns: readonly DirectBombadilMatrixCampaignReceiptEntry[];
+  readonly completedAt: string;
+  readonly failureCode: DirectBombadilArtifactFailureCode | null;
+  readonly mode: "public-summary";
+  readonly omittedCampaignCount: number;
+  readonly runId: string;
+  readonly status: "failed" | "passed";
+}
+
+export interface DirectBombadilMatrixSummary {
+  readonly schema: typeof MATRIX_SUMMARY_SCHEMA;
+  readonly campaigns: {
+    readonly failed: number;
+    readonly notRun: number;
+    readonly notSelected: number;
+    readonly omitted: number;
+    readonly passed: number;
+    readonly rejected: number;
+    readonly total: number;
+  };
+  readonly failureCode: DirectBombadilArtifactFailureCode | null;
+  readonly status: "failed" | "passed";
+}
+
 export type DirectBombadilActionKind = (typeof ACTION_KINDS)[number];
 
 export interface DirectBombadilViewportConfig {
@@ -254,6 +524,7 @@ export interface DirectBombadilExplorationSummary {
 }
 
 export interface DirectBombadilFuzzConfig {
+  readonly artifactPolicy?: DirectBombadilArtifactPolicy;
   readonly artifactName: string;
   readonly baseUrl: string;
   readonly entryPath?: `/${string}`;
@@ -286,6 +557,13 @@ export type DirectBombadilFuzzResult =
       readonly status: "passed";
     };
 
+type DirectBombadilFuzzExecutionResult =
+  | Extract<DirectBombadilFuzzResult, { readonly kind: "help" }>
+  | (Extract<DirectBombadilFuzzResult, { readonly kind: "run" }> & {
+      readonly receiptPath: string;
+      readonly uploadArtifactPath: string;
+    });
+
 export interface DirectBombadilFuzzCampaign {
   readonly config: DirectBombadilFuzzConfig;
   readonly id: string;
@@ -301,8 +579,21 @@ export type DirectBombadilFuzzMatrixResult =
       }[];
     };
 
+type DirectBombadilFuzzMatrixExecutionResult =
+  | Extract<DirectBombadilFuzzMatrixResult, { readonly kind: "help" }>
+  | {
+      readonly kind: "matrix";
+      readonly receiptPath: string;
+      readonly results: readonly {
+        readonly campaignId: string;
+        readonly result: Extract<DirectBombadilFuzzExecutionResult, { readonly kind: "run" }>;
+      }[];
+      readonly uploadArtifactPath: string;
+    };
+
 export interface DirectBombadilInvocation {
   readonly abortSignal?: AbortSignal;
+  readonly artifactPolicy?: DirectBombadilArtifactPolicy;
   readonly command: readonly string[];
   readonly cwd: string;
   readonly outputPath: string;
@@ -354,16 +645,21 @@ export interface DirectBombadilTraceAttestation {
 
 export interface DirectBombadilRunnerDependencies {
   readonly acquireServer: typeof acquireVerificationServer;
+  readonly beforeArtifactCommit?: () => Promise<void> | void;
   readonly createAbortController?: () => AbortController;
+  readonly createRunId: () => string;
   readonly now: () => Date;
   readonly runBombadil: (
     invocation: DirectBombadilInvocation,
   ) => Promise<BombadilProcessResult>;
+  readonly signalController: ProcessSignalController;
   readonly serverOutputTimeoutMs: number;
   readonly spawnServer: (options: {
     readonly command: readonly string[];
     readonly cwd: string;
+    readonly detachedProcessGroup?: boolean;
     readonly env?: Readonly<Record<string, string | undefined>>;
+    readonly omitEnvironment?: readonly string[];
   }) => ManagedVerificationServer;
   readonly stopServer: typeof stopVerificationServer;
 }
@@ -379,10 +675,15 @@ interface ProcessSignalEmitter {
   ) => unknown;
 }
 
+interface ProcessSignalController extends ProcessSignalEmitter {
+  readonly forward: (signal: NodeJS.Signals) => void;
+}
+
 type ValidatedConfig = Omit<
   DirectBombadilFuzzConfig,
-  "explorationPolicy" | "server" | "viewport"
+  "artifactPolicy" | "explorationPolicy" | "server" | "viewport"
 > & {
+  readonly artifactPolicy: ValidatedArtifactPolicy;
   readonly artifactRoot: string;
   readonly baseUrl: string;
   readonly bombadilExecutable: string;
@@ -396,6 +697,81 @@ type ValidatedConfig = Omit<
     readonly startupTimeoutMs: number;
   };
 };
+
+type ValidatedArtifactPolicy = Required<DirectBombadilArtifactPolicy>;
+
+interface ArtifactInventoryFile {
+  readonly device: bigint;
+  readonly inode: bigint;
+  readonly relativePath: string;
+  readonly sha256: string;
+  readonly size: number;
+}
+
+interface ArtifactInventory {
+  readonly directories: readonly string[];
+  readonly entryCount: number;
+  readonly files: readonly ArtifactInventoryFile[];
+  readonly fileCount: number;
+  readonly inventorySha256: string;
+  readonly totalBytes: number;
+}
+
+interface ArtifactUploadSessionBase {
+  readonly finalDirectory: string;
+  readonly mode: DirectBombadilUploadMode;
+  readonly receiptPath: string;
+  readonly runId: string;
+}
+
+interface AtomicArtifactUploadSession extends ArtifactUploadSessionBase {
+  readonly publication: "atomic-leaf";
+  readonly stagingDirectory: string;
+}
+
+interface DeferredArtifactUploadSession extends ArtifactUploadSessionBase {
+  readonly deferredPayload: { value: SanitizedRunUploadPayload | null };
+  readonly publication: "deferred";
+}
+
+type ArtifactUploadSession = AtomicArtifactUploadSession | DeferredArtifactUploadSession;
+
+interface SanitizedRunUploadPayload {
+  readonly receipt: DirectBombadilArtifactReceipt;
+  readonly summary: DirectBombadilSanitizedRunSummary;
+}
+
+interface ExpectedUploadFile {
+  readonly relativePath: string;
+  readonly sha256: string;
+  readonly size: number;
+}
+
+interface NormalizedFuzzRunOptions {
+  readonly arguments: readonly string[];
+  readonly artifactRun: DirectBombadilArtifactRunPlan | null;
+}
+
+class BombadilArtifactPolicyError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = "BombadilArtifactPolicyError";
+  }
+}
+
+class BombadilWriterSettlementError extends Error {
+  public constructor(message: string, cause: unknown) {
+    super(message, { cause });
+    this.name = "BombadilWriterSettlementError";
+  }
+}
+
+class BombadilPersistenceError extends AggregateError {
+  public constructor(message: string, errors: readonly unknown[]) {
+    super(errors, message, { cause: errors[0] });
+    this.name = "BombadilPersistenceError";
+  }
+}
 
 interface ValidatedViewport {
   readonly deviceScaleFactor: number;
@@ -494,6 +870,10 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isReadonlyStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
 function hasExactKeys(
   value: Readonly<Record<string, unknown>>,
   expected: ReadonlySet<string>,
@@ -506,6 +886,1921 @@ function compareCodeUnits(left: string, right: string): number {
   if (left < right) return -1;
   if (left > right) return 1;
   return 0;
+}
+
+function boundedArtifactInteger(options: {
+  readonly label: string;
+  readonly maximum: number;
+  readonly value: number | undefined;
+  readonly defaultValue: number;
+}): number {
+  const value = options.value ?? options.defaultValue;
+  if (!Number.isSafeInteger(value) || value < 1 || value > options.maximum) {
+    throw new Error(`${options.label} must be an integer between 1 and ${String(options.maximum)}`);
+  }
+  return value;
+}
+
+function validateArtifactPolicy(
+  input: DirectBombadilArtifactPolicy | undefined,
+): ValidatedArtifactPolicy {
+  const value = input ?? {};
+  return Object.freeze({
+    maxDepth: boundedArtifactInteger({
+      defaultValue: DEFAULT_ARTIFACT_MAX_DEPTH,
+      label: "artifactPolicy.maxDepth",
+      maximum: MAX_ARTIFACT_DEPTH,
+      value: value.maxDepth,
+    }),
+    maxEntries: boundedArtifactInteger({
+      defaultValue: DEFAULT_ARTIFACT_MAX_ENTRIES,
+      label: "artifactPolicy.maxEntries",
+      maximum: MAX_ARTIFACT_ENTRIES,
+      value: value.maxEntries,
+    }),
+    maxFileBytes: boundedArtifactInteger({
+      defaultValue: DEFAULT_ARTIFACT_MAX_FILE_BYTES,
+      label: "artifactPolicy.maxFileBytes",
+      maximum: MAX_ARTIFACT_FILE_BYTES,
+      value: value.maxFileBytes,
+    }),
+    maxFiles: boundedArtifactInteger({
+      defaultValue: DEFAULT_ARTIFACT_MAX_FILES,
+      label: "artifactPolicy.maxFiles",
+      maximum: MAX_ARTIFACT_FILES,
+      value: value.maxFiles,
+    }),
+    maxPathBytes: boundedArtifactInteger({
+      defaultValue: DEFAULT_ARTIFACT_MAX_PATH_BYTES,
+      label: "artifactPolicy.maxPathBytes",
+      maximum: MAX_ARTIFACT_PATH_BYTES,
+      value: value.maxPathBytes,
+    }),
+    maxTotalBytes: boundedArtifactInteger({
+      defaultValue: DEFAULT_ARTIFACT_MAX_TOTAL_BYTES,
+      label: "artifactPolicy.maxTotalBytes",
+      maximum: MAX_ARTIFACT_TOTAL_BYTES,
+      value: value.maxTotalBytes,
+    }),
+  });
+}
+
+function normalizeFuzzRunOptions(
+  input: DirectBombadilFuzzRunInput | DirectBombadilMatrixRunInput | undefined,
+): NormalizedFuzzRunOptions {
+  if (input === undefined || isReadonlyStringArray(input)) {
+    return {
+      arguments: Object.freeze([...(input ?? [])]),
+      artifactRun: null,
+    };
+  }
+  if (!isRecord(input)) throw new Error("Bombadil run options must be an object or argument array");
+  const keys = Object.keys(input);
+  if (keys.some((key) => key !== "arguments" && key !== "artifactRun")) {
+    throw new Error("Bombadil run options contain an unknown field");
+  }
+  const arguments_ = input.arguments ?? [];
+  if (!isReadonlyStringArray(arguments_)) {
+    throw new Error("Bombadil run options arguments must be a string array");
+  }
+  return {
+    arguments: Object.freeze([...arguments_]),
+    artifactRun: input.artifactRun ?? null,
+  };
+}
+
+function validateArtifactRunPlan(
+  input: DirectBombadilArtifactRunPlan,
+): DirectBombadilArtifactRunPlan & { readonly uploadMode: DirectBombadilUploadMode } {
+  const repositoryRoot = resolve(input.repositoryRoot);
+  if (!isAbsolute(input.repositoryRoot) || repositoryRoot !== input.repositoryRoot) {
+    throw new Error("artifactRun.repositoryRoot must be an absolute normalized path");
+  }
+  if (!UUID_PATTERN.test(input.runId)) {
+    throw new Error("artifactRun.runId must be a lowercase RFC 4122 UUID");
+  }
+  const uploadMode = input.uploadMode ?? "public-summary";
+  if (uploadMode !== "public-summary" && uploadMode !== "private-vetted") {
+    throw new Error("artifactRun.uploadMode must be public-summary or private-vetted");
+  }
+  return Object.freeze({ repositoryRoot, runId: input.runId, uploadMode });
+}
+
+function isBoundedArtifactIdentifier(value: string): boolean {
+  return value.length <= MAX_ARTIFACT_IDENTIFIER_LENGTH
+    && ARTIFACT_NAME_PATTERN.test(value);
+}
+
+function isBoundedScenarioIdentifier(value: string): boolean {
+  return value.length <= 120 && SCENARIO_PATTERN.test(value);
+}
+
+function requireEvidenceRecord(
+  value: unknown,
+  keys: ReadonlySet<string>,
+  label: string,
+): Readonly<Record<string, unknown>> {
+  if (!isRecord(value) || !hasExactKeys(value, keys)) {
+    throw new Error(`${label} must contain exactly its documented fields`);
+  }
+  return value;
+}
+
+function requireEvidenceInteger(
+  value: unknown,
+  label: string,
+  maximum = Number.MAX_SAFE_INTEGER,
+): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > maximum) {
+    throw new Error(`${label} must be a nonnegative safe integer no greater than ${String(maximum)}`);
+  }
+  return value as number;
+}
+
+function requireEvidencePositiveInteger(
+  value: unknown,
+  label: string,
+  maximum: number,
+): number {
+  const parsed = requireEvidenceInteger(value, label, maximum);
+  if (parsed === 0) throw new Error(`${label} must be greater than zero`);
+  return parsed;
+}
+
+function requireEvidenceSha256(value: unknown, label: string): string {
+  if (typeof value !== "string" || !SHA256_PATTERN.test(value)) {
+    throw new Error(`${label} must be a lowercase SHA-256 digest`);
+  }
+  return value;
+}
+
+function requireEvidenceTimestamp(value: unknown, label: string): string {
+  if (typeof value !== "string") throw new Error(`${label} must be an ISO timestamp`);
+  const milliseconds = Date.parse(value);
+  if (!Number.isFinite(milliseconds) || new Date(milliseconds).toISOString() !== value) {
+    throw new Error(`${label} must be a canonical ISO timestamp`);
+  }
+  return value;
+}
+
+function parseEvidenceFailureCode(
+  value: unknown,
+  label: string,
+): DirectBombadilArtifactFailureCode | null {
+  if (value === null) return null;
+  if (typeof value !== "string" || !ARTIFACT_FAILURE_CODES.has(
+    value as DirectBombadilArtifactFailureCode,
+  )) {
+    throw new Error(`${label} is not a known Bombadil failure code`);
+  }
+  return value as DirectBombadilArtifactFailureCode;
+}
+
+function requireEvidenceStatus(
+  value: unknown,
+  label: string,
+): "failed" | "passed" | "rejected" {
+  if (value !== "failed" && value !== "passed" && value !== "rejected") {
+    throw new Error(`${label} must be failed, passed, or rejected`);
+  }
+  return value;
+}
+
+function requireFailureStatusConsistency(
+  status: "failed" | "passed" | "rejected",
+  failureCode: DirectBombadilArtifactFailureCode | null,
+  label: string,
+): void {
+  if ((status === "passed") !== (failureCode === null)) {
+    throw new Error(`${label} status and failureCode are inconsistent`);
+  }
+  if (status === "rejected" && failureCode !== "configuration-rejected") {
+    throw new Error(`${label} rejected status requires configuration-rejected`);
+  }
+}
+
+function parseArtifactReceiptUnchecked(input: unknown): DirectBombadilArtifactReceipt {
+  const value = requireEvidenceRecord(input, ARTIFACT_RECEIPT_KEYS, "Bombadil receipt");
+  if (value.schema !== ARTIFACT_RECEIPT_SCHEMA) {
+    throw new Error("Bombadil receipt schema is unsupported");
+  }
+  const completedAt = requireEvidenceTimestamp(value.completedAt, "Bombadil receipt completedAt");
+  if (typeof value.diagnosticsRetained !== "boolean") {
+    throw new Error("Bombadil receipt diagnosticsRetained must be boolean");
+  }
+  const failureCode = parseEvidenceFailureCode(value.failureCode, "Bombadil receipt failureCode");
+  const status = requireEvidenceStatus(value.status, "Bombadil receipt status");
+  requireFailureStatusConsistency(status, failureCode, "Bombadil receipt");
+  if (value.mode !== "private-vetted" && value.mode !== "public-summary") {
+    throw new Error("Bombadil receipt mode is unsupported");
+  }
+  if (value.diagnosticsRetained && value.mode !== "private-vetted") {
+    throw new Error("Public Bombadil receipts cannot retain diagnostics");
+  }
+  if (typeof value.runId !== "string" || !UUID_PATTERN.test(value.runId)) {
+    throw new Error("Bombadil receipt runId must be a lowercase RFC 4122 UUID");
+  }
+  const rawPolicy = requireEvidenceRecord(
+    value.policy,
+    ARTIFACT_POLICY_RECEIPT_KEYS,
+    "Bombadil receipt policy",
+  );
+  const policy = Object.freeze({
+    maxDepth: requireEvidencePositiveInteger(
+      rawPolicy.maxDepth,
+      "Bombadil receipt policy.maxDepth",
+      MAX_ARTIFACT_DEPTH,
+    ),
+    maxEntries: requireEvidencePositiveInteger(
+      rawPolicy.maxEntries,
+      "Bombadil receipt policy.maxEntries",
+      MAX_ARTIFACT_ENTRIES,
+    ),
+    maxFileBytes: requireEvidencePositiveInteger(
+      rawPolicy.maxFileBytes,
+      "Bombadil receipt policy.maxFileBytes",
+      MAX_ARTIFACT_FILE_BYTES,
+    ),
+    maxFiles: requireEvidencePositiveInteger(
+      rawPolicy.maxFiles,
+      "Bombadil receipt policy.maxFiles",
+      MAX_ARTIFACT_FILES,
+    ),
+    maxPathBytes: requireEvidencePositiveInteger(
+      rawPolicy.maxPathBytes,
+      "Bombadil receipt policy.maxPathBytes",
+      MAX_ARTIFACT_PATH_BYTES,
+    ),
+    maxTotalBytes: requireEvidencePositiveInteger(
+      rawPolicy.maxTotalBytes,
+      "Bombadil receipt policy.maxTotalBytes",
+      MAX_ARTIFACT_TOTAL_BYTES,
+    ),
+  });
+  const rawInventory = requireEvidenceRecord(
+    value.inventory,
+    ARTIFACT_RECEIPT_INVENTORY_KEYS,
+    "Bombadil receipt inventory",
+  );
+  const entryCount = requireEvidenceInteger(
+    rawInventory.entryCount,
+    "Bombadil receipt inventory.entryCount",
+    policy.maxEntries,
+  );
+  const fileCount = requireEvidenceInteger(
+    rawInventory.fileCount,
+    "Bombadil receipt inventory.fileCount",
+    policy.maxFiles,
+  );
+  const totalBytes = requireEvidenceInteger(
+    rawInventory.totalBytes,
+    "Bombadil receipt inventory.totalBytes",
+    policy.maxTotalBytes,
+  );
+  if (fileCount > entryCount) {
+    throw new Error("Bombadil receipt inventory.fileCount cannot exceed entryCount");
+  }
+  if (fileCount === 0 && totalBytes !== 0) {
+    throw new Error("Bombadil receipt inventory bytes require at least one file");
+  }
+  const inventorySha256 = rawInventory.inventorySha256 === null
+    ? null
+    : requireEvidenceSha256(
+        rawInventory.inventorySha256,
+        "Bombadil receipt inventory.inventorySha256",
+      );
+  if (
+    (entryCount === 0 && (fileCount !== 0 || totalBytes !== 0 || inventorySha256 !== null))
+    || (entryCount > 0 && inventorySha256 === null)
+  ) {
+    throw new Error("Bombadil receipt empty-inventory fields are inconsistent");
+  }
+  if (
+    (status === "passed" && (entryCount === 0 || fileCount === 0 || totalBytes === 0))
+    || (status === "passed" && value.mode === "private-vetted" && !value.diagnosticsRetained)
+    || (failureCode === "interrupted" && value.diagnosticsRetained)
+    || (failureCode === "configuration-rejected" && status !== "rejected")
+    || (
+      failureCode === "writer-settlement"
+      && (value.diagnosticsRetained || entryCount !== 0 || fileCount !== 0 || totalBytes !== 0)
+    )
+    || (
+      status === "rejected"
+      && (value.diagnosticsRetained || entryCount !== 0 || fileCount !== 0 || totalBytes !== 0)
+    )
+  ) {
+    throw new Error("Bombadil receipt terminal state and retained evidence are inconsistent");
+  }
+  return Object.freeze({
+    schema: ARTIFACT_RECEIPT_SCHEMA,
+    completedAt,
+    diagnosticsRetained: value.diagnosticsRetained,
+    failureCode,
+    inventory: Object.freeze({ entryCount, fileCount, inventorySha256, totalBytes }),
+    mode: value.mode,
+    policy,
+    runId: value.runId,
+    status,
+  });
+}
+
+function parseRunSummaryUnchecked(input: unknown): DirectBombadilSanitizedRunSummary {
+  const value = requireEvidenceRecord(input, RUN_SUMMARY_KEYS, "Bombadil run summary");
+  if (value.schema !== ARTIFACT_SUMMARY_SCHEMA) {
+    throw new Error("Bombadil run summary schema is unsupported");
+  }
+  if (typeof value.artifactName !== "string" || !isBoundedArtifactIdentifier(value.artifactName)) {
+    throw new Error("Bombadil run summary artifactName is invalid");
+  }
+  if (typeof value.scenario !== "string" || !isBoundedScenarioIdentifier(value.scenario)) {
+    throw new Error("Bombadil run summary scenario is invalid");
+  }
+  const failureCode = parseEvidenceFailureCode(
+    value.failureCode,
+    "Bombadil run summary failureCode",
+  );
+  const status = requireEvidenceStatus(value.status, "Bombadil run summary status");
+  requireFailureStatusConsistency(status, failureCode, "Bombadil run summary");
+  let attestation: DirectBombadilSanitizedRunSummary["attestation"] = null;
+  if (value.attestation !== null) {
+    const raw = requireEvidenceRecord(
+      value.attestation,
+      RUN_SUMMARY_ATTESTATION_KEYS,
+      "Bombadil run summary attestation",
+    );
+    const observationCount = requireEvidenceInteger(
+      raw.observationCount,
+      "Bombadil run summary attestation.observationCount",
+      TRACE_MAX_LINES,
+    );
+    const invalidObservationCount = requireEvidenceInteger(
+      raw.invalidObservationCount,
+      "Bombadil run summary attestation.invalidObservationCount",
+      observationCount,
+    );
+    const validObservationCount = requireEvidenceInteger(
+      raw.validObservationCount,
+      "Bombadil run summary attestation.validObservationCount",
+      observationCount,
+    );
+    if (invalidObservationCount + validObservationCount !== observationCount) {
+      throw new Error("Bombadil run summary attestation counts do not reconcile");
+    }
+    if (observationCount === 0 || validObservationCount === 0) {
+      throw new Error("Bombadil run summary attestation must contain a valid observation");
+    }
+    attestation = Object.freeze({
+      invalidObservationCount,
+      observationCount,
+      validObservationCount,
+    });
+  }
+  let exploration: DirectBombadilSanitizedRunSummary["exploration"] = null;
+  if (value.exploration !== null) {
+    const raw = requireEvidenceRecord(
+      value.exploration,
+      RUN_SUMMARY_EXPLORATION_KEYS,
+      "Bombadil run summary exploration",
+    );
+    const traceLineCount = requireEvidenceInteger(
+      raw.traceLineCount,
+      "Bombadil run summary exploration.traceLineCount",
+      TRACE_MAX_LINES,
+    );
+    const actionCount = requireEvidenceInteger(
+      raw.actionCount,
+      "Bombadil run summary exploration.actionCount",
+      traceLineCount,
+    );
+    const nonWaitActionCount = requireEvidenceInteger(
+      raw.nonWaitActionCount,
+      "Bombadil run summary exploration.nonWaitActionCount",
+      actionCount,
+    );
+    if (typeof raw.policySatisfied !== "boolean") {
+      throw new Error("Bombadil run summary exploration.policySatisfied must be boolean");
+    }
+    exploration = Object.freeze({
+      actionCount,
+      nonWaitActionCount,
+      policySatisfied: raw.policySatisfied,
+      traceBytes: requireEvidenceInteger(
+        raw.traceBytes,
+        "Bombadil run summary exploration.traceBytes",
+        TRACE_MAX_BYTES,
+      ),
+      traceLineCount,
+      traceSha256: requireEvidenceSha256(
+        raw.traceSha256,
+        "Bombadil run summary exploration.traceSha256",
+      ),
+    });
+    if (exploration.traceBytes === 0 || exploration.traceLineCount === 0) {
+      throw new Error("Bombadil run summary exploration trace must be nonempty");
+    }
+  }
+  if (
+    status === "passed"
+    && (
+      attestation === null
+      || attestation.observationCount === 0
+      || attestation.validObservationCount === 0
+      || exploration === null
+      || !exploration.policySatisfied
+      || attestation.observationCount !== exploration.traceLineCount
+    )
+  ) {
+    throw new Error("A passed Bombadil run summary requires attested policy-satisfying evidence");
+  }
+  if (
+    attestation !== null
+    && exploration !== null
+    && attestation.observationCount !== exploration.traceLineCount
+  ) {
+    throw new Error("Bombadil run summary trace counts do not reconcile");
+  }
+  if (status === "rejected" && (attestation !== null || exploration !== null)) {
+    throw new Error("A rejected Bombadil run summary cannot claim trace evidence");
+  }
+  if (failureCode === "configuration-rejected" && status !== "rejected") {
+    throw new Error("A configuration-rejected Bombadil run summary must be rejected");
+  }
+  if (failureCode === "writer-settlement" && (attestation !== null || exploration !== null)) {
+    throw new Error("A writer-settlement Bombadil run summary cannot claim trace evidence");
+  }
+  return Object.freeze({
+    schema: ARTIFACT_SUMMARY_SCHEMA,
+    artifactName: value.artifactName,
+    attestation,
+    exploration,
+    failureCode,
+    scenario: value.scenario,
+    status,
+  });
+}
+
+function parseMatrixReceiptUnchecked(input: unknown): DirectBombadilMatrixReceipt {
+  const value = requireEvidenceRecord(input, MATRIX_RECEIPT_KEYS, "Bombadil matrix receipt");
+  if (value.schema !== MATRIX_RECEIPT_SCHEMA || value.mode !== "public-summary") {
+    throw new Error("Bombadil matrix receipt schema or mode is unsupported");
+  }
+  const completedAt = requireEvidenceTimestamp(
+    value.completedAt,
+    "Bombadil matrix receipt completedAt",
+  );
+  const failureCode = parseEvidenceFailureCode(
+    value.failureCode,
+    "Bombadil matrix receipt failureCode",
+  );
+  if (value.status !== "failed" && value.status !== "passed") {
+    throw new Error("Bombadil matrix receipt status must be failed or passed");
+  }
+  requireFailureStatusConsistency(value.status, failureCode, "Bombadil matrix receipt");
+  if (typeof value.runId !== "string" || !UUID_PATTERN.test(value.runId)) {
+    throw new Error("Bombadil matrix receipt runId must be a lowercase RFC 4122 UUID");
+  }
+  if (!Array.isArray(value.campaigns) || value.campaigns.length > MAX_MATRIX_CAMPAIGNS) {
+    throw new Error("Bombadil matrix receipt campaigns exceed the bounded matrix size");
+  }
+  const campaignIds = new Set<string>();
+  const campaigns = value.campaigns.map((inputCampaign, index) => {
+    const campaign = requireEvidenceRecord(
+      inputCampaign,
+      MATRIX_CAMPAIGN_RECEIPT_KEYS,
+      `Bombadil matrix receipt campaign ${String(index)}`,
+    );
+    if (campaign.index !== index) {
+      throw new Error("Bombadil matrix receipt campaign indices must be ordered and contiguous");
+    }
+    const campaignId = campaign.campaignId;
+    if (
+      campaignId !== null
+      && (
+        typeof campaignId !== "string"
+        || !isBoundedArtifactIdentifier(campaignId)
+        || campaignIds.has(campaignId)
+      )
+    ) {
+      throw new Error("Bombadil matrix receipt campaign IDs must be unique bounded identifiers");
+    }
+    if (campaignId !== null) campaignIds.add(campaignId);
+    if (
+      campaign.status !== "failed"
+      && campaign.status !== "not-run"
+      && campaign.status !== "not-selected"
+      && campaign.status !== "passed"
+      && campaign.status !== "rejected"
+    ) {
+      throw new Error("Bombadil matrix receipt campaign status is unsupported");
+    }
+    const expectedReceipt = campaignId === null
+      ? null
+      : `campaigns/${campaignId}/receipt.json`;
+    if (
+      campaign.receipt !== null
+      && (typeof campaign.receipt !== "string" || campaign.receipt !== expectedReceipt)
+    ) {
+      throw new Error("Bombadil matrix child receipt path is not canonical");
+    }
+    if (
+      ((campaign.status === "not-run" || campaign.status === "not-selected")
+        && campaign.receipt !== null)
+      || (campaign.status === "passed" && campaign.receipt !== expectedReceipt)
+      || (campaignId === null && (campaign.status !== "rejected" || campaign.receipt !== null))
+    ) {
+      throw new Error("Bombadil matrix child terminal state is inconsistent");
+    }
+    return Object.freeze({
+      campaignId,
+      index,
+      receipt: campaign.receipt as string | null,
+      status: campaign.status,
+    });
+  });
+  const omittedCampaignCount = requireEvidenceInteger(
+    value.omittedCampaignCount,
+    "Bombadil matrix receipt omittedCampaignCount",
+  );
+  if (
+    value.status === "passed"
+    && (
+      omittedCampaignCount !== 0
+      || !campaigns.some((campaign) => campaign.status === "passed")
+      || campaigns.some((campaign) =>
+        campaign.status === "failed"
+        || campaign.status === "not-run"
+        || campaign.status === "rejected"
+      )
+    )
+  ) {
+    throw new Error("A passed Bombadil matrix receipt has a nonterminal child");
+  }
+  return Object.freeze({
+    schema: MATRIX_RECEIPT_SCHEMA,
+    campaigns: Object.freeze(campaigns),
+    completedAt,
+    failureCode,
+    mode: "public-summary",
+    omittedCampaignCount,
+    runId: value.runId,
+    status: value.status,
+  });
+}
+
+function parseMatrixSummaryUnchecked(input: unknown): DirectBombadilMatrixSummary {
+  const value = requireEvidenceRecord(input, MATRIX_SUMMARY_KEYS, "Bombadil matrix summary");
+  if (value.schema !== MATRIX_SUMMARY_SCHEMA) {
+    throw new Error("Bombadil matrix summary schema is unsupported");
+  }
+  const failureCode = parseEvidenceFailureCode(
+    value.failureCode,
+    "Bombadil matrix summary failureCode",
+  );
+  if (value.status !== "failed" && value.status !== "passed") {
+    throw new Error("Bombadil matrix summary status must be failed or passed");
+  }
+  requireFailureStatusConsistency(value.status, failureCode, "Bombadil matrix summary");
+  const rawCampaigns = requireEvidenceRecord(
+    value.campaigns,
+    MATRIX_SUMMARY_CAMPAIGNS_KEYS,
+    "Bombadil matrix summary campaigns",
+  );
+  const total = requireEvidenceInteger(
+    rawCampaigns.total,
+    "Bombadil matrix summary campaigns.total",
+    MAX_MATRIX_CAMPAIGNS,
+  );
+  const campaigns = Object.freeze({
+    failed: requireEvidenceInteger(rawCampaigns.failed, "Bombadil matrix summary failed", total),
+    notRun: requireEvidenceInteger(rawCampaigns.notRun, "Bombadil matrix summary notRun", total),
+    notSelected: requireEvidenceInteger(
+      rawCampaigns.notSelected,
+      "Bombadil matrix summary notSelected",
+      total,
+    ),
+    omitted: requireEvidenceInteger(rawCampaigns.omitted, "Bombadil matrix summary omitted"),
+    passed: requireEvidenceInteger(rawCampaigns.passed, "Bombadil matrix summary passed", total),
+    rejected: requireEvidenceInteger(rawCampaigns.rejected, "Bombadil matrix summary rejected", total),
+    total,
+  });
+  if (
+    campaigns.failed
+      + campaigns.notRun
+      + campaigns.notSelected
+      + campaigns.passed
+      + campaigns.rejected
+      !== campaigns.total
+  ) {
+    throw new Error("Bombadil matrix summary campaign counts do not reconcile");
+  }
+  if (
+    value.status === "passed"
+    && (
+      campaigns.failed !== 0
+      || campaigns.notRun !== 0
+      || campaigns.rejected !== 0
+      || campaigns.omitted !== 0
+      || campaigns.passed === 0
+    )
+  ) {
+    throw new Error("A passed Bombadil matrix summary contains unsuccessful campaigns");
+  }
+  return Object.freeze({
+    schema: MATRIX_SUMMARY_SCHEMA,
+    campaigns,
+    failureCode,
+    status: value.status,
+  });
+}
+
+function artifactEvidenceError(error: unknown): DirectBombadilArtifactParseError {
+  return Object.freeze({
+    code: "invalid-bombadil-artifact-evidence",
+    message: renderUnknown(error),
+  });
+}
+
+function cloneArtifactEvidence(input: unknown): unknown {
+  const parsed = parseJsonValue(input, ARTIFACT_EVIDENCE_JSON_LIMITS);
+  if (!parsed.ok) {
+    throw new Error(`Bombadil artifact evidence is not bounded inert JSON: ${parsed.error.message}`);
+  }
+  return parsed.value;
+}
+
+/** Parse, clone, and freeze a foreign sanitized Bombadil run receipt. */
+export function parseDirectBombadilArtifactReceipt(
+  input: unknown,
+): Result<DirectBombadilArtifactReceipt, DirectBombadilArtifactParseError> {
+  try {
+    return ok(parseArtifactReceiptUnchecked(cloneArtifactEvidence(input)));
+  } catch (error) {
+    return err(artifactEvidenceError(error));
+  }
+}
+
+/** Parse, clone, and freeze a foreign sanitized Bombadil run summary. */
+export function parseDirectBombadilSanitizedRunSummary(
+  input: unknown,
+): Result<DirectBombadilSanitizedRunSummary, DirectBombadilArtifactParseError> {
+  try {
+    return ok(parseRunSummaryUnchecked(cloneArtifactEvidence(input)));
+  } catch (error) {
+    return err(artifactEvidenceError(error));
+  }
+}
+
+/** Parse, clone, and freeze a foreign sanitized Bombadil matrix receipt. */
+export function parseDirectBombadilMatrixReceipt(
+  input: unknown,
+): Result<DirectBombadilMatrixReceipt, DirectBombadilArtifactParseError> {
+  try {
+    return ok(parseMatrixReceiptUnchecked(cloneArtifactEvidence(input)));
+  } catch (error) {
+    return err(artifactEvidenceError(error));
+  }
+}
+
+/** Parse, clone, and freeze a foreign sanitized Bombadil matrix summary. */
+export function parseDirectBombadilMatrixSummary(
+  input: unknown,
+): Result<DirectBombadilMatrixSummary, DirectBombadilArtifactParseError> {
+  try {
+    return ok(parseMatrixSummaryUnchecked(cloneArtifactEvidence(input)));
+  } catch (error) {
+    return err(artifactEvidenceError(error));
+  }
+}
+
+/** Resolve the lexically validated exact upload leaf for an `if: always()` caller. */
+export function resolveDirectBombadilUploadLeaf(
+  input: DirectBombadilArtifactRunPlan,
+): string {
+  const plan = validateArtifactRunPlan(input);
+  return join(plan.repositoryRoot, "artifacts", "direct-bombadil-upload", plan.runId);
+}
+
+async function requireSafeDirectory(path: string, label: string): Promise<void> {
+  let metadata;
+  try {
+    metadata = await lstat(path);
+  } catch {
+    throw new BombadilArtifactPolicyError(`${label} does not exist`);
+  }
+  if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+    throw new BombadilArtifactPolicyError(`${label} must be a non-symlink directory`);
+  }
+}
+
+async function ensureSafeDirectoryChain(
+  repositoryRoot: string,
+  parts: readonly string[],
+): Promise<string> {
+  await requireSafeDirectory(repositoryRoot, "repositoryRoot");
+  let current = repositoryRoot;
+  for (const part of parts) {
+    if (!ARTIFACT_PATH_PART_PATTERN.test(part) || part === "." || part === "..") {
+      throw new BombadilArtifactPolicyError("Artifact directory contains an unsafe path component");
+    }
+    current = join(current, part);
+    try {
+      await mkdir(current, { mode: 0o700 });
+    } catch (error) {
+      if (!isRecord(error) || error.code !== "EEXIST") throw error;
+    }
+    await requireSafeDirectory(current, `Artifact directory ${part}`);
+    const resolved = await realpath(current);
+    if (!isWithin(repositoryRoot, resolved) || resolved !== current) {
+      throw new BombadilArtifactPolicyError("Artifact directory escaped repositoryRoot");
+    }
+  }
+  return current;
+}
+
+async function createExclusiveDirectory(path: string, label: string): Promise<void> {
+  try {
+    await mkdir(path, { mode: 0o700 });
+  } catch (error) {
+    if (isRecord(error) && error.code === "EEXIST") {
+      throw new BombadilArtifactPolicyError(`${label} already exists`);
+    }
+    throw error;
+  }
+  await requireSafeDirectory(path, label);
+}
+
+async function createBombadilArtifactRun(options: {
+  readonly artifactName: string;
+  readonly repositoryRoot: string;
+  readonly runId: string;
+}): Promise<{
+  readonly artifactRoot: string;
+  readonly manifestPath: string;
+  readonly runDirectory: string;
+}> {
+  if (!UUID_PATTERN.test(options.runId)) {
+    throw new BombadilArtifactPolicyError("Bombadil raw artifact run ID must be a UUID");
+  }
+  const artifactRoot = await ensureSafeDirectoryChain(options.repositoryRoot, [
+    "artifacts",
+    "direct-bombadil",
+    options.artifactName,
+  ]);
+  const runDirectory = join(artifactRoot, options.runId);
+  await createExclusiveDirectory(runDirectory, "Bombadil artifact run leaf");
+  return {
+    artifactRoot,
+    manifestPath: join(artifactRoot, "manifest.json"),
+    runDirectory,
+  };
+}
+
+async function prepareArtifactUploadSession(
+  planInput: DirectBombadilArtifactRunPlan,
+): Promise<AtomicArtifactUploadSession> {
+  const plan = validateArtifactRunPlan(planInput);
+  let repositoryRoot: string | null;
+  try {
+    repositoryRoot = await realpath(plan.repositoryRoot);
+  } catch (error) {
+    if (!isRecord(error) || error.code !== "ENOENT") {
+      throw new BombadilArtifactPolicyError(
+        `artifactRun.repositoryRoot could not be proven safe: ${renderUnknown(error)}`,
+      );
+    }
+    repositoryRoot = null;
+  }
+  if (repositoryRoot === null || repositoryRoot !== plan.repositoryRoot) {
+    throw new BombadilArtifactPolicyError(
+      "artifactRun.repositoryRoot must resolve to its exact configured directory",
+    );
+  }
+  const root = await ensureSafeDirectoryChain(repositoryRoot, [
+    "artifacts",
+    "direct-bombadil-upload",
+  ]);
+  const finalDirectory = join(root, plan.runId);
+  let finalMetadata;
+  try {
+    finalMetadata = await lstat(finalDirectory);
+  } catch (error) {
+    if (!isRecord(error) || error.code !== "ENOENT") {
+      throw new BombadilArtifactPolicyError(
+        `Bombadil upload run leaf could not be inspected: ${renderUnknown(error)}`,
+      );
+    }
+    finalMetadata = null;
+  }
+  if (finalMetadata !== null) {
+    throw new BombadilArtifactPolicyError("Bombadil upload run leaf already exists");
+  }
+  const stagingDirectory = join(root, `.staging-${plan.runId}`);
+  return {
+    finalDirectory,
+    mode: plan.uploadMode,
+    publication: "atomic-leaf",
+    receiptPath: join(finalDirectory, "receipt.json"),
+    runId: plan.runId,
+    stagingDirectory,
+  };
+}
+
+async function requireArtifactUploadLeafAbsent(
+  session: AtomicArtifactUploadSession,
+): Promise<void> {
+  let existing;
+  try {
+    existing = await lstat(session.finalDirectory);
+  } catch (error) {
+    if (!isRecord(error) || error.code !== "ENOENT") {
+      throw new BombadilArtifactPolicyError(
+        `Bombadil upload run leaf could not be inspected: ${renderUnknown(error)}`,
+      );
+    }
+    existing = null;
+  }
+  if (existing !== null) {
+    throw new BombadilArtifactPolicyError("Bombadil upload run leaf appeared before publication");
+  }
+}
+
+async function commitArtifactUploadSession(
+  session: AtomicArtifactUploadSession,
+): Promise<void> {
+  // The validated staging tree becomes immutable evidence at this dispatch.
+  // Nothing fallible may run after the atomic rename.
+  await rename(session.stagingDirectory, session.finalDirectory);
+}
+
+function validateArtifactRelativePath(
+  relativePath: string,
+  policy: ValidatedArtifactPolicy,
+): readonly string[] {
+  const parts = relativePath.split("/");
+  if (
+    relativePath.length === 0
+    || relativePath.includes("\\")
+    || Buffer.byteLength(relativePath, "utf8") > policy.maxPathBytes
+    || parts.length > policy.maxDepth
+    || parts.some((part) =>
+      part === ""
+      || part === "."
+      || part === ".."
+      || part.startsWith(".")
+      || !ARTIFACT_PATH_PART_PATTERN.test(part)
+    )
+  ) {
+    throw new BombadilArtifactPolicyError(`Bombadil emitted unsafe artifact path ${relativePath}`);
+  }
+  return parts;
+}
+
+function artifactOutputFileIsAllowed(relativePath: string): boolean {
+  return relativePath === "trace.jsonl"
+    || PRIVATE_DIAGNOSTIC_EXTENSIONS.has(extname(relativePath).toLowerCase());
+}
+
+function sameBigIntFileMetadata(
+  left: Readonly<{ dev: bigint; ino: bigint; size: bigint; ctimeNs: bigint; mtimeNs: bigint }>,
+  right: Readonly<{ dev: bigint; ino: bigint; size: bigint; ctimeNs: bigint; mtimeNs: bigint }>,
+): boolean {
+  return left.dev === right.dev
+    && left.ino === right.ino
+    && left.size === right.size
+    && left.ctimeNs === right.ctimeNs
+    && left.mtimeNs === right.mtimeNs;
+}
+
+async function withClosedArtifactHandle<Value>(
+  handle: Readonly<{ close: () => Promise<void> }>,
+  operation: () => Promise<Value>,
+): Promise<Value> {
+  let value: Value | undefined;
+  let operationFailure: unknown = null;
+  try {
+    value = await operation();
+  } catch (error) {
+    operationFailure = error;
+  }
+  let closeFailure: unknown = null;
+  try {
+    await handle.close();
+  } catch (error) {
+    closeFailure = error;
+  }
+  if (operationFailure !== null) {
+    if (closeFailure !== null) {
+      throw new AggregateError(
+        [operationFailure, closeFailure],
+        "Bombadil artifact operation and descriptor cleanup both failed",
+        { cause: operationFailure },
+      );
+    }
+    throw operationFailure;
+  }
+  if (closeFailure !== null) throw closeFailure;
+  return value as Value;
+}
+
+async function hashBoundRegularFile(options: {
+  readonly expected: BigIntStats;
+  readonly path: string;
+  readonly policy: ValidatedArtifactPolicy;
+  readonly relativePath: string;
+}): Promise<ArtifactInventoryFile> {
+  const flags = fileSystemConstants.O_RDONLY
+    | fileSystemConstants.O_NOFOLLOW
+    | fileSystemConstants.O_NONBLOCK;
+  const handle = await open(options.path, flags);
+  return await withClosedArtifactHandle(handle, async () => {
+    const before = await handle.stat({ bigint: true });
+    if (
+      !before.isFile()
+      || before.nlink !== 1n
+      || !options.expected.isFile()
+      || options.expected.nlink !== 1n
+      || !sameBigIntFileMetadata(before, options.expected)
+    ) {
+      throw new BombadilArtifactPolicyError(
+        `Bombadil artifact ${options.relativePath} changed identity before inspection`,
+      );
+    }
+    const size = Number(before.size);
+    if (!Number.isSafeInteger(size) || size > options.policy.maxFileBytes) {
+      throw new BombadilArtifactPolicyError(
+        `Bombadil artifact ${options.relativePath} exceeds the per-file byte quota`,
+      );
+    }
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let offset = 0;
+    while (offset < size) {
+      const length = Math.min(buffer.length, size - offset);
+      const read = await handle.read(buffer, 0, length, offset);
+      if (read.bytesRead === 0) {
+        throw new BombadilArtifactPolicyError(
+          `Bombadil artifact ${options.relativePath} changed while inspected`,
+        );
+      }
+      hash.update(buffer.subarray(0, read.bytesRead));
+      offset += read.bytesRead;
+    }
+    const after = await handle.stat({ bigint: true });
+    if (!sameBigIntFileMetadata(before, after)) {
+      throw new BombadilArtifactPolicyError(
+        `Bombadil artifact ${options.relativePath} changed while inspected`,
+      );
+    }
+    return {
+      device: before.dev,
+      inode: before.ino,
+      relativePath: options.relativePath,
+      sha256: hash.digest("hex"),
+      size,
+    };
+  });
+}
+
+async function readBoundRegularFileBytes(options: {
+  readonly expected?: ArtifactInventoryFile;
+  readonly label: string;
+  readonly maximumBytes: number;
+  readonly path: string;
+}): Promise<Buffer> {
+  const flags = fileSystemConstants.O_RDONLY
+    | fileSystemConstants.O_NOFOLLOW
+    | fileSystemConstants.O_NONBLOCK;
+  let handle;
+  try {
+    handle = await open(options.path, flags);
+  } catch {
+    throw new BombadilArtifactPolicyError(`${options.label} is not an openable regular file`);
+  }
+  try {
+    return await withClosedArtifactHandle(handle, async () => {
+      const before = await handle.stat({ bigint: true });
+      const size = Number(before.size);
+      if (
+        !before.isFile()
+        || before.nlink !== 1n
+        || !Number.isSafeInteger(size)
+        || size < 1
+        || size > options.maximumBytes
+      ) {
+        throw new BombadilArtifactPolicyError(`${options.label} is not a bounded regular file`);
+      }
+      if (
+        options.expected !== undefined
+        && (
+          before.dev !== options.expected.device
+          || before.ino !== options.expected.inode
+          || size !== options.expected.size
+        )
+      ) {
+        throw new BombadilArtifactPolicyError(`${options.label} changed after inventory`);
+      }
+      const bytes = Buffer.allocUnsafe(size);
+      let offset = 0;
+      while (offset < size) {
+        const read = await handle.read(bytes, offset, size - offset, offset);
+        if (read.bytesRead === 0) {
+          throw new BombadilArtifactPolicyError(`${options.label} changed while being read`);
+        }
+        offset += read.bytesRead;
+      }
+      const after = await handle.stat({ bigint: true });
+      if (!sameBigIntFileMetadata(before, after)) {
+        throw new BombadilArtifactPolicyError(`${options.label} changed while being read`);
+      }
+      if (
+        options.expected !== undefined
+        && sha256(bytes) !== options.expected.sha256
+      ) {
+        throw new BombadilArtifactPolicyError(`${options.label} hash changed after inventory`);
+      }
+      return bytes;
+    });
+  } catch (error) {
+    throw error instanceof BombadilArtifactPolicyError
+      ? error
+      : new BombadilArtifactPolicyError(
+          `${options.label} could not be read safely: ${renderUnknown(error)}`,
+        );
+  }
+}
+
+function decodeTraceLines(bytes: Uint8Array): readonly string[] {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error("Bombadil trace is not valid UTF-8");
+  }
+  const lines = text.split(/\r?\n/u);
+  if (lines.at(-1) === "") lines.pop();
+  return lines;
+}
+
+async function scanBombadilArtifactTree(options: {
+  readonly allowTransientEntryAbsence?: boolean;
+  readonly beforeDirectoryOpen?: (absolutePath: string) => Promise<void> | void;
+  readonly beforeEntryInspect?: (absolutePath: string) => Promise<void> | void;
+  readonly hashFiles: boolean;
+  readonly policy: ValidatedArtifactPolicy;
+  readonly root: string;
+  readonly rootMayBeAbsent?: boolean;
+}): Promise<ArtifactInventory> {
+  let rootMetadata: BigIntStats | null;
+  try {
+    rootMetadata = await lstat(options.root, { bigint: true });
+  } catch (error) {
+    if (!isRecord(error) || error.code !== "ENOENT") {
+      throw new BombadilArtifactPolicyError(
+        `Bombadil output root could not be inspected: ${renderUnknown(error)}`,
+      );
+    }
+    rootMetadata = null;
+  }
+  if (rootMetadata === null) {
+    if (options.rootMayBeAbsent === true) {
+      return {
+        directories: Object.freeze([]),
+        entryCount: 0,
+        files: Object.freeze([]),
+        fileCount: 0,
+        inventorySha256: sha256(""),
+        totalBytes: 0,
+      };
+    }
+    throw new BombadilArtifactPolicyError("Bombadil output directory does not exist");
+  }
+  if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) {
+    throw new BombadilArtifactPolicyError("Bombadil output root must be a non-symlink directory");
+  }
+  const directories: string[] = [];
+  const files: ArtifactInventoryFile[] = [];
+  let entryCount = 0;
+  let totalBytes = 0;
+  const pending: Array<{ readonly absolutePath: string; readonly relativePath: string }> = [{
+    absolutePath: options.root,
+    relativePath: "",
+  }];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) continue;
+    await options.beforeDirectoryOpen?.(current.absolutePath);
+    const directory = await opendir(current.absolutePath).catch((error: unknown) => {
+      if (
+        options.allowTransientEntryAbsence === true
+        && isRecord(error)
+        && error.code === "ENOENT"
+      ) {
+        throw error;
+      }
+      throw new BombadilArtifactPolicyError(
+        `Bombadil artifact directory could not be opened safely: ${renderUnknown(error)}`,
+      );
+    });
+    try {
+      await withClosedArtifactHandle(directory, async () => {
+        while (true) {
+          const entry = await directory.read();
+          if (entry === null) break;
+          const relativePath = current.relativePath === ""
+            ? entry.name
+            : `${current.relativePath}/${entry.name}`;
+          validateArtifactRelativePath(relativePath, options.policy);
+          entryCount += 1;
+          if (entryCount > options.policy.maxEntries) {
+            throw new BombadilArtifactPolicyError("Bombadil artifact entry quota was exceeded");
+          }
+          const absolutePath = join(current.absolutePath, entry.name);
+          await options.beforeEntryInspect?.(absolutePath);
+          const metadata = await lstat(absolutePath, { bigint: true });
+          if (metadata.isSymbolicLink()) {
+            throw new BombadilArtifactPolicyError(
+              `Bombadil emitted a symbolic link at ${relativePath}`,
+            );
+          }
+          if (metadata.isDirectory()) {
+            directories.push(relativePath);
+            pending.push({ absolutePath, relativePath });
+            continue;
+          }
+          if (!metadata.isFile() || metadata.nlink !== 1n) {
+            throw new BombadilArtifactPolicyError(
+              `Bombadil emitted a non-regular or multiply-linked file at ${relativePath}`,
+            );
+          }
+          if (!artifactOutputFileIsAllowed(relativePath)) {
+            throw new BombadilArtifactPolicyError(
+              `Bombadil emitted a file outside the artifact allowlist at ${relativePath}`,
+            );
+          }
+          if (files.length + 1 > options.policy.maxFiles) {
+            throw new BombadilArtifactPolicyError("Bombadil artifact file quota was exceeded");
+          }
+          const fileSize = Number(metadata.size);
+          if (!Number.isSafeInteger(fileSize) || fileSize > options.policy.maxFileBytes) {
+            throw new BombadilArtifactPolicyError(
+              `Bombadil artifact ${relativePath} exceeds the per-file byte quota`,
+            );
+          }
+          totalBytes += fileSize;
+          if (!Number.isSafeInteger(totalBytes) || totalBytes > options.policy.maxTotalBytes) {
+            throw new BombadilArtifactPolicyError(
+              "Bombadil aggregate artifact byte quota was exceeded",
+            );
+          }
+          files.push(options.hashFiles
+            ? await hashBoundRegularFile({
+                expected: metadata,
+                path: absolutePath,
+                policy: options.policy,
+                relativePath,
+              })
+            : {
+                device: 0n,
+                inode: 0n,
+                relativePath,
+                sha256: "",
+                size: fileSize,
+              });
+        }
+      });
+    } catch (error) {
+      if (
+        options.allowTransientEntryAbsence === true
+        && isRecord(error)
+        && error.code === "ENOENT"
+      ) {
+        throw error;
+      }
+      throw error instanceof BombadilArtifactPolicyError
+        ? error
+        : new BombadilArtifactPolicyError(
+            `Bombadil artifact directory could not be inspected safely: ${renderUnknown(error)}`,
+          );
+    }
+  }
+  let finalRootMetadata: BigIntStats;
+  try {
+    finalRootMetadata = await lstat(options.root, { bigint: true });
+  } catch (error) {
+    throw new BombadilArtifactPolicyError(
+      `Bombadil output root could not be revalidated: ${renderUnknown(error)}`,
+    );
+  }
+  if (
+    !finalRootMetadata.isDirectory()
+    || finalRootMetadata.isSymbolicLink()
+    || finalRootMetadata.dev !== rootMetadata.dev
+    || finalRootMetadata.ino !== rootMetadata.ino
+  ) {
+    throw new BombadilArtifactPolicyError("Bombadil output root changed during inspection");
+  }
+  directories.sort(compareCodeUnits);
+  files.sort((left, right) => compareCodeUnits(left.relativePath, right.relativePath));
+  const inventorySha256 = sha256([
+    ...directories.map((directory) => `D\0${directory}\n`),
+    ...files.map((file) =>
+      `F\0${file.relativePath}\0${String(file.size)}\0${file.sha256}\n`
+    ),
+  ].join(""));
+  return {
+    directories: Object.freeze(directories),
+    entryCount,
+    files: Object.freeze(files),
+    fileCount: files.length,
+    inventorySha256,
+    totalBytes,
+  };
+}
+
+/** @internal Exercise transient versus authoritative artifact scans in package tests. */
+export async function inspectBombadilArtifactTreeForTest(options: {
+  readonly allowTransientEntryAbsence?: boolean;
+  readonly beforeDirectoryOpen?: (absolutePath: string) => Promise<void> | void;
+  readonly beforeEntryInspect?: (absolutePath: string) => Promise<void> | void;
+  readonly hashFiles: boolean;
+  readonly policy: DirectBombadilArtifactPolicy;
+  readonly root: string;
+}): Promise<void> {
+  await scanBombadilArtifactTree({
+    ...options,
+    policy: validateArtifactPolicy(options.policy),
+  });
+}
+
+async function ensureSafeChildDirectories(
+  root: string,
+  parts: readonly string[],
+): Promise<string> {
+  await requireSafeDirectory(root, "Bombadil upload staging root");
+  let current = root;
+  for (const part of parts) {
+    if (!ARTIFACT_PATH_PART_PATTERN.test(part) || part.startsWith(".")) {
+      throw new BombadilArtifactPolicyError("Bombadil upload path contains an unsafe component");
+    }
+    current = join(current, part);
+    try {
+      await mkdir(current, { mode: 0o700 });
+    } catch (error) {
+      if (!isRecord(error) || error.code !== "EEXIST") throw error;
+    }
+    await requireSafeDirectory(current, "Bombadil upload directory");
+    const resolved = await realpath(current);
+    if (!isWithin(root, resolved) || resolved !== current) {
+      throw new BombadilArtifactPolicyError("Bombadil upload directory escaped staging root");
+    }
+  }
+  return current;
+}
+
+async function writeExclusiveBytes(path: string, bytes: Uint8Array): Promise<void> {
+  const flags = fileSystemConstants.O_WRONLY
+    | fileSystemConstants.O_CREAT
+    | fileSystemConstants.O_EXCL
+    | fileSystemConstants.O_NOFOLLOW;
+  const handle = await open(path, flags, 0o600);
+  await withClosedArtifactHandle(handle, async () => {
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const written = await handle.write(bytes, offset, bytes.byteLength - offset, offset);
+      if (written.bytesWritten === 0) throw new Error("Exclusive artifact write made no progress");
+      offset += written.bytesWritten;
+    }
+    await handle.sync();
+  });
+}
+
+async function writeExpectedJson(
+  root: string,
+  relativePath: string,
+  value: unknown,
+): Promise<ExpectedUploadFile> {
+  const parts = relativePath.split("/");
+  const fileName = parts.pop();
+  if (fileName === undefined || !ARTIFACT_PATH_PART_PATTERN.test(fileName)) {
+    throw new BombadilArtifactPolicyError("Sanitized upload path is invalid");
+  }
+  const directory = await ensureSafeChildDirectories(root, parts);
+  const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await writeExclusiveBytes(join(directory, fileName), bytes);
+  return {
+    relativePath,
+    sha256: sha256(bytes),
+    size: bytes.byteLength,
+  };
+}
+
+function expectedUploadDirectories(
+  files: readonly ExpectedUploadFile[],
+): readonly string[] {
+  const directories = new Set<string>();
+  for (const file of files) {
+    const parts = file.relativePath.split("/");
+    parts.pop();
+    for (let index = 1; index <= parts.length; index += 1) {
+      directories.add(parts.slice(0, index).join("/"));
+    }
+  }
+  return Object.freeze([...directories].sort(compareCodeUnits));
+}
+
+async function validateExpectedUploadTree(
+  root: string,
+  expectedInput: readonly ExpectedUploadFile[],
+): Promise<void> {
+  const expected = [...expectedInput].sort((left, right) =>
+    compareCodeUnits(left.relativePath, right.relativePath)
+  );
+  if (new Set(expected.map((file) => file.relativePath)).size !== expected.length) {
+    throw new BombadilArtifactPolicyError("Sanitized upload contains duplicate file paths");
+  }
+  const directories = expectedUploadDirectories(expected);
+  const maximumPathBytes = Math.max(
+    1,
+    ...expected.map((file) => Buffer.byteLength(file.relativePath, "utf8")),
+  );
+  const inventory = await scanBombadilArtifactTree({
+    hashFiles: true,
+    policy: {
+      maxDepth: Math.max(1, ...expected.map((file) => file.relativePath.split("/").length)),
+      maxEntries: Math.max(1, expected.length + directories.length),
+      maxFileBytes: Math.max(1, ...expected.map((file) => file.size)),
+      maxFiles: Math.max(1, expected.length),
+      maxPathBytes: maximumPathBytes,
+      maxTotalBytes: Math.max(1, expected.reduce((total, file) => total + file.size, 0)),
+    },
+    root,
+  });
+  if (
+    inventory.directories.length !== directories.length
+    || inventory.directories.some((directory, index) => directory !== directories[index])
+    || inventory.files.length !== expected.length
+    || inventory.files.some((file, index) => {
+      const wanted = expected[index];
+      return wanted === undefined
+        || file.relativePath !== wanted.relativePath
+        || file.sha256 !== wanted.sha256
+        || file.size !== wanted.size;
+    })
+  ) {
+    throw new BombadilArtifactPolicyError(
+      "Sanitized upload tree differs from its exact expected inventory",
+    );
+  }
+}
+
+async function copyVerifiedArtifactFile(options: {
+  readonly destinationRoot: string;
+  readonly file: ArtifactInventoryFile;
+  readonly sourceRoot: string;
+}): Promise<void> {
+  const parts = options.file.relativePath.split("/");
+  const fileName = parts.pop();
+  if (fileName === undefined) throw new BombadilArtifactPolicyError("Artifact copy path is empty");
+  const destinationDirectory = await ensureSafeChildDirectories(
+    options.destinationRoot,
+    parts,
+  );
+  const destinationPath = join(destinationDirectory, fileName);
+  const sourcePath = join(options.sourceRoot, ...options.file.relativePath.split("/"));
+  const sourceFlags = fileSystemConstants.O_RDONLY
+    | fileSystemConstants.O_NOFOLLOW
+    | fileSystemConstants.O_NONBLOCK;
+  const destinationFlags = fileSystemConstants.O_WRONLY
+    | fileSystemConstants.O_CREAT
+    | fileSystemConstants.O_EXCL
+    | fileSystemConstants.O_NOFOLLOW;
+  const source = await open(sourcePath, sourceFlags);
+  let destination: Awaited<ReturnType<typeof open>> | null = null;
+  let copyFailure: unknown = null;
+  try {
+    const before = await source.stat({ bigint: true });
+    if (
+      !before.isFile()
+      || before.nlink !== 1n
+      || before.dev !== options.file.device
+      || before.ino !== options.file.inode
+      || Number(before.size) !== options.file.size
+    ) {
+      throw new BombadilArtifactPolicyError(
+        `Bombadil artifact ${options.file.relativePath} changed before private copy`,
+      );
+    }
+    destination = await open(destinationPath, destinationFlags, 0o600);
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let offset = 0;
+    while (offset < options.file.size) {
+      const read = await source.read(
+        buffer,
+        0,
+        Math.min(buffer.length, options.file.size - offset),
+        offset,
+      );
+      if (read.bytesRead === 0) {
+        throw new BombadilArtifactPolicyError(
+          `Bombadil artifact ${options.file.relativePath} changed during private copy`,
+        );
+      }
+      hash.update(buffer.subarray(0, read.bytesRead));
+      let writtenOffset = 0;
+      while (writtenOffset < read.bytesRead) {
+        const written = await destination.write(
+          buffer,
+          writtenOffset,
+          read.bytesRead - writtenOffset,
+          offset + writtenOffset,
+        );
+        if (written.bytesWritten === 0) throw new Error("Private artifact copy made no progress");
+        writtenOffset += written.bytesWritten;
+      }
+      offset += read.bytesRead;
+    }
+    await destination.sync();
+    const after = await source.stat({ bigint: true });
+    if (
+      !sameBigIntFileMetadata(before, after)
+      || hash.digest("hex") !== options.file.sha256
+    ) {
+      throw new BombadilArtifactPolicyError(
+        `Bombadil artifact ${options.file.relativePath} changed during private copy`,
+      );
+    }
+  } catch (error) {
+    copyFailure = error;
+    await rm(destinationPath, { force: true }).catch(() => undefined);
+  }
+  let closeFailure: unknown = null;
+  try {
+    await closeBombadilArtifactCopyHandles(destination, source);
+  } catch (error) {
+    closeFailure = error;
+  }
+  if (copyFailure !== null) {
+    if (closeFailure !== null) {
+      throw new AggregateError(
+        [copyFailure, closeFailure],
+        "Bombadil artifact copy and descriptor cleanup both failed",
+        { cause: copyFailure },
+      );
+    }
+    throw copyFailure;
+  }
+  if (closeFailure !== null) throw closeFailure;
+}
+
+/** @internal Close both descriptor-bound copy handles even when one close fails. */
+export async function closeBombadilArtifactCopyHandles(
+  destination: Readonly<{ close: () => Promise<void> }> | null,
+  source: Readonly<{ close: () => Promise<void> }>,
+): Promise<void> {
+  const failures: unknown[] = [];
+  if (destination !== null) {
+    try {
+      await destination.close();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  try {
+    await source.close();
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Both Bombadil artifact copy descriptors failed to close");
+  }
+}
+
+function emptyArtifactInventory(): ArtifactInventory {
+  return {
+    directories: Object.freeze([]),
+    entryCount: 0,
+    files: Object.freeze([]),
+    fileCount: 0,
+    inventorySha256: sha256(""),
+    totalBytes: 0,
+  };
+}
+
+function artifactFailureCode(error: unknown): DirectBombadilArtifactFailureCode {
+  if (error instanceof BombadilPersistenceError) return "persistence";
+  if (error instanceof BombadilWriterSettlementError) return "writer-settlement";
+  if (error instanceof BombadilArtifactPolicyError) return "artifact-policy";
+  const message = renderUnknown(error);
+  if (message.includes("interrupted") || message.includes("SIGINT") || message.includes("SIGTERM")) {
+    return "interrupted";
+  }
+  if (message.includes("exploration policy")) return "exploration-policy";
+  if (message.includes("trace") || message.includes("Direct contract")) return "trace-attestation";
+  if (message.includes("server") || message.includes("reachable")) return "server";
+  if (message.includes("Bombadil")) return "process";
+  return "unknown";
+}
+
+function failureAsError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(renderUnknown(error));
+}
+
+function combinePersistenceFailure(
+  primary: unknown,
+  persistence: unknown,
+  message = "Bombadil persistence also failed",
+): BombadilPersistenceError {
+  return new BombadilPersistenceError(
+    `${renderUnknown(primary)}; ${message}`,
+    [primary, persistence],
+  );
+}
+
+async function publishFailureAndThrow(
+  primary: unknown,
+  publish: () => Promise<void>,
+): Promise<never> {
+  try {
+    await publish();
+  } catch (persistence) {
+    throw combinePersistenceFailure(
+      primary,
+      persistence,
+      "sanitized Bombadil receipt publication also failed",
+    );
+  }
+  throw failureAsError(primary);
+}
+
+function createArtifactReceipt(options: {
+  readonly completedAt: Date;
+  readonly diagnosticsRetained: boolean;
+  readonly failureCode: DirectBombadilArtifactFailureCode | null;
+  readonly inventory: ArtifactInventory;
+  readonly policy: ValidatedArtifactPolicy;
+  readonly session: ArtifactUploadSession;
+  readonly status: "failed" | "passed" | "rejected";
+}): DirectBombadilArtifactReceipt {
+  return Object.freeze({
+    schema: ARTIFACT_RECEIPT_SCHEMA,
+    completedAt: options.completedAt.toISOString(),
+    diagnosticsRetained: options.diagnosticsRetained,
+    failureCode: options.failureCode,
+    inventory: Object.freeze({
+      entryCount: options.inventory.entryCount,
+      fileCount: options.inventory.fileCount,
+      inventorySha256: options.inventory.entryCount === 0
+        ? null
+        : options.inventory.inventorySha256,
+      totalBytes: options.inventory.totalBytes,
+    }),
+    mode: options.session.mode,
+    policy: options.policy,
+    runId: options.session.runId,
+    status: options.status,
+  });
+}
+
+function createSanitizedRunSummary(options: {
+  readonly artifactName: string;
+  readonly attestation: DirectBombadilTraceAttestation | null;
+  readonly explorationSummary: DirectBombadilExplorationSummary | null;
+  readonly failureCode: DirectBombadilArtifactFailureCode | null;
+  readonly scenario: string;
+  readonly status: "failed" | "passed" | "rejected";
+}): DirectBombadilSanitizedRunSummary {
+  return Object.freeze({
+    schema: ARTIFACT_SUMMARY_SCHEMA,
+    artifactName: options.artifactName,
+    scenario: options.scenario,
+    status: options.status,
+    failureCode: options.failureCode,
+    attestation: options.attestation === null
+      ? null
+      : Object.freeze({
+          invalidObservationCount: options.attestation.invalidObservationCount,
+          observationCount: options.attestation.observationCount,
+          validObservationCount: options.attestation.validObservationCount,
+        }),
+    exploration: options.explorationSummary === null
+      ? null
+      : Object.freeze({
+          actionCount: options.explorationSummary.actions.total,
+          nonWaitActionCount: options.explorationSummary.actions.nonWaitCount,
+          policySatisfied: options.explorationSummary.policy.satisfied,
+          traceBytes: options.explorationSummary.trace.bytes,
+          traceLineCount: options.explorationSummary.trace.lineCount,
+          traceSha256: options.explorationSummary.trace.sha256,
+        }),
+  });
+}
+
+async function resetUploadStaging(session: AtomicArtifactUploadSession): Promise<void> {
+  await rm(session.stagingDirectory, { force: true, recursive: true });
+  await createExclusiveDirectory(session.stagingDirectory, "Bombadil upload staging leaf");
+}
+
+async function withOwnedUploadStaging<Value>(
+  session: AtomicArtifactUploadSession,
+  operation: () => Promise<Value>,
+): Promise<Value> {
+  await createExclusiveDirectory(session.stagingDirectory, "Bombadil upload staging leaf");
+  try {
+    return await operation();
+  } catch (error) {
+    try {
+      await rm(session.stagingDirectory, { force: true, recursive: true });
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Bombadil upload staging operation and cleanup both failed",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
+async function publishRunUpload(options: {
+  readonly abortSignal?: AbortSignal;
+  readonly artifactName: string;
+  readonly beforeCommitCheck?: (() => Promise<void> | void) | undefined;
+  readonly attestation: DirectBombadilTraceAttestation | null;
+  readonly completedAt: Date;
+  readonly explorationSummary: DirectBombadilExplorationSummary | null;
+  readonly failure: unknown;
+  readonly failureCode?: DirectBombadilArtifactFailureCode;
+  readonly inventory: ArtifactInventory;
+  readonly interruptedSignal?: () => NodeJS.Signals | null;
+  readonly localOutputPath: string;
+  readonly policy: ValidatedArtifactPolicy;
+  readonly privateDiagnosticsAllowed: boolean;
+  readonly scenario: string;
+  readonly serverLog: string;
+  readonly processLog: string;
+  readonly session: ArtifactUploadSession;
+  readonly status: "failed" | "passed" | "rejected";
+}): Promise<{
+  readonly failure: unknown;
+  readonly receipt: DirectBombadilArtifactReceipt;
+}> {
+  let failure = options.failure;
+  let failureCode = failure === null
+    ? null
+    : options.failureCode ?? artifactFailureCode(failure);
+  let status = options.status;
+  const observeInterruption = (): boolean => {
+    if (failure !== null || options.abortSignal?.aborted !== true) return false;
+    const signal = options.interruptedSignal?.() ?? null;
+    failure = new Error(
+      signal === null
+        ? "Bombadil fuzzing was interrupted"
+        : `Bombadil fuzzing was interrupted by ${signal}`,
+    );
+    failureCode = "interrupted";
+    status = "failed";
+    return true;
+  };
+  observeInterruption();
+  if (options.session.publication === "deferred" && options.session.mode !== "public-summary") {
+    throw new BombadilArtifactPolicyError(
+      "Bombadil matrices support public-summary uploads only",
+    );
+  }
+  if (options.session.publication === "deferred") {
+    const receipt = createArtifactReceipt({
+      completedAt: options.completedAt,
+      diagnosticsRetained: false,
+      failureCode,
+      inventory: options.inventory,
+      policy: options.policy,
+      session: options.session,
+      status,
+    });
+    const summary = createSanitizedRunSummary({
+      artifactName: options.artifactName,
+      attestation: options.attestation,
+      explorationSummary: options.explorationSummary,
+      failureCode,
+      scenario: options.scenario,
+      status,
+    });
+    if (options.session.deferredPayload.value !== null) {
+      throw new BombadilArtifactPolicyError("Bombadil deferred upload state is invalid");
+    }
+    options.session.deferredPayload.value = Object.freeze({ receipt, summary });
+    return { failure, receipt };
+  }
+  const session = options.session;
+  return await withOwnedUploadStaging(session, async () => {
+  const expectedFiles: ExpectedUploadFile[] = [];
+  let diagnosticsRetained = false;
+  if (
+    session.mode === "private-vetted"
+    && options.privateDiagnosticsAllowed
+    && failureCode !== "interrupted"
+  ) {
+    try {
+      const diagnosticsRoot = await ensureSafeChildDirectories(
+        session.stagingDirectory,
+        ["diagnostics", "bombadil-output"],
+      );
+      for (const file of options.inventory.files) {
+        await copyVerifiedArtifactFile({
+          destinationRoot: diagnosticsRoot,
+          file,
+          sourceRoot: options.localOutputPath,
+        });
+        expectedFiles.push({
+          relativePath: `diagnostics/bombadil-output/${file.relativePath}`,
+          sha256: file.sha256,
+          size: file.size,
+        });
+      }
+      const controlledLogs = await ensureSafeChildDirectories(
+        session.stagingDirectory,
+        ["diagnostics", "host"],
+      );
+      const processLogBytes = Buffer.from(options.processLog, "utf8");
+      const serverLogBytes = Buffer.from(options.serverLog, "utf8");
+      await writeExclusiveBytes(join(controlledLogs, "bombadil.log"), processLogBytes);
+      await writeExclusiveBytes(join(controlledLogs, "server.log"), serverLogBytes);
+      expectedFiles.push(
+        {
+          relativePath: "diagnostics/host/bombadil.log",
+          sha256: sha256(processLogBytes),
+          size: processLogBytes.byteLength,
+        },
+        {
+          relativePath: "diagnostics/host/server.log",
+          sha256: sha256(serverLogBytes),
+          size: serverLogBytes.byteLength,
+        },
+      );
+      diagnosticsRetained = true;
+    } catch (error) {
+      const persistence = new BombadilPersistenceError(
+        "Bombadil private diagnostics could not be persisted",
+        [error],
+      );
+      failure = failure === null
+        ? persistence
+        : combinePersistenceFailure(failure, persistence);
+      failureCode = "persistence";
+      status = "failed";
+      await resetUploadStaging(session);
+      expectedFiles.length = 0;
+    }
+  }
+  const stageSanitizedPayload = async (): Promise<DirectBombadilArtifactReceipt> => {
+    const receipt = createArtifactReceipt({
+      completedAt: options.completedAt,
+      diagnosticsRetained,
+      failureCode,
+      inventory: options.inventory,
+      policy: options.policy,
+      session,
+      status,
+    });
+    const summary = createSanitizedRunSummary({
+      artifactName: options.artifactName,
+      attestation: options.attestation,
+      explorationSummary: options.explorationSummary,
+      failureCode,
+      scenario: options.scenario,
+      status,
+    });
+    expectedFiles.push(
+      await writeExpectedJson(session.stagingDirectory, "summary.json", summary),
+      await writeExpectedJson(session.stagingDirectory, "receipt.json", receipt),
+    );
+    await validateExpectedUploadTree(session.stagingDirectory, expectedFiles);
+    return receipt;
+  };
+  let receipt = await stageSanitizedPayload();
+  await options.beforeCommitCheck?.();
+  await requireArtifactUploadLeafAbsent(session);
+  if (observeInterruption()) {
+    diagnosticsRetained = false;
+    await resetUploadStaging(session);
+    expectedFiles.length = 0;
+    receipt = await stageSanitizedPayload();
+    await requireArtifactUploadLeafAbsent(session);
+  }
+  // Signals observed after this synchronous check belong to the caller after
+  // terminal publication has begun. The immutable rename remains uninterruptible.
+  await commitArtifactUploadSession(session);
+  return { failure, receipt };
+  });
+}
+
+type MatrixCampaignTerminalStatus = DirectBombadilMatrixCampaignStatus;
+type MatrixCampaignReceiptEntry = DirectBombadilMatrixCampaignReceiptEntry;
+
+interface MatrixSanitizedChild {
+  readonly campaignId: string;
+  readonly payload: SanitizedRunUploadPayload;
+}
+
+async function publishMatrixUpload(options: {
+  readonly abortSignal?: AbortSignal;
+  readonly beforeCommitCheck?: (() => Promise<void> | void) | undefined;
+  readonly campaigns: readonly MatrixCampaignReceiptEntry[];
+  readonly children: readonly MatrixSanitizedChild[];
+  readonly completedAt: Date;
+  readonly failure: unknown;
+  readonly failureCode?: DirectBombadilArtifactFailureCode;
+  readonly interruptedSignal?: () => NodeJS.Signals | null;
+  readonly omittedCampaignCount?: number;
+  readonly session: AtomicArtifactUploadSession;
+}): Promise<{ readonly failure: unknown }> {
+  if (options.session.mode !== "public-summary") {
+    throw new BombadilArtifactPolicyError("Bombadil matrix upload session must be public-summary");
+  }
+  let failure = options.failure;
+  let failureCode = failure === null
+    ? null
+    : options.failureCode ?? artifactFailureCode(failure);
+  let status: "failed" | "passed" = failure === null ? "passed" : "failed";
+  const observeInterruption = (): boolean => {
+    if (failure !== null || options.abortSignal?.aborted !== true) return false;
+    const signal = options.interruptedSignal?.() ?? null;
+    failure = new Error(
+      signal === null
+        ? "Bombadil matrix was interrupted"
+        : `Bombadil matrix was interrupted by ${signal}`,
+    );
+    failureCode = "interrupted";
+    status = "failed";
+    return true;
+  };
+  observeInterruption();
+  return await withOwnedUploadStaging(options.session, async () => {
+  const counts = new Map<MatrixCampaignTerminalStatus, number>();
+  for (const campaign of options.campaigns) {
+    counts.set(campaign.status, (counts.get(campaign.status) ?? 0) + 1);
+  }
+  const expectedFiles: ExpectedUploadFile[] = [];
+  const stageMatrixPayload = async (): Promise<void> => {
+    const receipt: DirectBombadilMatrixReceipt = Object.freeze({
+      schema: MATRIX_RECEIPT_SCHEMA,
+      completedAt: options.completedAt.toISOString(),
+      failureCode,
+      mode: options.session.mode,
+      runId: options.session.runId,
+      status,
+      omittedCampaignCount: options.omittedCampaignCount ?? 0,
+      campaigns: Object.freeze(options.campaigns.map((campaign) => Object.freeze(campaign))),
+    });
+    const summary: DirectBombadilMatrixSummary = Object.freeze({
+      schema: MATRIX_SUMMARY_SCHEMA,
+      failureCode,
+      status,
+      campaigns: Object.freeze({
+        failed: counts.get("failed") ?? 0,
+        notRun: counts.get("not-run") ?? 0,
+        notSelected: counts.get("not-selected") ?? 0,
+        passed: counts.get("passed") ?? 0,
+        rejected: counts.get("rejected") ?? 0,
+        total: options.campaigns.length,
+        omitted: options.omittedCampaignCount ?? 0,
+      }),
+    });
+    for (const child of options.children) {
+      expectedFiles.push(
+        await writeExpectedJson(
+          options.session.stagingDirectory,
+          `campaigns/${child.campaignId}/summary.json`,
+          child.payload.summary,
+        ),
+        await writeExpectedJson(
+          options.session.stagingDirectory,
+          `campaigns/${child.campaignId}/receipt.json`,
+          child.payload.receipt,
+        ),
+      );
+    }
+    expectedFiles.push(
+      await writeExpectedJson(options.session.stagingDirectory, "summary.json", summary),
+      await writeExpectedJson(options.session.stagingDirectory, "receipt.json", receipt),
+    );
+    await validateExpectedUploadTree(options.session.stagingDirectory, expectedFiles);
+  };
+  await stageMatrixPayload();
+  await options.beforeCommitCheck?.();
+  await requireArtifactUploadLeafAbsent(options.session);
+  if (observeInterruption()) {
+    await resetUploadStaging(options.session);
+    expectedFiles.length = 0;
+    await stageMatrixPayload();
+    await requireArtifactUploadLeafAbsent(options.session);
+  }
+  // The atomic rename is the matrix terminal-publication boundary.
+  await commitArtifactUploadSession(options.session);
+  return { failure };
+  });
 }
 
 function parseTraceDirectObservation(value: unknown): TraceDirectObservation {
@@ -1120,24 +3415,27 @@ export async function attestDirectBombadilTrace(options: {
   readonly expectedScenario: string;
   readonly tracePath: string;
 }): Promise<DirectBombadilTraceAttestation> {
-  const metadata = await stat(options.tracePath).catch(() => null);
-  if (metadata === null || !metadata.isFile() || metadata.size === 0) {
-    throw new Error("Bombadil did not produce a nonempty trace.jsonl");
-  }
-  if (metadata.size > TRACE_MAX_BYTES) {
-    throw new Error(`Bombadil trace exceeds ${String(TRACE_MAX_BYTES)} bytes`);
-  }
+  const traceBytes = await readBoundRegularFileBytes({
+    label: "Bombadil trace.jsonl",
+    maximumBytes: TRACE_MAX_BYTES,
+    path: options.tracePath,
+  });
+  return attestDirectBombadilTraceBytes({ ...options, traceBytes });
+}
 
-  const stream = createReadStream(options.tracePath, { encoding: "utf8" });
-  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+function attestDirectBombadilTraceBytes(options: {
+  readonly expectedRoute: string;
+  readonly expectedScenario: string;
+  readonly traceBytes: Uint8Array;
+}): DirectBombadilTraceAttestation {
+  const lines = decodeTraceLines(options.traceBytes);
   let observationCount = 0;
   let invalidObservationCount = 0;
   let validObservationCount = 0;
   let initial: DirectBombadilTraceBinding | null = null;
   let final: ExactTraceDirectObservation | null = null;
   let finalWasInvalid = false;
-  try {
-    for await (const line of lines) {
+  for (const line of lines) {
       observationCount += 1;
       if (observationCount > TRACE_MAX_LINES) {
         throw new Error(`Bombadil trace exceeds ${String(TRACE_MAX_LINES)} lines`);
@@ -1190,10 +3488,6 @@ export async function attestDirectBombadilTrace(options: {
       if (observation.violations.some((value) => value !== 0)) {
         throw new Error("Bombadil trace contains a nonzero Direct violation counter");
       }
-    }
-  } finally {
-    lines.close();
-    stream.destroy();
   }
 
   if (initial === null || final === null) {
@@ -1240,13 +3534,19 @@ export async function summarizeDirectBombadilTrace(options: {
   readonly targetUrl: string;
   readonly tracePath: string;
 }): Promise<DirectBombadilExplorationSummary> {
-  const metadata = await stat(options.tracePath).catch(() => null);
-  if (metadata === null || !metadata.isFile() || metadata.size === 0) {
-    throw new Error("Bombadil did not produce a nonempty trace.jsonl");
-  }
-  if (metadata.size > TRACE_MAX_BYTES) {
-    throw new Error(`Bombadil trace exceeds ${String(TRACE_MAX_BYTES)} bytes`);
-  }
+  const traceBytes = await readBoundRegularFileBytes({
+    label: "Bombadil trace.jsonl",
+    maximumBytes: TRACE_MAX_BYTES,
+    path: options.tracePath,
+  });
+  return summarizeDirectBombadilTraceBytes({ ...options, traceBytes });
+}
+
+function summarizeDirectBombadilTraceBytes(options: {
+  readonly explorationPolicy?: DirectBombadilExplorationPolicy;
+  readonly targetUrl: string;
+  readonly traceBytes: Uint8Array;
+}): DirectBombadilExplorationSummary {
   let targetUrl: URL;
   try {
     targetUrl = new URL(options.targetUrl);
@@ -1296,10 +3596,8 @@ export async function summarizeDirectBombadilTrace(options: {
     0,
     TRACE_MAX_NAMED_SNAPSHOT_NAMES - strictDiagnosticSnapshotNames.size,
   );
-  const stream = createReadStream(options.tracePath, { encoding: "utf8" });
-  const lines = createInterface({ input: stream, crlfDelay: Infinity });
-  try {
-    for await (const line of lines) {
+  const lines = decodeTraceLines(options.traceBytes);
+  for (const line of lines) {
       lineCount += 1;
       if (lineCount > TRACE_MAX_LINES) {
         throw new Error(`Bombadil trace exceeds ${String(TRACE_MAX_LINES)} lines`);
@@ -1440,10 +3738,6 @@ export async function summarizeDirectBombadilTrace(options: {
         entry.values.add(snapshot.valueSha256);
       }
       previousObservationWasExact = true;
-    }
-  } finally {
-    lines.close();
-    stream.destroy();
   }
   if (lineCount === 0) throw new Error("Bombadil did not produce a nonempty trace.jsonl");
 
@@ -1494,13 +3788,12 @@ export async function summarizeDirectBombadilTrace(options: {
       policyFailures.push("the browser did not remain on the exact target URL");
     }
   }
-  const traceBytes = await readFile(options.tracePath);
   return Object.freeze({
     schema: "direct.bombadil-exploration-summary/v2",
     trace: Object.freeze({
-      bytes: metadata.size,
+      bytes: options.traceBytes.byteLength,
       lineCount,
-      sha256: sha256(traceBytes),
+      sha256: sha256(options.traceBytes),
     }),
     actions: Object.freeze({
       byKind: sortedCountRecord(actionCounts),
@@ -1915,7 +4208,7 @@ export function validateDirectBombadilFuzzConfig(
   if (!isAbsolute(config.repositoryRoot) || repositoryRoot !== config.repositoryRoot) {
     throw new Error("repositoryRoot must be an absolute normalized path");
   }
-  if (!ARTIFACT_NAME_PATTERN.test(config.artifactName)) {
+  if (!isBoundedArtifactIdentifier(config.artifactName)) {
     throw new Error("artifactName must be a safe lowercase kebab identifier");
   }
   if (
@@ -1926,8 +4219,7 @@ export function validateDirectBombadilFuzzConfig(
     throw new Error("label must contain 1-160 visible characters");
   }
   if (
-    config.scenario.length > 120
-    || !SCENARIO_PATTERN.test(config.scenario)
+    !isBoundedScenarioIdentifier(config.scenario)
   ) {
     throw new Error("scenario must be a valid Direct scenario identifier");
   }
@@ -1977,6 +4269,7 @@ export function validateDirectBombadilFuzzConfig(
   const targetQuery = validateTargetQuery(config.targetQuery ?? {});
   const viewport = validateViewport(config.viewport);
   const explorationPolicy = validateExplorationPolicy(config.explorationPolicy);
+  const artifactPolicy = validateArtifactPolicy(config.artifactPolicy);
   const startupTimeoutMs = config.server.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
   if (
     !Number.isSafeInteger(startupTimeoutMs)
@@ -1992,6 +4285,7 @@ export function validateDirectBombadilFuzzConfig(
   const port = new URL(baseUrl).port;
   return {
     ...config,
+    artifactPolicy,
     repositoryRoot,
     specificationPath,
     baseUrl,
@@ -2119,11 +4413,51 @@ function captureStream(
 function signalProcessGroup(
   process_: ReturnType<typeof Bun.spawn>,
   signal: "SIGKILL" | "SIGTERM",
-): void {
+): boolean {
   try {
     process.kill(-process_.pid, signal);
-  } catch {
+    return true;
+  } catch (error) {
+    if (!isRecord(error) || error.code !== "ESRCH") throw error;
     if (process_.exitCode === null) process_.kill(signal);
+    return false;
+  }
+}
+
+function processGroupExists(processId: number): boolean {
+  try {
+    process.kill(-processId, 0);
+    return true;
+  } catch (error) {
+    if (isRecord(error) && error.code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+async function waitForProcessGroupExit(
+  processId: number,
+  timeoutMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (processGroupExists(processId)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Bombadil process group ${String(processId)} survived cleanup`);
+    }
+    await Bun.sleep(Math.min(25, Math.max(1, deadline - Date.now())));
+  }
+}
+
+async function waitForBombadilLeaderExit(
+  process_: ReturnType<typeof Bun.spawn>,
+  timeoutMs: number,
+): Promise<void> {
+  if (process_.exitCode !== null) return;
+  const exited = await Promise.race([
+    process_.exited.then(() => true),
+    Bun.sleep(timeoutMs).then(() => false),
+  ]);
+  if (!exited && process_.exitCode === null) {
+    throw new Error(`Bombadil process ${String(process_.pid)} survived cleanup`);
   }
 }
 
@@ -2132,25 +4466,82 @@ async function terminateProcessGroup(
   graceMs: number,
 ): Promise<void> {
   signalProcessGroup(process_, "SIGTERM");
-  await Bun.sleep(graceMs);
+  await Promise.race([
+    process_.exited.then(() => undefined),
+    Bun.sleep(graceMs),
+  ]);
   // The group may still contain descendants after its leader exits on TERM.
-  signalProcessGroup(process_, "SIGKILL");
-  await Promise.race([process_.exited.then(() => undefined), Bun.sleep(graceMs)]);
+  if (processGroupExists(process_.pid)) signalProcessGroup(process_, "SIGKILL");
+  await waitForBombadilLeaderExit(process_, graceMs);
+  await waitForProcessGroupExit(process_.pid, graceMs);
+}
+
+async function settleBombadilProcessGroup(options: {
+  readonly immediate: boolean;
+  readonly process: ReturnType<typeof Bun.spawn>;
+  readonly timeoutMs: number;
+}): Promise<void> {
+  try {
+    if (options.immediate) {
+      signalProcessGroup(options.process, "SIGKILL");
+      await waitForBombadilLeaderExit(options.process, options.timeoutMs);
+      await waitForProcessGroupExit(options.process.pid, options.timeoutMs);
+      return;
+    }
+    await terminateProcessGroup(options.process, options.timeoutMs);
+  } catch (error) {
+    throw new BombadilWriterSettlementError(
+      `Bombadil process group ${String(options.process.pid)} did not settle safely`,
+      error,
+    );
+  }
+}
+
+async function monitorBombadilArtifactTree(options: {
+  readonly abortSignal: AbortSignal;
+  readonly outputPath: string;
+  readonly policy: ValidatedArtifactPolicy;
+}): Promise<void> {
+  while (!options.abortSignal.aborted) {
+    try {
+      await scanBombadilArtifactTree({
+        allowTransientEntryAbsence: true,
+        hashFiles: false,
+        policy: options.policy,
+        root: options.outputPath,
+        rootMayBeAbsent: true,
+      });
+    } catch (error) {
+      if (isRecord(error) && error.code === "ENOENT") {
+        // A live producer may atomically replace or remove an entry. The final
+        // stopped-process scan is authoritative; polling only bounds growth.
+      } else {
+        throw error instanceof BombadilArtifactPolicyError
+          ? error
+          : new BombadilArtifactPolicyError("Bombadil artifact monitor could not inspect output");
+      }
+    }
+    await Bun.sleep(ARTIFACT_MONITOR_INTERVAL_MS);
+  }
 }
 
 export async function runBombadilNativeProcess(
   invocation: DirectBombadilInvocation,
 ): Promise<BombadilProcessResult> {
+  const artifactPolicy = validateArtifactPolicy(invocation.artifactPolicy);
+  const childEnvironment = { ...process.env, NO_COLOR: "1" };
+  delete childEnvironment[ARTIFACT_COORDINATION_ENVIRONMENT];
   const process_ = Bun.spawn([...invocation.command], {
     cwd: invocation.cwd,
     detached: true,
-    env: { ...process.env, NO_COLOR: "1" },
+    env: childEnvironment,
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
   });
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let abortListener: (() => void) | undefined;
+  const monitorAbortController = new AbortController();
   const timeoutPromise = new Promise<"timeout">((resolveTimeout) => {
     timeout = setTimeout(() => resolveTimeout("timeout"), invocation.wallClockTimeoutMs);
   });
@@ -2167,23 +4558,55 @@ export async function runBombadilNativeProcess(
     const stdoutCapture = captureStream(process_.stdout);
     const stderrCapture = captureStream(process_.stderr);
     const outputPromise = Promise.all([stdoutCapture.result, stderrCapture.result]);
+    const artifactMonitor = monitorBombadilArtifactTree({
+      abortSignal: monitorAbortController.signal,
+      outputPath: invocation.outputPath,
+      policy: artifactPolicy,
+    }).then(
+      () => ({ kind: "monitor-stopped" as const }),
+      (error: unknown) => ({ kind: "artifact-policy" as const, error }),
+    );
     const outcome = await Promise.race([
       process_.exited.then((exitCode) => ({ kind: "exited" as const, exitCode })),
       timeoutPromise.then(() => ({ kind: "timeout" as const })),
       abortPromise.then(() => ({ kind: "aborted" as const })),
+      artifactMonitor,
     ]);
+    if (outcome.kind === "monitor-stopped") {
+      throw new BombadilArtifactPolicyError("Bombadil artifact monitor stopped unexpectedly");
+    }
     const terminationGraceMs = invocation.terminationGraceMs
       ?? PROCESS_TERMINATION_GRACE_MS;
-    if (outcome.kind === "exited") {
-      // The native leader is done. Any member left in its group is stale and
-      // may otherwise keep inherited output pipes open indefinitely.
-      signalProcessGroup(process_, "SIGKILL");
-    } else {
-      await terminateProcessGroup(
-        process_,
-        terminationGraceMs,
-      );
+    try {
+      await settleBombadilProcessGroup({
+        // Every terminal outcome is fail-closed: no writer receives a grace
+        // window in which it can keep growing or replacing artifact files.
+        immediate: true,
+        process: process_,
+        timeoutMs: terminationGraceMs,
+      });
+    } catch (error) {
+      stdoutCapture.stop();
+      stderrCapture.stop();
+      throw error;
     }
+    let finalArtifactFailure: unknown = null;
+    try {
+      await scanBombadilArtifactTree({
+        hashFiles: false,
+        policy: artifactPolicy,
+        root: invocation.outputPath,
+        rootMayBeAbsent: true,
+      });
+    } catch (error) {
+      finalArtifactFailure = error instanceof BombadilArtifactPolicyError
+        ? error
+        : new BombadilArtifactPolicyError(
+            `Bombadil final artifact inventory could not be proven safe: ${renderUnknown(error)}`,
+          );
+    }
+    monitorAbortController.abort();
+    const finalMonitorOutcome = await artifactMonitor;
     const outputSettled = await Promise.race([
       outputPromise.then(
         () => true,
@@ -2196,6 +4619,16 @@ export async function runBombadilNativeProcess(
       stderrCapture.stop();
     }
     const [stdout, stderr] = await outputPromise;
+    const artifactPolicyFailure = outcome.kind === "artifact-policy"
+      ? outcome.error
+      : finalMonitorOutcome.kind === "artifact-policy"
+        ? finalMonitorOutcome.error
+        : finalArtifactFailure;
+    if (artifactPolicyFailure !== null) {
+      throw artifactPolicyFailure instanceof BombadilArtifactPolicyError
+        ? artifactPolicyFailure
+        : new BombadilArtifactPolicyError("Bombadil artifact policy was violated");
+    }
     return {
       exitCode: outcome.kind === "exited" ? outcome.exitCode : process_.exitCode ?? 137,
       stderr,
@@ -2203,6 +4636,7 @@ export async function runBombadilNativeProcess(
       termination: outcome.kind === "exited" ? null : outcome.kind,
     };
   } finally {
+    monitorAbortController.abort();
     if (timeout !== undefined) clearTimeout(timeout);
     if (abortListener !== undefined) {
       invocation.abortSignal?.removeEventListener("abort", abortListener);
@@ -2213,8 +4647,14 @@ export async function runBombadilNativeProcess(
 const defaultDependencies: DirectBombadilRunnerDependencies = {
   acquireServer: acquireVerificationServer,
   createAbortController: () => new AbortController(),
+  createRunId: randomUUID,
   now: () => new Date(),
   runBombadil: runBombadilNativeProcess,
+  signalController: {
+    forward: (signal) => process.kill(process.pid, signal),
+    once: (signal, listener) => process.once(signal, listener),
+    removeListener: (signal, listener) => process.removeListener(signal, listener),
+  },
   serverOutputTimeoutMs: SERVER_OUTPUT_TIMEOUT_MS,
   spawnServer: spawnVerificationServer,
   stopServer: stopVerificationServer,
@@ -2419,12 +4859,14 @@ function parseMatrixCampaignArgument(arguments_: readonly string[]): {
 function validateCampaignMatrix(
   campaigns: readonly DirectBombadilFuzzCampaign[],
 ): readonly DirectBombadilFuzzCampaign[] {
-  if (campaigns.length === 0 || campaigns.length > 32) {
-    throw new Error("Bombadil campaign matrix must contain 1-32 campaigns");
+  if (campaigns.length === 0 || campaigns.length > MAX_MATRIX_CAMPAIGNS) {
+    throw new Error(
+      `Bombadil campaign matrix must contain 1-${String(MAX_MATRIX_CAMPAIGNS)} campaigns`,
+    );
   }
   const ids = new Set<string>();
   for (const campaign of campaigns) {
-    if (!ARTIFACT_NAME_PATTERN.test(campaign.id) || ids.has(campaign.id)) {
+    if (!isBoundedArtifactIdentifier(campaign.id) || ids.has(campaign.id)) {
       throw new Error("Bombadil campaign IDs must be unique lowercase kebab identifiers");
     }
     ids.add(campaign.id);
@@ -2435,12 +4877,14 @@ function validateCampaignMatrix(
 /** Runs a bounded product-owned campaign matrix serially. */
 export async function runDirectBombadilFuzzMatrix(
   campaignsInput: readonly DirectBombadilFuzzCampaign[],
-  arguments_: readonly string[] = process.argv.slice(2),
+  input: DirectBombadilMatrixRunInput = process.argv.slice(2),
   dependencyOverrides: Partial<DirectBombadilRunnerDependencies> = {},
-): Promise<DirectBombadilFuzzMatrixResult> {
-  const campaigns = validateCampaignMatrix(campaignsInput);
-  const parsed = parseMatrixCampaignArgument(arguments_);
-  if (parsed.help) {
+): Promise<DirectBombadilFuzzMatrixExecutionResult> {
+  const dependencies = { ...defaultDependencies, ...dependencyOverrides };
+  const normalizedOptions = normalizeFuzzRunOptions(input);
+  if (normalizedOptions.arguments.some((argument) => argument === "--help" || argument === "-h")) {
+    const campaigns = validateCampaignMatrix(campaignsInput);
+    parseMatrixCampaignArgument(normalizedOptions.arguments);
     process.stdout.write(`${[
       helpText(campaigns[0]?.config.baseUrl ?? ""),
       "  --campaign <id>   Run one campaign; required with --replay",
@@ -2449,36 +4893,236 @@ export async function runDirectBombadilFuzzMatrix(
     ].join("\n")}\n`);
     return { kind: "help" };
   }
-  const selected = parsed.campaignId === null
-    ? campaigns
-    : campaigns.filter((campaign) => campaign.id === parsed.campaignId);
-  if (selected.length === 0) {
-    throw new Error(`Unknown Bombadil campaign ${parsed.campaignId ?? ""}`);
-  }
-  if (
-    parsed.campaignId === null
-    && parsed.arguments.some((argument) =>
-      argument === "--replay" || argument.startsWith("--replay=")
-    )
-  ) {
-    throw new Error("--replay requires exactly one --campaign in matrix mode");
-  }
-  const results: Array<{
-    readonly campaignId: string;
-    readonly result: Extract<DirectBombadilFuzzResult, { readonly kind: "run" }>;
-  }> = [];
-  for (const campaign of selected) {
-    const result = await runDirectBombadilFuzz(
-      campaign.config,
-      parsed.arguments,
-      dependencyOverrides,
-    );
-    if (result.kind !== "run") {
-      throw new Error("Bombadil campaign unexpectedly returned help during matrix execution");
+  const matrixAbortController = dependencies.createAbortController?.() ?? new AbortController();
+  let interruptedSignal: NodeJS.Signals | null = null;
+  const interrupt = (signal: NodeJS.Signals): void => {
+    interruptedSignal ??= signal;
+    matrixAbortController.abort();
+  };
+  const interruptSignals = ["SIGINT", "SIGTERM"] as const;
+  const processSignals = dependencies.signalController;
+  for (const signal of interruptSignals) processSignals.once(signal, interrupt);
+  const releaseSignalHandlers = (): void => {
+    for (const signal of interruptSignals) processSignals.removeListener(signal, interrupt);
+  };
+  let invalidMatrixUploadMode: boolean;
+  let matrixPlan: DirectBombadilArtifactRunPlan;
+  let uploadSession: AtomicArtifactUploadSession;
+  try {
+    const firstRepositoryRoot = campaignsInput[0]?.config.repositoryRoot;
+    if (normalizedOptions.artifactRun === null && firstRepositoryRoot === undefined) {
+      throw new Error(
+        `Bombadil campaign matrix must contain 1-${String(MAX_MATRIX_CAMPAIGNS)} campaigns`,
+      );
     }
-    results.push({ campaignId: campaign.id, result });
+    const requestedMatrixPlan = normalizedOptions.artifactRun ?? {
+      repositoryRoot: await realpath(resolve(firstRepositoryRoot ?? "")),
+      runId: dependencies.createRunId(),
+      uploadMode: "public-summary" as const,
+    };
+    const requestedMatrixUploadMode = (
+      requestedMatrixPlan as { readonly uploadMode?: unknown }
+    ).uploadMode ?? "public-summary";
+    invalidMatrixUploadMode = requestedMatrixUploadMode !== "public-summary";
+    matrixPlan = {
+      repositoryRoot: requestedMatrixPlan.repositoryRoot,
+      runId: requestedMatrixPlan.runId,
+      uploadMode: "public-summary",
+    };
+    uploadSession = await prepareArtifactUploadSession(matrixPlan);
+  } catch (error) {
+    releaseSignalHandlers();
+    const signalToForward = interruptedSignal as NodeJS.Signals | null;
+    if (signalToForward !== null) processSignals.forward(signalToForward);
+    throw error;
   }
-  return { kind: "matrix", results: Object.freeze(results) };
+  try {
+    let campaigns: readonly DirectBombadilFuzzCampaign[];
+    let parsed: ReturnType<typeof parseMatrixCampaignArgument>;
+    let selected: readonly DirectBombadilFuzzCampaign[];
+    try {
+      if (invalidMatrixUploadMode) {
+        throw new Error("Bombadil matrices support public-summary uploads only");
+      }
+      campaigns = validateCampaignMatrix(campaignsInput);
+      parsed = parseMatrixCampaignArgument(normalizedOptions.arguments);
+      selected = parsed.campaignId === null
+        ? campaigns
+        : campaigns.filter((campaign) => campaign.id === parsed.campaignId);
+      if (selected.length === 0) {
+        throw new Error(`Unknown Bombadil campaign ${parsed.campaignId ?? ""}`);
+      }
+      if (
+        parsed.campaignId === null
+        && parsed.arguments.some((argument) =>
+          argument === "--replay" || argument.startsWith("--replay=")
+        )
+      ) {
+        throw new Error("--replay requires exactly one --campaign in matrix mode");
+      }
+      for (const campaign of selected) {
+        if (interruptedSignal !== null) throw new Error("Bombadil matrix was interrupted");
+        const campaignArguments = parseDirectBombadilFuzzArguments(
+          parsed.arguments,
+          campaign.config.baseUrl,
+        );
+        if (campaignArguments.kind !== "run") {
+          throw new Error("Bombadil matrix campaign unexpectedly entered help mode");
+        }
+        const lexicalConfig = validateDirectBombadilFuzzConfig(
+          campaign.config,
+          campaignArguments.baseUrl,
+        );
+        const resolvedPaths = await resolveDirectBombadilRealPaths(
+          lexicalConfig,
+          resolveReplayPath(lexicalConfig.repositoryRoot, campaignArguments.replayPath),
+        );
+        if (resolvedPaths.config.repositoryRoot !== matrixPlan.repositoryRoot) {
+          throw new BombadilArtifactPolicyError(
+            "Every Bombadil matrix campaign must share artifactRun.repositoryRoot",
+          );
+        }
+      }
+    } catch (error) {
+      const boundedCampaigns = campaignsInput.slice(0, MAX_MATRIX_CAMPAIGNS);
+      const entries = boundedCampaigns.map((campaign, index): MatrixCampaignReceiptEntry => ({
+        campaignId: isBoundedArtifactIdentifier(campaign.id) ? campaign.id : null,
+        index,
+        receipt: null,
+        status: "rejected",
+      }));
+      await publishFailureAndThrow(error, async () => {
+        await publishMatrixUpload({
+          abortSignal: matrixAbortController.signal,
+          beforeCommitCheck: dependencies.beforeArtifactCommit,
+          campaigns: entries,
+          children: [],
+          completedAt: dependencies.now(),
+          failure: error,
+          failureCode: interruptedSignal === null ? "configuration-rejected" : "interrupted",
+          interruptedSignal: () => interruptedSignal,
+          omittedCampaignCount: Math.max(0, campaignsInput.length - entries.length),
+          session: uploadSession,
+        });
+      });
+    }
+
+    const results: Array<{
+      readonly campaignId: string;
+      readonly result: Extract<DirectBombadilFuzzExecutionResult, { readonly kind: "run" }>;
+    }> = [];
+    const entries: MatrixCampaignReceiptEntry[] = campaigns.map((campaign, index) => ({
+      campaignId: campaign.id,
+      index,
+      receipt: null,
+      status: selected.includes(campaign) ? "not-run" : "not-selected",
+    }));
+    const children: MatrixSanitizedChild[] = [];
+    let executionFailure: unknown = null;
+    let executionFailureCode: DirectBombadilArtifactFailureCode | undefined;
+    for (const campaign of selected) {
+      if (interruptedSignal !== null) {
+        executionFailure = new Error("Bombadil matrix was interrupted");
+        break;
+      }
+      const campaignIndex = campaigns.indexOf(campaign);
+      const deferredPayload = { value: null as SanitizedRunUploadPayload | null };
+      const childSession: DeferredArtifactUploadSession = {
+        deferredPayload,
+        finalDirectory: join(uploadSession.finalDirectory, "campaigns", campaign.id),
+        mode: uploadSession.mode,
+        publication: "deferred",
+        receiptPath: join(
+          uploadSession.finalDirectory,
+          "campaigns",
+          campaign.id,
+          "receipt.json",
+        ),
+        runId: uploadSession.runId,
+      };
+      try {
+        const result = await runDirectBombadilFuzzInternal(
+          campaign.config,
+          parsed.arguments,
+          dependencyOverrides,
+          {
+            abortSignal: matrixAbortController.signal,
+            forwardSignal: false,
+            interruptedSignal: () => interruptedSignal,
+            plan: matrixPlan,
+            session: childSession,
+          },
+        );
+        if (result.kind !== "run" || deferredPayload.value === null) {
+          throw new Error("Bombadil campaign did not finalize its sanitized receipt");
+        }
+        children.push({ campaignId: campaign.id, payload: deferredPayload.value });
+        results.push({ campaignId: campaign.id, result });
+        entries[campaignIndex] = {
+          campaignId: campaign.id,
+          index: campaignIndex,
+          receipt: `campaigns/${campaign.id}/receipt.json`,
+          status: "passed",
+        };
+      } catch (error) {
+        executionFailure = error;
+        const childPayload = deferredPayload.value;
+        if (childPayload !== null) {
+          children.push({ campaignId: campaign.id, payload: childPayload });
+          executionFailureCode = childPayload.receipt.failureCode ?? undefined;
+        }
+        entries[campaignIndex] = {
+          campaignId: campaign.id,
+          index: campaignIndex,
+          receipt: childPayload === null
+            ? null
+            : `campaigns/${campaign.id}/receipt.json`,
+          status: childPayload?.receipt.status === "rejected" ? "rejected" : "failed",
+        };
+        break;
+      }
+    }
+    if (executionFailure === null && interruptedSignal !== null) {
+      executionFailure = new Error("Bombadil matrix was interrupted");
+      executionFailureCode = "interrupted";
+    }
+    if (executionFailure !== null) {
+      await publishFailureAndThrow(executionFailure, async () => {
+        await publishMatrixUpload({
+          abortSignal: matrixAbortController.signal,
+          beforeCommitCheck: dependencies.beforeArtifactCommit,
+          campaigns: entries,
+          children,
+          completedAt: dependencies.now(),
+          failure: executionFailure,
+          ...(executionFailureCode === undefined ? {} : { failureCode: executionFailureCode }),
+          interruptedSignal: () => interruptedSignal,
+          session: uploadSession,
+        });
+      });
+    }
+    const published = await publishMatrixUpload({
+      abortSignal: matrixAbortController.signal,
+      beforeCommitCheck: dependencies.beforeArtifactCommit,
+      campaigns: entries,
+      children,
+      completedAt: dependencies.now(),
+      failure: null,
+      interruptedSignal: () => interruptedSignal,
+      session: uploadSession,
+    });
+    if (published.failure !== null) throw failureAsError(published.failure);
+    return {
+      kind: "matrix",
+      receiptPath: uploadSession.receiptPath,
+      results: Object.freeze(results),
+      uploadArtifactPath: uploadSession.finalDirectory,
+    };
+  } finally {
+    releaseSignalHandlers();
+    const signalToForward = interruptedSignal as NodeJS.Signals | null;
+    if (signalToForward !== null) processSignals.forward(signalToForward);
+  }
 }
 
 function throwIfBombadilRunAborted(signal: AbortSignal): void {
@@ -2495,37 +5139,155 @@ function terminateAbortedOwnedServer(
 }
 
 /** Runs one bounded diagnostic Bombadil campaign and always releases its server lease. */
-export async function runDirectBombadilFuzz(
+async function runDirectBombadilFuzzInternal(
   config: DirectBombadilFuzzConfig,
-  arguments_: readonly string[] = process.argv.slice(2),
+  input: DirectBombadilFuzzRunInput = process.argv.slice(2),
   dependencyOverrides: Partial<DirectBombadilRunnerDependencies> = {},
-): Promise<DirectBombadilFuzzResult> {
-  const parsed = parseDirectBombadilFuzzArguments(arguments_, config.baseUrl);
-  if (parsed.kind === "help") {
+  preparedUpload?: Readonly<{
+    readonly abortSignal?: AbortSignal;
+    readonly forwardSignal?: boolean;
+    readonly interruptedSignal?: () => NodeJS.Signals | null;
+    readonly plan: DirectBombadilArtifactRunPlan;
+    readonly session: ArtifactUploadSession;
+  }>,
+): Promise<DirectBombadilFuzzExecutionResult> {
+  const dependencies = { ...defaultDependencies, ...dependencyOverrides };
+  const normalizedOptions = normalizeFuzzRunOptions(input);
+  if (normalizedOptions.arguments.some((argument) => argument === "--help" || argument === "-h")) {
+    parseDirectBombadilFuzzArguments(normalizedOptions.arguments, config.baseUrl);
     process.stdout.write(`${helpText(config.baseUrl)}\n`);
     return { kind: "help" };
   }
-
-  const lexicalConfig = validateDirectBombadilFuzzConfig(config, parsed.baseUrl);
-  const lexicalReplayPath = resolveReplayPath(
-    lexicalConfig.repositoryRoot,
-    parsed.replayPath,
-  );
-  const resolvedPaths = await resolveDirectBombadilRealPaths(
-    lexicalConfig,
-    lexicalReplayPath,
-  );
-  const validated = resolvedPaths.config;
-  const replayPath = resolvedPaths.replayPath;
-  const dependencies = { ...defaultDependencies, ...dependencyOverrides };
+  const abortController = dependencies.createAbortController?.() ?? new AbortController();
+  let interruptedSignal: NodeJS.Signals | null = null;
+  let ownedServer: ManagedVerificationServer | null = null;
+  const interrupt = (signal: NodeJS.Signals): void => {
+    interruptedSignal ??= signal;
+    abortController.abort();
+    if (ownedServer?.exitCode() === null) ownedServer.terminate();
+  };
+  const interruptSignals = ["SIGINT", "SIGTERM"] as const;
+  // @types/bun augments Node's process events and has changed this overload
+  // across patch releases. Bind the stable signal subset used by this runner.
+  const processSignals = dependencies.signalController;
+  for (const signal of interruptSignals) processSignals.once(signal, interrupt);
+  const abortFromPreparedMatrix = (): void => {
+    interruptedSignal ??= preparedUpload?.interruptedSignal?.() ?? null;
+    abortController.abort();
+    if (ownedServer?.exitCode() === null) ownedServer.terminate();
+  };
+  if (preparedUpload?.abortSignal !== undefined) {
+    if (preparedUpload.abortSignal.aborted) abortFromPreparedMatrix();
+    else preparedUpload.abortSignal.addEventListener("abort", abortFromPreparedMatrix, { once: true });
+  }
+  try {
   const generatedAt = dependencies.now();
-  const artifactRun = await createArtifactRun({
-    artifactRoot: validated.artifactRoot,
-    generatedAt: generatedAt.toISOString(),
-  });
+  const artifactPlan = preparedUpload?.plan ?? normalizedOptions.artifactRun ?? {
+    repositoryRoot: await realpath(resolve(config.repositoryRoot)),
+    runId: dependencies.createRunId(),
+    uploadMode: "public-summary" as const,
+  };
+  const uploadSession = preparedUpload?.session
+    ?? await prepareArtifactUploadSession(artifactPlan);
+  let parsed: Extract<DirectBombadilFuzzArguments, { readonly kind: "run" }>;
+  let validated: ValidatedConfig;
+  let replayPath: string | null;
+  try {
+    throwIfBombadilRunAborted(abortController.signal);
+    const parsedInput = parseDirectBombadilFuzzArguments(
+      normalizedOptions.arguments,
+      config.baseUrl,
+    );
+    if (parsedInput.kind !== "run") {
+      throw new Error("Bombadil help was not handled before artifact allocation");
+    }
+    parsed = parsedInput;
+    const lexicalConfig = validateDirectBombadilFuzzConfig(config, parsed.baseUrl);
+    const lexicalReplayPath = resolveReplayPath(
+      lexicalConfig.repositoryRoot,
+      parsed.replayPath,
+    );
+    const resolvedPaths = await resolveDirectBombadilRealPaths(
+      lexicalConfig,
+      lexicalReplayPath,
+    );
+    validated = resolvedPaths.config;
+    replayPath = resolvedPaths.replayPath;
+    throwIfBombadilRunAborted(abortController.signal);
+    if (validated.repositoryRoot !== resolve(artifactPlan.repositoryRoot)) {
+      throw new BombadilArtifactPolicyError(
+        "artifactRun.repositoryRoot must equal the campaign repositoryRoot",
+      );
+    }
+  } catch (error) {
+    const policy = (() => {
+      try {
+        return validateArtifactPolicy(config.artifactPolicy);
+      } catch {
+        return validateArtifactPolicy(undefined);
+      }
+    })();
+    await publishFailureAndThrow(error, async () => {
+      await publishRunUpload({
+        abortSignal: abortController.signal,
+        artifactName: isBoundedArtifactIdentifier(config.artifactName)
+          ? config.artifactName
+          : "rejected",
+        beforeCommitCheck: dependencies.beforeArtifactCommit,
+        attestation: null,
+        completedAt: dependencies.now(),
+        explorationSummary: null,
+        failure: error,
+        failureCode: abortController.signal.aborted
+          ? "interrupted"
+          : "configuration-rejected",
+        inventory: emptyArtifactInventory(),
+        interruptedSignal: () => interruptedSignal,
+        localOutputPath: config.repositoryRoot,
+        policy,
+        privateDiagnosticsAllowed: false,
+        processLog: "",
+        scenario: isBoundedScenarioIdentifier(config.scenario) ? config.scenario : "rejected",
+        serverLog: "",
+        session: uploadSession,
+        status: abortController.signal.aborted ? "failed" : "rejected",
+      });
+    });
+  }
+  let artifactRun: Awaited<ReturnType<typeof createBombadilArtifactRun>>;
+  try {
+    throwIfBombadilRunAborted(abortController.signal);
+    artifactRun = await createBombadilArtifactRun({
+      artifactName: validated.artifactName,
+      repositoryRoot: validated.repositoryRoot,
+      runId: dependencies.createRunId(),
+    });
+    throwIfBombadilRunAborted(abortController.signal);
+  } catch (error) {
+    await publishFailureAndThrow(error, async () => {
+      await publishRunUpload({
+        abortSignal: abortController.signal,
+        artifactName: validated.artifactName,
+        beforeCommitCheck: dependencies.beforeArtifactCommit,
+        attestation: null,
+        completedAt: dependencies.now(),
+        explorationSummary: null,
+        failure: error,
+        inventory: emptyArtifactInventory(),
+        interruptedSignal: () => interruptedSignal,
+        localOutputPath: validated.repositoryRoot,
+        policy: validated.artifactPolicy,
+        privateDiagnosticsAllowed: false,
+        processLog: "",
+        scenario: validated.scenario,
+        serverLog: "",
+        session: uploadSession,
+        status: "failed",
+      });
+    });
+  }
   const outputPath = join(artifactRun.runDirectory, "bombadil");
   const tracePath = join(outputPath, "trace.jsonl");
-  const abortController = dependencies.createAbortController?.() ?? new AbortController();
   const invocation = createDirectBombadilInvocation({
     baseUrl: validated.baseUrl,
     bombadilExecutable: validated.bombadilExecutable,
@@ -2539,35 +5301,30 @@ export async function runDirectBombadilFuzz(
     timeLimitSeconds: parsed.timeLimitSeconds,
     viewport: validated.viewport,
   });
-  const abortableInvocation = { ...invocation, abortSignal: abortController.signal };
+  const abortableInvocation = {
+    ...invocation,
+    abortSignal: abortController.signal,
+    artifactPolicy: validated.artifactPolicy,
+  };
   const serverCommand = validated.server.command.map((argument) =>
     argument === "{port}" ? validated.port : argument
   );
 
   let bombadilVersion: string | null = null;
   let lease: ServerLease | null = null;
-  let ownedServer: ManagedVerificationServer | null = null;
   let processResult: BombadilProcessResult | null = null;
   let attestation: DirectBombadilTraceAttestation | null = null;
   let attestationFailure: unknown = null;
   let explorationSummary: DirectBombadilExplorationSummary | null = null;
   let explorationSummaryFailure: unknown = null;
+  let artifactInventory = emptyArtifactInventory();
+  let artifactInventoryVetted = false;
   let rawTracePath: string | null = null;
   let serverOutput = "";
   let serverOutputFailure: unknown = null;
   let failure: unknown = null;
-  let interruptedSignal: NodeJS.Signals | null = null;
-  const interrupt = (signal: NodeJS.Signals): void => {
-    interruptedSignal ??= signal;
-    abortController.abort();
-    if (ownedServer?.exitCode() === null) ownedServer.terminate();
-  };
-  const interruptSignals = ["SIGINT", "SIGTERM"] as const;
-  // @types/bun augments Node's process events and has changed this overload
-  // across patch releases. Bind the stable signal subset used by this runner.
-  const processSignals = process as unknown as ProcessSignalEmitter;
-  for (const signal of interruptSignals) processSignals.once(signal, interrupt);
-  try {
+  let writersSettled = true;
+  {
     try {
       await requireRegularFile(validated.bombadilExecutable, "The root Bombadil executable");
       bombadilVersion = await readExactBombadilVersion(validated.repositoryRoot);
@@ -2586,7 +5343,9 @@ export async function runDirectBombadilFuzz(
             ownedServer = dependencies.spawnServer({
               command: serverCommand,
               cwd: validated.server.cwd,
+              detachedProcessGroup: true,
               ...(validated.server.env === undefined ? {} : { env: validated.server.env }),
+              omitEnvironment: [ARTIFACT_COORDINATION_ENVIRONMENT],
             });
             terminateAbortedOwnedServer(abortController.signal, ownedServer);
             return ownedServer;
@@ -2607,30 +5366,6 @@ export async function runDirectBombadilFuzz(
       } catch (error) {
         processFailure = error;
       }
-      const traceMetadata = await stat(tracePath).catch(() => null);
-      if (traceMetadata?.isFile() === true && traceMetadata.size > 0) {
-        rawTracePath = tracePath;
-      }
-      try {
-        attestation = await attestDirectBombadilTrace({
-          expectedRoute: validated.expectedRoute,
-          expectedScenario: validated.scenario,
-          tracePath,
-        });
-      } catch (error) {
-        attestationFailure = error;
-      }
-      try {
-        explorationSummary = await summarizeDirectBombadilTrace({
-          ...(validated.explorationPolicy === null
-            ? {}
-            : { explorationPolicy: validated.explorationPolicy }),
-          targetUrl: invocation.targetUrl,
-          tracePath,
-        });
-      } catch (error) {
-        explorationSummaryFailure = error;
-      }
       if (processFailure !== null) {
         throw processFailure instanceof Error
           ? processFailure
@@ -2648,22 +5383,8 @@ export async function runDirectBombadilFuzz(
       if (processResult.exitCode !== 0) {
         throw new Error(`Bombadil exited with status ${String(processResult.exitCode)}`);
       }
-      if (attestationFailure !== null) {
-        throw attestationFailure instanceof Error
-          ? attestationFailure
-          : new Error(renderUnknown(attestationFailure));
-      }
-      if (explorationSummaryFailure !== null) {
-        throw explorationSummaryFailure instanceof Error
-          ? explorationSummaryFailure
-          : new Error(renderUnknown(explorationSummaryFailure));
-      }
-      if (explorationSummary?.policy.satisfied !== true) {
-        throw new Error(
-          `Bombadil exploration policy was not satisfied: ${explorationSummary?.policy.failures.join("; ") ?? "summary unavailable"}`,
-        );
-      }
     } catch (error) {
+      if (error instanceof BombadilWriterSettlementError) writersSettled = false;
       failure = error;
     }
 
@@ -2672,11 +5393,17 @@ export async function runDirectBombadilFuzz(
       try {
         await dependencies.stopServer(serverToStop);
       } catch (error) {
-        failure ??= error;
+        writersSettled = false;
+        failure = new BombadilWriterSettlementError(
+          "Bombadil server writers were not proven absent",
+          failure === null
+            ? error
+            : new AggregateError([failure, error], "Bombadil run and server cleanup both failed"),
+        );
       }
     }
     const serverAfterRun = ownedServer as ManagedVerificationServer | null;
-    if (serverAfterRun !== null) {
+    if (serverAfterRun !== null && writersSettled) {
       try {
         serverOutput = await readServerOutputBounded(
           serverAfterRun,
@@ -2687,87 +5414,236 @@ export async function runDirectBombadilFuzz(
         failure ??= error;
       }
     }
-  } finally {
-    for (const signal of interruptSignals) {
-      processSignals.removeListener(signal, interrupt);
+    if (writersSettled) {
+      try {
+        try {
+          artifactInventory = await scanBombadilArtifactTree({
+            hashFiles: true,
+            policy: validated.artifactPolicy,
+            root: outputPath,
+          });
+        } catch (error) {
+          throw error instanceof BombadilArtifactPolicyError
+            ? error
+            : new BombadilArtifactPolicyError(
+                `Bombadil artifact inventory could not be proven safe: ${renderUnknown(error)}`,
+              );
+        }
+        artifactInventoryVetted = true;
+        const trace = artifactInventory.files.find((file) => file.relativePath === "trace.jsonl");
+        if (trace === undefined || trace.size === 0) {
+          const missingTrace = new BombadilArtifactPolicyError(
+            "Bombadil did not produce a retained nonempty trace.jsonl",
+          );
+          attestationFailure = missingTrace;
+          throw missingTrace;
+        }
+        rawTracePath = tracePath;
+        const traceBytes = await readBoundRegularFileBytes({
+          expected: trace,
+          label: "Bombadil trace.jsonl",
+          maximumBytes: TRACE_MAX_BYTES,
+          path: tracePath,
+        });
+        try {
+          attestation = attestDirectBombadilTraceBytes({
+            expectedRoute: validated.expectedRoute,
+            expectedScenario: validated.scenario,
+            traceBytes,
+          });
+        } catch (error) {
+          attestationFailure = error;
+        }
+        try {
+          explorationSummary = summarizeDirectBombadilTraceBytes({
+            ...(validated.explorationPolicy === null
+              ? {}
+              : { explorationPolicy: validated.explorationPolicy }),
+            targetUrl: invocation.targetUrl,
+            traceBytes,
+          });
+        } catch (error) {
+          explorationSummaryFailure = error;
+        }
+        if (attestationFailure !== null) {
+          throw attestationFailure instanceof Error
+            ? attestationFailure
+            : new Error(renderUnknown(attestationFailure));
+        }
+        if (explorationSummaryFailure !== null) {
+          throw explorationSummaryFailure instanceof Error
+            ? explorationSummaryFailure
+            : new Error(renderUnknown(explorationSummaryFailure));
+        }
+        if (explorationSummary?.policy.satisfied !== true) {
+          throw new Error(
+            `Bombadil exploration policy was not satisfied: ${explorationSummary?.policy.failures.join("; ") ?? "summary unavailable"}`,
+          );
+        }
+      } catch (error) {
+        failure ??= error;
+      }
+    } else {
+      artifactInventory = emptyArtifactInventory();
+      failure ??= new BombadilWriterSettlementError(
+        "Bombadil writers were not proven absent; artifact inspection was suppressed",
+        new Error("writer settlement unavailable"),
+      );
     }
   }
-  const capturedSignal = interruptedSignal as NodeJS.Signals | null;
-  if (capturedSignal !== null && failure === null) {
-    failure = new Error(`Bombadil fuzzing was interrupted by ${capturedSignal}`);
+  const signalAfterRun = interruptedSignal as NodeJS.Signals | null;
+  if (signalAfterRun !== null && failure === null) {
+    failure = new Error(`Bombadil fuzzing was interrupted by ${signalAfterRun}`);
   }
 
-  const completedAt = dependencies.now();
-  const status = failure === null ? "passed" : "failed";
   const logPath = join(artifactRun.runDirectory, "bombadil.log");
   const serverLogPath = join(artifactRun.runDirectory, "server.log");
   const explorationSummaryPath = join(
     artifactRun.runDirectory,
     "exploration-summary.json",
   );
-  const record = {
-    schema: ARTIFACT_SCHEMA,
-    evidenceClass: "diagnostic-fuzz",
-    artifactName: validated.artifactName,
-    label: validated.label,
-    status,
-    generatedAt: generatedAt.toISOString(),
-    completedAt: completedAt.toISOString(),
-    durationMs: Math.max(0, completedAt.getTime() - generatedAt.getTime()),
-    scenario: validated.scenario,
-    expectedRoute: validated.expectedRoute,
-    baseUrl: validated.baseUrl,
-    entryPath: validated.entryPath,
-    targetQuery: validated.targetQuery,
-    targetUrl: invocation.targetUrl,
-    viewport: validated.viewport,
-    explorationPolicy: validated.explorationPolicy,
-    specificationPath: validated.specificationPath,
-    replayPath,
-    timeLimitSeconds: replayPath === null ? parsed.timeLimitSeconds : null,
-    serverSource: lease?.source ?? null,
-    bombadil: {
-      version: bombadilVersion,
-      executable: validated.bombadilExecutable,
-      exitCode: processResult?.exitCode ?? null,
-      termination: processResult?.termination ?? null,
-      outputPath,
-      rawTracePath,
-      tracePath: attestation === null ? null : tracePath,
-      logPath,
-    },
-    server: {
-      logPath: serverLogPath,
-      logPresent: serverOutput.length > 0,
-      outputFailure: serverOutputFailure === null ? null : renderUnknown(serverOutputFailure),
-    },
-    attestation,
-    attestationFailure: attestationFailure === null ? null : renderUnknown(attestationFailure),
-    explorationSummary,
-    explorationSummaryPath: explorationSummary === null ? null : explorationSummaryPath,
-    explorationSummaryFailure: explorationSummaryFailure === null
-      ? null
-      : renderUnknown(explorationSummaryFailure),
-    initialDirect: attestation?.initial ?? null,
-    interruptedSignal: capturedSignal,
-    failure: failure === null ? null : renderUnknown(failure),
-  } as const;
   const log = [processResult?.stdout ?? "", processResult?.stderr ?? ""]
     .filter((part) => part.length > 0)
     .join("\n");
-  try {
-    await writeFile(logPath, `${log}${log.length > 0 ? "\n" : ""}`, "utf8");
-    await writeFile(
-      serverLogPath,
-      `${serverOutput}${serverOutput.length > 0 ? "\n" : ""}`,
-      "utf8",
-    );
-    if (explorationSummary !== null) {
-      await writeJsonAtomically(explorationSummaryPath, explorationSummary);
+    try {
+      await writeExclusiveBytes(
+        logPath,
+        Buffer.from(`${log}${log.length > 0 ? "\n" : ""}`, "utf8"),
+      );
+      await writeExclusiveBytes(
+        serverLogPath,
+        Buffer.from(`${serverOutput}${serverOutput.length > 0 ? "\n" : ""}`, "utf8"),
+      );
+      if (explorationSummary !== null) {
+        await writeJsonAtomically(explorationSummaryPath, explorationSummary);
+      }
+    } catch (error) {
+      const persistence = new BombadilPersistenceError(
+        "Bombadil local diagnostic logs could not be persisted",
+        [error],
+      );
+      failure = failure === null
+        ? persistence
+        : combinePersistenceFailure(failure, persistence);
     }
-    await writeJsonAtomically(join(artifactRun.runDirectory, "run.json"), record);
-    await writeJsonAtomically(artifactRun.manifestPath, record);
 
+    let completedAt = dependencies.now();
+    const createRecord = (): unknown => ({
+      schema: ARTIFACT_SCHEMA,
+      evidenceClass: "diagnostic-fuzz",
+      artifactName: validated.artifactName,
+      label: validated.label,
+      status: failure === null ? "passed" : "failed",
+      generatedAt: generatedAt.toISOString(),
+      completedAt: completedAt.toISOString(),
+      durationMs: Math.max(0, completedAt.getTime() - generatedAt.getTime()),
+      scenario: validated.scenario,
+      expectedRoute: validated.expectedRoute,
+      baseUrl: validated.baseUrl,
+      entryPath: validated.entryPath,
+      targetQuery: validated.targetQuery,
+      targetUrl: invocation.targetUrl,
+      viewport: validated.viewport,
+      artifactPolicy: validated.artifactPolicy,
+      artifactInventory: {
+        entryCount: artifactInventory.entryCount,
+        fileCount: artifactInventory.fileCount,
+        inventorySha256: artifactInventory.inventorySha256,
+        totalBytes: artifactInventory.totalBytes,
+        files: artifactInventory.files.map((file) => ({
+          path: file.relativePath,
+          sha256: file.sha256,
+          size: file.size,
+        })),
+      },
+      explorationPolicy: validated.explorationPolicy,
+      specificationPath: validated.specificationPath,
+      replayPath,
+      timeLimitSeconds: replayPath === null ? parsed.timeLimitSeconds : null,
+      serverSource: lease?.source ?? null,
+      bombadil: {
+        version: bombadilVersion,
+        executable: validated.bombadilExecutable,
+        exitCode: processResult?.exitCode ?? null,
+        termination: processResult?.termination ?? null,
+        outputPath,
+        rawTracePath,
+        tracePath: attestation === null ? null : tracePath,
+        logPath,
+      },
+      server: {
+        logPath: serverLogPath,
+        logPresent: serverOutput.length > 0,
+        outputFailure: serverOutputFailure === null ? null : renderUnknown(serverOutputFailure),
+      },
+      attestation,
+      attestationFailure: attestationFailure === null ? null : renderUnknown(attestationFailure),
+      explorationSummary,
+      explorationSummaryPath: explorationSummary === null ? null : explorationSummaryPath,
+      explorationSummaryFailure: explorationSummaryFailure === null
+        ? null
+        : renderUnknown(explorationSummaryFailure),
+      initialDirect: attestation?.initial ?? null,
+      interruptedSignal: interruptedSignal as NodeJS.Signals | null,
+      failure: failure === null ? null : renderUnknown(failure),
+    });
+    const runRecordPath = join(artifactRun.runDirectory, "run.json");
+    try {
+      await writeJsonAtomically(runRecordPath, createRecord());
+    } catch (error) {
+      const persistence = new BombadilPersistenceError(
+        "Bombadil local run record could not be persisted",
+        [error],
+      );
+      failure = failure === null
+        ? persistence
+        : combinePersistenceFailure(failure, persistence);
+    }
+
+    const failureBeforeUpload = failure;
+    const signalBeforeUpload = interruptedSignal as NodeJS.Signals | null;
+    if (signalBeforeUpload !== null && failure === null) {
+      failure = new Error(`Bombadil fuzzing was interrupted by ${signalBeforeUpload}`);
+    }
+    let published: Awaited<ReturnType<typeof publishRunUpload>>;
+    try {
+      published = await publishRunUpload({
+        abortSignal: abortController.signal,
+        artifactName: validated.artifactName,
+        beforeCommitCheck: dependencies.beforeArtifactCommit,
+        attestation,
+        completedAt,
+        explorationSummary,
+        failure,
+        inventory: artifactInventory,
+        interruptedSignal: () => interruptedSignal,
+        localOutputPath: outputPath,
+        policy: validated.artifactPolicy,
+        privateDiagnosticsAllowed: writersSettled && artifactInventoryVetted,
+        processLog: `${log}${log.length > 0 ? "\n" : ""}`,
+        scenario: validated.scenario,
+        serverLog: `${serverOutput}${serverOutput.length > 0 ? "\n" : ""}`,
+        session: uploadSession,
+        status: failure === null ? "passed" : "failed",
+      });
+    } catch (persistence) {
+      if (failure === null) throw persistence;
+      throw combinePersistenceFailure(
+        failure,
+        persistence,
+        "sanitized Bombadil receipt publication also failed",
+      );
+    }
+    failure = published.failure;
+    completedAt = dependencies.now();
+    if (failure !== failureBeforeUpload) {
+      await writeJsonAtomically(runRecordPath, createRecord()).catch(() => undefined);
+    }
+    // The rolling pointer is only a local convenience. The exclusive UUID leaf
+    // and its receipt are the authoritative upload identity.
+    await writeJsonAtomically(artifactRun.manifestPath, createRecord()).catch(() => undefined);
+
+    const status = failure === null ? "passed" : "failed";
     const exploration = explorationSummary === null
       ? "exploration=unavailable"
       : [
@@ -2793,11 +5669,26 @@ export async function runDirectBombadilFuzz(
       kind: "run",
       artifactDirectory: artifactRun.runDirectory,
       manifestPath: artifactRun.manifestPath,
+      receiptPath: uploadSession.receiptPath,
       status: "passed",
+      uploadArtifactPath: uploadSession.finalDirectory,
     };
   } finally {
-    if (capturedSignal !== null) {
-      process.kill(process.pid, capturedSignal);
+    preparedUpload?.abortSignal?.removeEventListener("abort", abortFromPreparedMatrix);
+    for (const signal of interruptSignals) {
+      processSignals.removeListener(signal, interrupt);
+    }
+    const signalToForward = interruptedSignal as NodeJS.Signals | null;
+    if (signalToForward !== null && preparedUpload?.forwardSignal !== false) {
+      processSignals.forward(signalToForward);
     }
   }
+}
+
+export async function runDirectBombadilFuzz(
+  config: DirectBombadilFuzzConfig,
+  input: DirectBombadilFuzzRunInput = process.argv.slice(2),
+  dependencyOverrides: Partial<DirectBombadilRunnerDependencies> = {},
+): Promise<DirectBombadilFuzzExecutionResult> {
+  return await runDirectBombadilFuzzInternal(config, input, dependencyOverrides);
 }

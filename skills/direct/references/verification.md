@@ -41,9 +41,26 @@ consumer. Keep the default browser properties, exported Direct formulas, and
 conservative Direct action generator in the campaign; keep product-specific
 actions and assertions local. Random runs must be 12 to 300 seconds. Require
 the runner's canonical post-run trace attestation even when Bombadil exits
-zero, and retain raw trace, process log, server log, and failure artifacts.
-Treat the result as diagnostic fuzz evidence, not as a semantic product check
-or proof of any replaced system.
+zero. Give every product-owned named snapshot an exact fail-closed parser or
+type predicate. Treat local random walks as diagnostic exploration, not as the
+deterministic simulated workload used by an Antithesis environment and not as
+a semantic product check or proof of any replaced system.
+
+Precompute a lowercase UUID for scheduled runs and pass one exact
+`artifactRun` plan. Use `resolveDirectBombadilUploadLeaf`; point `if: always()`
+only at that leaf. Public CI may retain only the
+bounded sanitized receipt and summary. Raw traces, screenshots, logs, paths,
+foreign messages, queries, labels, and typed values require explicit
+`private-vetted` access-controlled storage. Keep quotas fail-closed, require
+the final descriptor-bound inventory after both process groups settle, and
+never upload an artifact root that can sweep another run.
+Parse retained JSON from `unknown` with `parseDirectBombadilArtifactReceipt`,
+`parseDirectBombadilSanitizedRunSummary`, `parseDirectBombadilMatrixReceipt`,
+or `parseDirectBombadilMatrixSummary`; never cast `JSON.parse` output.
+
+Campaign matrices are public-summary only and publish one atomic parent leaf
+after every selected child is terminal. Run one selected campaign directly
+when bounded private diagnostics are required.
 
 For the agent-browser path, use one task-owned local Chromium session and process for a sequential batch of
 at most eight scenarios. Before each scenario, call `window new` for a fresh

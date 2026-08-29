@@ -33,6 +33,7 @@ import {
   runVerificationCommand,
   serializeAgentBrowserLaunchArguments,
   serverIsReachable,
+  spawnVerificationServer,
   stopVerificationServer,
   tail,
   writeJsonAtomically,
@@ -583,6 +584,49 @@ describe("Direct browser contract binding", () => {
 });
 
 describe("server leases", () => {
+  test("omits coordination secrets from managed server environments", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-server-environment-"));
+    temporaryDirectories.push(directory);
+    const server = spawnVerificationServer({
+      command: [
+        process.execPath,
+        "-e",
+        "console.log(process.env.DIRECT_BOMBADIL_RUN_ID ?? 'absent')",
+      ],
+      cwd: directory,
+      env: { DIRECT_BOMBADIL_RUN_ID: "child-visible-secret" },
+      omitEnvironment: ["DIRECT_BOMBADIL_RUN_ID"],
+    });
+    await server.exited;
+    expect(await server.output).toBe("absent");
+  });
+
+  test("stops descendants only for an explicitly detached owned server group", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-server-process-group-"));
+    temporaryDirectories.push(directory);
+    const childPidPath = join(directory, "child.pid");
+    const source = [
+      "const { spawn } = require('node:child_process');",
+      "const fs = require('node:fs');",
+      "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+      `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
+      "setInterval(() => {}, 1000);",
+    ].join(" ");
+    const server = spawnVerificationServer({
+      command: [process.execPath, "-e", source],
+      cwd: directory,
+      detachedProcessGroup: true,
+    });
+    for (let attempt = 0; attempt < 100 && !(await Bun.file(childPidPath).exists()); attempt += 1) {
+      await Bun.sleep(10);
+    }
+    expect(await Bun.file(childPidPath).exists()).toBeTrue();
+    const childPid = Number.parseInt(await Bun.file(childPidPath).text(), 10);
+    await stopVerificationServer(server, 500);
+    expect(Number.isSafeInteger(childPid)).toBeTrue();
+    expect(() => process.kill(childPid, 0)).toThrow();
+  });
+
   test("bounds one-shot verification commands and reports their exact outcome", async () => {
     expect(await runVerificationCommand({
       command: [process.execPath, "-e", "console.log('built')"],

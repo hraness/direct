@@ -1,14 +1,33 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { defineDirect } from "@hraness/direct";
 import { createDirectSession } from "@hraness/direct/testing";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { getEventListeners } from "node:events";
+import {
+  chmod,
+  link,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   attestDirectBombadilTrace,
+  closeBombadilArtifactCopyHandles,
   createDirectBombadilInvocation,
+  inspectBombadilArtifactTreeForTest,
+  parseDirectBombadilArtifactReceipt,
   parseDirectBombadilFuzzArguments,
+  parseDirectBombadilMatrixReceipt,
+  parseDirectBombadilMatrixSummary,
+  parseDirectBombadilSanitizedRunSummary,
+  resolveDirectBombadilUploadLeaf,
   runBombadilNativeProcess,
   runDirectBombadilFuzz,
   runDirectBombadilFuzzMatrix,
@@ -16,6 +35,7 @@ import {
   validateDirectBombadilFuzzConfig,
   type DirectBombadilFuzzConfig,
   type DirectBombadilInvocation,
+  type DirectBombadilMatrixRunInput,
   type DirectBombadilRunnerDependencies,
 } from "./bombadil-runner.js";
 import type {
@@ -24,6 +44,20 @@ import type {
 } from "./browser-verification.js";
 
 const temporaryDirectories: string[] = [];
+
+function artifactRunPlan<
+  UploadMode extends "private-vetted" | "public-summary" = "public-summary",
+>(
+  repositoryRoot: string,
+  suffix: number,
+  uploadMode: UploadMode = "public-summary" as UploadMode,
+) {
+  return {
+    repositoryRoot,
+    runId: `00000000-0000-4000-8000-${String(suffix).padStart(12, "0")}`,
+    uploadMode,
+  } as const;
+}
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((path) =>
@@ -48,7 +82,9 @@ async function fixture(): Promise<{
   readonly config: DirectBombadilFuzzConfig;
   readonly repositoryRoot: string;
 }> {
-  const repositoryRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-runner-"));
+  const repositoryRoot = await realpath(
+    await mkdtemp(join(tmpdir(), "direct-bombadil-runner-")),
+  );
   temporaryDirectories.push(repositoryRoot);
   const productRoot = join(repositoryRoot, "projects", "fixture");
   const specificationPath = join(productRoot, "direct", "bombadil-campaign.ts");
@@ -352,7 +388,43 @@ async function rejection(promise: Promise<unknown>): Promise<Error> {
   throw new Error("Expected the operation to reject");
 }
 
+function controllableSignals(): {
+  readonly controller: DirectBombadilRunnerDependencies["signalController"];
+  readonly emit: (signal: NodeJS.Signals) => void;
+  readonly forwarded: NodeJS.Signals[];
+  readonly listenerCount: () => number;
+} {
+  const listeners = new Map<NodeJS.Signals, Set<(signal: NodeJS.Signals) => void>>();
+  const forwarded: NodeJS.Signals[] = [];
+  return {
+    controller: {
+      forward: (signal) => {
+        forwarded.push(signal);
+      },
+      once: (signal, listener) => {
+        const signalListeners = listeners.get(signal) ?? new Set();
+        signalListeners.add(listener);
+        listeners.set(signal, signalListeners);
+      },
+      removeListener: (signal, listener) => {
+        listeners.get(signal)?.delete(listener);
+      },
+    },
+    emit: (signal) => {
+      const signalListeners = [...(listeners.get(signal) ?? [])];
+      listeners.delete(signal);
+      for (const listener of signalListeners) listener(signal);
+    },
+    forwarded,
+    listenerCount: () => [...listeners.values()].reduce(
+      (total, signalListeners) => total + signalListeners.size,
+      0,
+    ),
+  };
+}
+
 function dependencies(options: {
+  readonly afterTrace?: (invocation: DirectBombadilInvocation) => Promise<void>;
   readonly exitCode?: number;
   readonly failAcquire?: boolean;
   readonly noTrace?: boolean;
@@ -410,6 +482,7 @@ function dependencies(options: {
               options.traceLineOptions,
             );
           }
+          await options.afterTrace?.(invocation);
           return {
             exitCode: options.exitCode ?? 0,
             stdout: "bombadil stdout",
@@ -580,7 +653,15 @@ describe("Direct Bombadil configuration and invocation", () => {
     })).toThrow("artifactName");
     expect(() => validateDirectBombadilFuzzConfig({
       ...config,
+      artifactName: "a".repeat(81),
+    })).toThrow("artifactName");
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
       scenario: "Unsafe Scenario",
+    })).toThrow("scenario");
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
+      scenario: "a".repeat(121),
     })).toThrow("scenario");
     expect(() => validateDirectBombadilFuzzConfig({
       ...config,
@@ -788,27 +869,43 @@ describe("Direct Bombadil configuration and invocation", () => {
 
 describe("Direct Bombadil campaign matrix", () => {
   test("runs unique bounded campaigns serially and selects exactly one", async () => {
-    const { config } = await fixture();
+    const { config, repositoryRoot } = await fixture();
     const campaigns = [{ id: "primary", config }, {
       id: "secondary",
       config: { ...config, artifactName: "fixture-secondary" },
     }] as const;
     const allRuntime = dependencies();
+    const allSignals = controllableSignals();
+    const matrixController = new AbortController();
+    let controllerCount = 0;
     const all = await runDirectBombadilFuzzMatrix(
       campaigns,
       ["--time-limit=12s"],
-      allRuntime.overrides,
+      {
+        ...allRuntime.overrides,
+        createAbortController: () => {
+          controllerCount += 1;
+          return controllerCount === 1 ? matrixController : new AbortController();
+        },
+        signalController: allSignals.controller,
+      },
     );
     expect(all).toMatchObject({
       kind: "matrix",
       results: [{ campaignId: "primary" }, { campaignId: "secondary" }],
     });
     expect(allRuntime.calls.filter((call) => call === "run-bombadil")).toHaveLength(2);
+    expect(allSignals.listenerCount()).toBe(0);
+    expect(getEventListeners(matrixController.signal, "abort")).toHaveLength(0);
 
     const selectedRuntime = dependencies();
+    const selectedPlan = artifactRunPlan(repositoryRoot, 20);
     const selected = await runDirectBombadilFuzzMatrix(
       campaigns,
-      ["--campaign=secondary", "--time-limit=12s"],
+      {
+        arguments: ["--campaign=secondary", "--time-limit=12s"],
+        artifactRun: selectedPlan,
+      },
       selectedRuntime.overrides,
     );
     expect(selected).toMatchObject({
@@ -816,6 +913,16 @@ describe("Direct Bombadil campaign matrix", () => {
       results: [{ campaignId: "secondary" }],
     });
     expect(selectedRuntime.calls.filter((call) => call === "run-bombadil")).toHaveLength(1);
+    expect(JSON.parse(await readFile(selected.receiptPath, "utf8"))).toMatchObject({
+      campaigns: [
+        { campaignId: "primary", receipt: null, status: "not-selected" },
+        {
+          campaignId: "secondary",
+          receipt: "campaigns/secondary/receipt.json",
+          status: "passed",
+        },
+      ],
+    });
   });
 
   test("rejects ambiguous replay, duplicate IDs, and unknown selection", async () => {
@@ -833,6 +940,521 @@ describe("Direct Bombadil campaign matrix", () => {
       { id: "same", config },
       { id: "same", config: { ...config, artifactName: "other" } },
     ], []))).message).toContain("unique lowercase kebab");
+  });
+
+  test("publishes rejected and partially executed matrix terminal states", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const duplicatePlan = artifactRunPlan(repositoryRoot, 21);
+    await rejection(runDirectBombadilFuzzMatrix([
+      { id: "same", config },
+      { id: "same", config: { ...config, artifactName: "other" } },
+    ], { arguments: [], artifactRun: duplicatePlan }));
+    const duplicateReceipt = JSON.parse(await readFile(join(
+      repositoryRoot,
+      "artifacts",
+      "direct-bombadil-upload",
+      duplicatePlan.runId,
+      "receipt.json",
+    ), "utf8")) as Record<string, unknown>;
+    expect(duplicateReceipt).toMatchObject({
+      schema: "direct.bombadil-matrix-receipt/v1",
+      failureCode: "configuration-rejected",
+      status: "failed",
+      campaigns: [{ status: "rejected" }, { status: "rejected" }],
+    });
+
+    const runtime = dependencies();
+    const baseRunBombadil = runtime.overrides.runBombadil;
+    if (baseRunBombadil === undefined) throw new Error("Expected fixture Bombadil dependency");
+    let invocationCount = 0;
+    const partialPlan = artifactRunPlan(repositoryRoot, 22);
+    await rejection(runDirectBombadilFuzzMatrix([
+      { id: "first", config },
+      { id: "second", config: { ...config, artifactName: "fixture-second" } },
+      { id: "third", config: { ...config, artifactName: "fixture-third" } },
+    ], { arguments: [], artifactRun: partialPlan }, {
+      ...runtime.overrides,
+      runBombadil: async (invocation) => {
+        invocationCount += 1;
+        const result = await baseRunBombadil(invocation);
+        return invocationCount === 2 ? { ...result, exitCode: 9 } : result;
+      },
+    }));
+    expect(invocationCount).toBe(2);
+    const partialReceipt = JSON.parse(await readFile(join(
+      repositoryRoot,
+      "artifacts",
+      "direct-bombadil-upload",
+      partialPlan.runId,
+      "receipt.json",
+    ), "utf8")) as Record<string, unknown>;
+    expect(partialReceipt).toMatchObject({
+      schema: "direct.bombadil-matrix-receipt/v1",
+      status: "failed",
+      campaigns: [
+        { campaignId: "first", status: "passed" },
+        { campaignId: "second", status: "failed" },
+        { campaignId: "third", status: "not-run" },
+      ],
+    });
+  });
+
+  test("bounds rejected matrices and rejects private matrix uploads with a public receipt", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const campaigns = Array.from({ length: 34 }, (_, index) => ({
+      config,
+      id: `campaign-${String(index)}`,
+    }));
+    const oversizedPlan = artifactRunPlan(repositoryRoot, 23);
+    await rejection(runDirectBombadilFuzzMatrix(campaigns, {
+      arguments: [],
+      artifactRun: oversizedPlan,
+    }));
+    const oversizedReceipt = JSON.parse(await readFile(join(
+      repositoryRoot,
+      "artifacts",
+      "direct-bombadil-upload",
+      oversizedPlan.runId,
+      "receipt.json",
+    ), "utf8")) as Record<string, unknown>;
+    expect(oversizedReceipt).toMatchObject({
+      mode: "public-summary",
+      omittedCampaignCount: 2,
+      status: "failed",
+    });
+    expect(oversizedReceipt.campaigns).toHaveLength(32);
+
+    const privatePlan = artifactRunPlan(repositoryRoot, 24, "private-vetted");
+    const privateInput = {
+      arguments: [],
+      artifactRun: privatePlan,
+    } as unknown as DirectBombadilMatrixRunInput;
+    const privateError = await rejection(runDirectBombadilFuzzMatrix(
+      [{ id: "primary", config }],
+      privateInput,
+    ));
+    expect(privateError.message).toContain("public-summary");
+    const privateReceipt = JSON.parse(await readFile(join(
+      repositoryRoot,
+      "artifacts",
+      "direct-bombadil-upload",
+      privatePlan.runId,
+      "receipt.json",
+    ), "utf8")) as Record<string, unknown>;
+    expect(privateReceipt).toMatchObject({
+      failureCode: "configuration-rejected",
+      mode: "public-summary",
+      status: "failed",
+    });
+
+    const longIdPlan = artifactRunPlan(repositoryRoot, 25);
+    await rejection(runDirectBombadilFuzzMatrix([
+      { id: "a".repeat(81), config },
+    ], { arguments: [], artifactRun: longIdPlan }));
+    expect(JSON.parse(await readFile(join(
+      repositoryRoot,
+      "artifacts",
+      "direct-bombadil-upload",
+      longIdPlan.runId,
+      "receipt.json",
+    ), "utf8"))).toMatchObject({
+      campaigns: [{ campaignId: null, status: "rejected" }],
+    });
+  });
+
+  test("publishes one interrupted matrix leaf before forwarding its signal", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const runtime = dependencies();
+    const baseRunBombadil = runtime.overrides.runBombadil;
+    if (baseRunBombadil === undefined) throw new Error("Expected fixture Bombadil dependency");
+    const signals = controllableSignals();
+    const plan = artifactRunPlan(repositoryRoot, 26);
+    const error = await rejection(runDirectBombadilFuzzMatrix(
+      [{ id: "primary", config }, {
+        id: "secondary",
+        config: { ...config, artifactName: "fixture-secondary" },
+      }],
+      { arguments: [], artifactRun: plan },
+      {
+        ...runtime.overrides,
+        runBombadil: async (invocation) => {
+          const result = await baseRunBombadil(invocation);
+          signals.emit("SIGTERM");
+          return result;
+        },
+        signalController: signals.controller,
+      },
+    ));
+    expect(error.message).toContain("SIGTERM");
+    expect(signals.forwarded).toEqual(["SIGTERM"]);
+    expect(signals.listenerCount()).toBe(0);
+    expect(JSON.parse(await readFile(join(
+      repositoryRoot,
+      "artifacts",
+      "direct-bombadil-upload",
+      plan.runId,
+      "receipt.json",
+    ), "utf8"))).toMatchObject({
+      failureCode: "interrupted",
+      campaigns: [
+        { campaignId: "primary", status: "failed" },
+        { campaignId: "secondary", status: "not-run" },
+      ],
+      status: "failed",
+    });
+  });
+
+  test("preserves a child configuration rejection in the parent receipt", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const mutableConfig = { ...config };
+    let controllerCount = 0;
+    const plan = artifactRunPlan(repositoryRoot, 27);
+    await rejection(runDirectBombadilFuzzMatrix(
+      [{ id: "primary", config: mutableConfig }, {
+        id: "secondary",
+        config: { ...config, artifactName: "fixture-secondary" },
+      }],
+      { arguments: [], artifactRun: plan },
+      {
+        ...dependencies().overrides,
+        createAbortController: () => {
+          controllerCount += 1;
+          if (controllerCount === 2) mutableConfig.artifactName = "../rejected";
+          return new AbortController();
+        },
+      },
+    ));
+    expect(JSON.parse(await readFile(join(
+      resolveDirectBombadilUploadLeaf(plan),
+      "receipt.json",
+    ), "utf8"))).toMatchObject({
+      failureCode: "configuration-rejected",
+      campaigns: [
+        { campaignId: "primary", status: "rejected" },
+        { campaignId: "secondary", status: "not-run" },
+      ],
+      status: "failed",
+    });
+    expect(JSON.parse(await readFile(join(
+      resolveDirectBombadilUploadLeaf(plan),
+      "campaigns",
+      "primary",
+      "receipt.json",
+    ), "utf8"))).toMatchObject({
+      failureCode: "configuration-rejected",
+      status: "rejected",
+    });
+    expect(await readFile(join(
+      resolveDirectBombadilUploadLeaf(plan),
+      "campaigns",
+      "primary",
+      "summary.json",
+    ), "utf8")).toContain("direct.bombadil-upload-summary/v1");
+  });
+
+  test("interrupts a child before acquisition and leaves no signal listeners", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const signals = controllableSignals();
+    const runtime = dependencies();
+    const plan = artifactRunPlan(repositoryRoot, 28);
+    let runIdCount = 0;
+    await rejection(runDirectBombadilFuzzMatrix(
+      [{ id: "primary", config }, {
+        id: "secondary",
+        config: { ...config, artifactName: "fixture-secondary" },
+      }],
+      { arguments: [], artifactRun: plan },
+      {
+        ...runtime.overrides,
+        createRunId: () => {
+          runIdCount += 1;
+          if (runIdCount === 1) signals.emit("SIGTERM");
+          return `10000000-0000-4000-8000-${String(runIdCount).padStart(12, "0")}`;
+        },
+        signalController: signals.controller,
+      },
+    ));
+    expect(runtime.calls).toEqual([]);
+    expect(signals.forwarded).toEqual(["SIGTERM"]);
+    expect(signals.listenerCount()).toBe(0);
+    expect(JSON.parse(await readFile(join(
+      resolveDirectBombadilUploadLeaf(plan),
+      "receipt.json",
+    ), "utf8"))).toMatchObject({
+      failureCode: "interrupted",
+      campaigns: [
+        { campaignId: "primary", status: "failed" },
+        { campaignId: "secondary", status: "not-run" },
+      ],
+    });
+  });
+
+  test("converts a parent-publication interruption and releases child abort listeners", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const signals = controllableSignals();
+    const matrixController = new AbortController();
+    let controllerCount = 0;
+    let commitCount = 0;
+    const plan = artifactRunPlan(repositoryRoot, 29);
+    const error = await rejection(runDirectBombadilFuzzMatrix(
+      [{ id: "primary", config }, {
+        id: "secondary",
+        config: { ...config, artifactName: "fixture-secondary" },
+      }],
+      { arguments: [], artifactRun: plan },
+      {
+        ...dependencies().overrides,
+        beforeArtifactCommit: () => {
+          commitCount += 1;
+          signals.emit("SIGTERM");
+        },
+        createAbortController: () => {
+          controllerCount += 1;
+          return controllerCount === 1 ? matrixController : new AbortController();
+        },
+        signalController: signals.controller,
+      },
+    ));
+    expect(error.message).toContain("SIGTERM");
+    expect(commitCount).toBe(1);
+    expect(signals.forwarded).toEqual(["SIGTERM"]);
+    expect(signals.listenerCount()).toBe(0);
+    expect(getEventListeners(matrixController.signal, "abort")).toHaveLength(0);
+    expect(JSON.parse(await readFile(join(
+      resolveDirectBombadilUploadLeaf(plan),
+      "receipt.json",
+    ), "utf8"))).toMatchObject({
+      failureCode: "interrupted",
+      campaigns: [{ status: "passed" }, { status: "passed" }],
+      status: "failed",
+    });
+  });
+
+  test("removes a failed matrix publication staging leaf", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const plan = artifactRunPlan(repositoryRoot, 42);
+    const error = await rejection(runDirectBombadilFuzzMatrix(
+      [{ id: "primary", config }],
+      { arguments: [], artifactRun: plan },
+      {
+        ...dependencies().overrides,
+        beforeArtifactCommit: () => {
+          throw new Error("matrix precommit rejected");
+        },
+      },
+    ));
+    expect(error.message).toContain("matrix precommit rejected");
+    expect(await readdir(dirname(resolveDirectBombadilUploadLeaf(plan)))).toEqual([]);
+  });
+});
+
+describe("Direct Bombadil sanitized evidence contracts", () => {
+  test("closes the source descriptor even when destination cleanup fails", async () => {
+    const calls: string[] = [];
+    const destinationError = new Error("destination close failed");
+    const error = await rejection(closeBombadilArtifactCopyHandles(
+      {
+        close: async () => {
+          calls.push("destination");
+          throw destinationError;
+        },
+      },
+      {
+        close: async () => {
+          calls.push("source");
+        },
+      },
+    ));
+    expect(error).toBe(destinationError);
+    expect(calls).toEqual(["destination", "source"]);
+
+    const both = await rejection(closeBombadilArtifactCopyHandles(
+      { close: async () => { throw new Error("destination"); } },
+      { close: async () => { throw new Error("source"); } },
+    ));
+    expect(both).toBeInstanceOf(AggregateError);
+    expect((both as AggregateError).errors).toHaveLength(2);
+  });
+
+  test("round-trips all four emitted evidence files and resolves the exact upload leaf", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const runPlan = artifactRunPlan(repositoryRoot, 31);
+    const run = await runDirectBombadilFuzz(config, {
+      arguments: [],
+      artifactRun: runPlan,
+    }, dependencies().overrides);
+    if (run.kind !== "run") throw new Error("Expected a run result");
+    expect(run.uploadArtifactPath).toBe(resolveDirectBombadilUploadLeaf(runPlan));
+    const runReceipt = parseDirectBombadilArtifactReceipt(JSON.parse(await readFile(
+      join(run.uploadArtifactPath, "receipt.json"),
+      "utf8",
+    )));
+    const runSummary = parseDirectBombadilSanitizedRunSummary(JSON.parse(await readFile(
+      join(run.uploadArtifactPath, "summary.json"),
+      "utf8",
+    )));
+
+    const matrixPlan = artifactRunPlan(repositoryRoot, 32);
+    const matrix = await runDirectBombadilFuzzMatrix(
+      [{ id: "primary", config }],
+      { arguments: [], artifactRun: matrixPlan },
+      dependencies().overrides,
+    );
+    if (matrix.kind !== "matrix") throw new Error("Expected a matrix result");
+    const matrixReceipt = parseDirectBombadilMatrixReceipt(JSON.parse(await readFile(
+      join(matrix.uploadArtifactPath, "receipt.json"),
+      "utf8",
+    )));
+    const matrixSummary = parseDirectBombadilMatrixSummary(JSON.parse(await readFile(
+      join(matrix.uploadArtifactPath, "summary.json"),
+      "utf8",
+    )));
+    for (const parsed of [runReceipt, runSummary, matrixReceipt, matrixSummary]) {
+      expect(parsed.ok).toBeTrue();
+      if (parsed.ok) expect(Object.isFrozen(parsed.value)).toBeTrue();
+    }
+    if (!runReceipt.ok || !matrixReceipt.ok || !matrixSummary.ok) {
+      throw new Error("Expected parsed Bombadil evidence");
+    }
+    expect(Object.isFrozen(runReceipt.value.inventory)).toBeTrue();
+    expect(Object.isFrozen(runReceipt.value.policy)).toBeTrue();
+    expect(Object.isFrozen(matrixReceipt.value.campaigns)).toBeTrue();
+    expect(Object.isFrozen(matrixSummary.value.campaigns)).toBeTrue();
+    expect(resolveDirectBombadilUploadLeaf({
+      repositoryRoot,
+      runId: runPlan.runId,
+    })).toBe(run.uploadArtifactPath);
+    expect(resolveDirectBombadilUploadLeaf({
+      ...runPlan,
+      uploadMode: "private-vetted",
+    })).toBe(run.uploadArtifactPath);
+    expect(() => resolveDirectBombadilUploadLeaf({
+      ...runPlan,
+      repositoryRoot: `${repositoryRoot}/../invalid`,
+    })).toThrow("absolute normalized path");
+    expect(() => resolveDirectBombadilUploadLeaf({
+      ...runPlan,
+      runId: "not-a-uuid",
+    })).toThrow("lowercase RFC 4122 UUID");
+    expect(() => resolveDirectBombadilUploadLeaf({
+      ...runPlan,
+      uploadMode: "invalid" as "public-summary",
+    })).toThrow("public-summary or private-vetted");
+  });
+
+  test("rejects hostile values, exact-key tampering, and impossible terminal states", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const runPlan = artifactRunPlan(repositoryRoot, 33);
+    const run = await runDirectBombadilFuzz(config, {
+      arguments: [],
+      artifactRun: runPlan,
+    }, dependencies().overrides);
+    if (run.kind !== "run") throw new Error("Expected a run result");
+    const receipt = record(JSON.parse(await readFile(
+      join(run.uploadArtifactPath, "receipt.json"),
+      "utf8",
+    )), "run receipt");
+    const summary = record(JSON.parse(await readFile(
+      join(run.uploadArtifactPath, "summary.json"),
+      "utf8",
+    )), "run summary");
+    expect(parseDirectBombadilArtifactReceipt({ ...receipt, extra: true }).ok).toBeFalse();
+    expect(parseDirectBombadilArtifactReceipt({ ...receipt, schema: "wrong" }).ok).toBeFalse();
+    expect(parseDirectBombadilArtifactReceipt({
+      ...receipt,
+      inventory: {
+        ...record(receipt.inventory, "run receipt inventory"),
+        fileCount: 0,
+      },
+    }).ok).toBeFalse();
+    expect(parseDirectBombadilArtifactReceipt({
+      ...receipt,
+      inventory: {
+        entryCount: 0,
+        fileCount: 0,
+        inventorySha256: null,
+        totalBytes: 0,
+      },
+    }).ok).toBeFalse();
+    expect(parseDirectBombadilArtifactReceipt({
+      ...receipt,
+      diagnosticsRetained: true,
+      failureCode: "interrupted",
+      mode: "private-vetted",
+      status: "failed",
+    }).ok).toBeFalse();
+    expect(parseDirectBombadilArtifactReceipt({
+      ...receipt,
+      failureCode: "writer-settlement",
+      status: "failed",
+    }).ok).toBeFalse();
+    const accessorReceipt = Object.defineProperty({ ...receipt }, "status", {
+      enumerable: true,
+      get: () => "passed",
+    });
+    expect(parseDirectBombadilArtifactReceipt(accessorReceipt).ok).toBeFalse();
+    expect(parseDirectBombadilArtifactReceipt(new Proxy(receipt, {
+      ownKeys: () => {
+        throw new Error("hostile proxy");
+      },
+    })).ok).toBeFalse();
+    expect(parseDirectBombadilSanitizedRunSummary({
+      ...summary,
+      attestation: null,
+    }).ok).toBeFalse();
+    const failedSummary = { ...summary, failureCode: "unknown", status: "failed" };
+    expect(parseDirectBombadilSanitizedRunSummary({
+      ...failedSummary,
+      attestation: {
+        invalidObservationCount: 0,
+        observationCount: 0,
+        validObservationCount: 0,
+      },
+    }).ok).toBeFalse();
+    expect(parseDirectBombadilSanitizedRunSummary({
+      ...summary,
+      failureCode: "writer-settlement",
+      status: "failed",
+    }).ok).toBeFalse();
+    expect(parseDirectBombadilSanitizedRunSummary({
+      ...failedSummary,
+      exploration: {
+        ...record(summary.exploration, "run summary exploration"),
+        traceLineCount: 1,
+      },
+    }).ok).toBeFalse();
+
+    const matrixPlan = artifactRunPlan(repositoryRoot, 34);
+    const matrix = await runDirectBombadilFuzzMatrix(
+      [{ id: "primary", config }],
+      { arguments: [], artifactRun: matrixPlan },
+      dependencies().overrides,
+    );
+    if (matrix.kind !== "matrix") throw new Error("Expected a matrix result");
+    const matrixReceipt = record(JSON.parse(await readFile(
+      join(matrix.uploadArtifactPath, "receipt.json"),
+      "utf8",
+    )), "matrix receipt");
+    const matrixSummary = record(JSON.parse(await readFile(
+      join(matrix.uploadArtifactPath, "summary.json"),
+      "utf8",
+    )), "matrix summary");
+    const campaigns = matrixReceipt.campaigns;
+    if (!Array.isArray(campaigns)) throw new Error("Expected matrix campaigns");
+    expect(parseDirectBombadilMatrixReceipt({
+      ...matrixReceipt,
+      campaigns: campaigns.map((campaign) => ({
+        ...record(campaign, "matrix campaign"),
+        receipt: "campaigns/primary/other.json",
+      })),
+    }).ok).toBeFalse();
+    expect(parseDirectBombadilMatrixSummary({
+      ...matrixSummary,
+      campaigns: {
+        ...record(matrixSummary.campaigns, "matrix summary campaigns"),
+        omitted: 1,
+      },
+    }).ok).toBeFalse();
   });
 });
 
@@ -1589,6 +2211,151 @@ describe("Direct Bombadil exploration summary", () => {
 });
 
 describe("Direct Bombadil process lifecycle", () => {
+  test("tolerates only live-scan entry disappearance and fails final proof closed", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-entry-race-"));
+    temporaryDirectories.push(directory);
+    const transientPath = join(directory, "transient.log");
+    const policy = {
+      maxDepth: 4,
+      maxEntries: 8,
+      maxFileBytes: 1_024,
+      maxFiles: 4,
+      maxPathBytes: 256,
+      maxTotalBytes: 2_048,
+    };
+    await writeFile(transientPath, "transient\n");
+    const transient = await rejection(inspectBombadilArtifactTreeForTest({
+      allowTransientEntryAbsence: true,
+      beforeEntryInspect: async (path) => {
+        await rm(path);
+      },
+      hashFiles: false,
+      policy,
+      root: directory,
+    }));
+    expect((transient as NodeJS.ErrnoException).code).toBe("ENOENT");
+
+    await writeFile(transientPath, "final\n");
+    const final = await rejection(inspectBombadilArtifactTreeForTest({
+      beforeEntryInspect: async (path) => {
+        await rm(path);
+      },
+      hashFiles: true,
+      policy,
+      root: directory,
+    }));
+    expect(final.name).toBe("BombadilArtifactPolicyError");
+    expect(final.message).toContain("could not be inspected safely");
+
+    const nested = join(directory, "nested");
+    await mkdir(nested);
+    await writeFile(join(nested, "trace.log"), "transient\n");
+    const nestedTransient = await rejection(inspectBombadilArtifactTreeForTest({
+      allowTransientEntryAbsence: true,
+      beforeDirectoryOpen: async (path) => {
+        if (path === nested) await rm(path, { recursive: true });
+      },
+      hashFiles: false,
+      policy,
+      root: directory,
+    }));
+    expect((nestedTransient as NodeJS.ErrnoException).code).toBe("ENOENT");
+
+    await mkdir(nested);
+    await writeFile(join(nested, "trace.log"), "final\n");
+    const nestedFinal = await rejection(inspectBombadilArtifactTreeForTest({
+      beforeDirectoryOpen: async (path) => {
+        if (path === nested) await rm(path, { recursive: true });
+      },
+      hashFiles: true,
+      policy,
+      root: directory,
+    }));
+    expect(nestedFinal.name).toBe("BombadilArtifactPolicyError");
+    expect(nestedFinal.message).toContain("could not be opened safely");
+  });
+
+  test("omits the upload coordination UUID from the native process environment", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-native-environment-"));
+    temporaryDirectories.push(directory);
+    const previous = process.env.DIRECT_BOMBADIL_RUN_ID;
+    process.env.DIRECT_BOMBADIL_RUN_ID = "child-visible-secret";
+    const running = runBombadilNativeProcess({
+      command: [
+        process.execPath,
+        "-e",
+        "console.log(process.env.DIRECT_BOMBADIL_RUN_ID ?? 'absent')",
+      ],
+      cwd: directory,
+      outputPath: directory,
+      targetUrl: "http://127.0.0.1:4919/",
+      wallClockTimeoutMs: 5_000,
+    });
+    if (previous === undefined) delete process.env.DIRECT_BOMBADIL_RUN_ID;
+    else process.env.DIRECT_BOMBADIL_RUN_ID = previous;
+    const result = await running;
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe("absent");
+  });
+
+  test("aborts the owned process group when live artifacts exceed quota", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-artifact-quota-"));
+    temporaryDirectories.push(directory);
+    const overflowPath = join(directory, "overflow.log");
+    const source = [
+      "const fs = require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(overflowPath)}, Buffer.alloc(4096));`,
+      "process.on('SIGTERM', () => {});",
+      "setInterval(() => {}, 1000);",
+    ].join(" ");
+    const startedAt = Date.now();
+    const error = await rejection(runBombadilNativeProcess({
+      artifactPolicy: {
+        maxDepth: 4,
+        maxEntries: 8,
+        maxFileBytes: 1_024,
+        maxFiles: 4,
+        maxPathBytes: 256,
+        maxTotalBytes: 2_048,
+      },
+      command: [process.execPath, "-e", source],
+      cwd: directory,
+      outputPath: directory,
+      targetUrl: "http://127.0.0.1:4919/",
+      terminationGraceMs: 50,
+      wallClockTimeoutMs: 5_000,
+    }));
+    expect(error.message).toContain("per-file byte quota");
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+  });
+
+  test("promotes an artifact-policy result that races a clean process exit", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-artifact-exit-race-"));
+    temporaryDirectories.push(directory);
+    const overflowPath = join(directory, "overflow.log");
+    const error = await rejection(runBombadilNativeProcess({
+      artifactPolicy: {
+        maxDepth: 4,
+        maxEntries: 8,
+        maxFileBytes: 1_024,
+        maxFiles: 4,
+        maxPathBytes: 256,
+        maxTotalBytes: 2_048,
+      },
+      command: [
+        process.execPath,
+        "-e",
+        `require("node:fs").writeFileSync(${JSON.stringify(overflowPath)}, Buffer.alloc(4096));`,
+      ],
+      cwd: directory,
+      outputPath: directory,
+      targetUrl: "http://127.0.0.1:4919/",
+      terminationGraceMs: 50,
+      wallClockTimeoutMs: 5_000,
+    }));
+    expect(error.message).toContain("per-file byte quota");
+  });
+
   test("cleans descendants and inherited pipes after a normal leader exit", async () => {
     const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-normal-exit-"));
     temporaryDirectories.push(directory);
@@ -1660,7 +2427,7 @@ describe("Direct Bombadil process lifecycle", () => {
     expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 
-  test("aborts and escalates an uncooperative native child promptly", async () => {
+  test("kills an uncooperative native child immediately on abort", async () => {
     const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-abort-"));
     temporaryDirectories.push(directory);
     const controller = new AbortController();
@@ -1682,6 +2449,58 @@ describe("Direct Bombadil process lifecycle", () => {
     expect(result.termination).toBe("aborted");
     expect(result.stdout).toContain("abort output");
     expect(Date.now() - startedAt).toBeLessThan(2_000);
+  });
+
+  test("gives an aborted artifact writer no quota-growing TERM grace", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-abort-quota-"));
+    temporaryDirectories.push(directory);
+    const growingPath = join(directory, "growing.log");
+    const controller = new AbortController();
+    const source = [
+      "const fs = require('node:fs');",
+      `const path = ${JSON.stringify(growingPath)};`,
+      "process.on('SIGTERM', () => fs.appendFileSync(path, Buffer.alloc(8192)));",
+      "fs.writeFileSync(path, Buffer.alloc(256));",
+      "setInterval(() => {}, 1000);",
+    ].join(" ");
+    const running = runBombadilNativeProcess({
+      abortSignal: controller.signal,
+      artifactPolicy: {
+        maxDepth: 4,
+        maxEntries: 8,
+        maxFileBytes: 4_096,
+        maxFiles: 4,
+        maxPathBytes: 256,
+        maxTotalBytes: 8_192,
+      },
+      command: [process.execPath, "-e", source],
+      cwd: directory,
+      outputPath: directory,
+      targetUrl: "http://127.0.0.1:4919/",
+      terminationGraceMs: 2_000,
+      wallClockTimeoutMs: 5_000,
+    });
+    let ready = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        await readFile(growingPath);
+        ready = true;
+        break;
+      } catch {
+        await Bun.sleep(10);
+      }
+    }
+    if (!ready) {
+      controller.abort();
+      await running;
+      throw new Error("Bombadil writer did not publish its readiness file");
+    }
+    const startedAt = Date.now();
+    controller.abort();
+    const result = await running;
+    expect(result.termination).toBe("aborted");
+    expect((await readFile(growingPath)).byteLength).toBeLessThanOrEqual(4_096);
+    expect(Date.now() - startedAt).toBeLessThan(1_500);
   });
 });
 
@@ -1741,6 +2560,190 @@ describe("Direct Bombadil run lifecycle", () => {
       schema: "direct.bombadil-exploration-summary/v2",
       trace: { lineCount: 2 },
     });
+    if (result.kind !== "run") throw new Error("Expected a Bombadil run result");
+    expect((await readdir(result.uploadArtifactPath)).sort()).toEqual([
+      "receipt.json",
+      "summary.json",
+    ]);
+    expect(JSON.parse(await readFile(result.receiptPath, "utf8"))).toMatchObject({
+      schema: "direct.bombadil-artifact-receipt/v1",
+      failureCode: null,
+      mode: "public-summary",
+      status: "passed",
+      inventory: { fileCount: 1 },
+    });
+  });
+
+  test("publishes only sanitized files publicly and descriptor-vetted files privately", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const sentinel = "secret-query-and-log-sentinel";
+    const publicRuntime = dependencies();
+    const publicResult = await runDirectBombadilFuzz({
+      ...config,
+      targetQuery: { token: sentinel },
+    }, {
+      arguments: [],
+      artifactRun: artifactRunPlan(repositoryRoot, 11),
+    }, publicRuntime.overrides);
+    if (publicResult.kind !== "run") throw new Error("Expected a public Bombadil run result");
+    const publicPayload = (await Promise.all((await readdir(publicResult.uploadArtifactPath)).map(
+      async (name) => await readFile(join(publicResult.uploadArtifactPath, name), "utf8"),
+    ))).join("\n");
+    expect(publicPayload).not.toContain(sentinel);
+    expect(publicPayload).not.toContain(repositoryRoot);
+    expect(publicPayload).not.toContain("bombadil stdout");
+    expect(JSON.parse(await readFile(publicResult.receiptPath, "utf8"))).toMatchObject({
+      diagnosticsRetained: false,
+      mode: "public-summary",
+    });
+
+    const privateRuntime = dependencies();
+    const privateResult = await runDirectBombadilFuzz(config, {
+      arguments: [],
+      artifactRun: artifactRunPlan(repositoryRoot, 12, "private-vetted"),
+    }, privateRuntime.overrides);
+    if (privateResult.kind !== "run") throw new Error("Expected a private Bombadil run result");
+    expect((await readdir(privateResult.uploadArtifactPath)).sort()).toEqual([
+      "diagnostics",
+      "receipt.json",
+      "summary.json",
+    ]);
+    expect(await readFile(
+      join(privateResult.uploadArtifactPath, "diagnostics", "bombadil-output", "trace.jsonl"),
+      "utf8",
+    )).toContain('"name":"direct"');
+    expect(await readFile(
+      join(privateResult.uploadArtifactPath, "diagnostics", "host", "bombadil.log"),
+      "utf8",
+    )).toContain("bombadil stdout");
+    expect(JSON.parse(await readFile(privateResult.receiptPath, "utf8"))).toMatchObject({
+      diagnosticsRetained: true,
+      mode: "private-vetted",
+    });
+  });
+
+  test("rejects symlink artifacts and publishes a receipt without raw diagnostics", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const outside = join(repositoryRoot, "outside.txt");
+    await writeFile(outside, "do not copy\n");
+    const runtime = dependencies({
+      afterTrace: async (invocation) => {
+        await symlink(outside, join(invocation.outputPath, "escaped.txt"));
+      },
+    });
+    const plan = artifactRunPlan(repositoryRoot, 13, "private-vetted");
+    const error = await rejection(runDirectBombadilFuzz(config, {
+      arguments: [],
+      artifactRun: plan,
+    }, runtime.overrides));
+    expect(error.message).toContain("symbolic link");
+    const upload = join(repositoryRoot, "artifacts", "direct-bombadil-upload", plan.runId);
+    expect((await readdir(upload)).sort()).toEqual(["receipt.json", "summary.json"]);
+    expect(JSON.parse(await readFile(join(upload, "receipt.json"), "utf8"))).toMatchObject({
+      diagnosticsRetained: false,
+      failureCode: "artifact-policy",
+      status: "failed",
+    });
+  });
+
+  test("rejects multiply-linked artifacts before private copying", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const runtime = dependencies({
+      afterTrace: async (invocation) => {
+        await link(
+          join(invocation.outputPath, "trace.jsonl"),
+          join(invocation.outputPath, "duplicate.jsonl"),
+        );
+      },
+    });
+    const plan = artifactRunPlan(repositoryRoot, 15, "private-vetted");
+    const error = await rejection(runDirectBombadilFuzz(config, {
+      arguments: [],
+      artifactRun: plan,
+    }, runtime.overrides));
+    expect(error.message).toContain("multiply-linked");
+    const upload = join(repositoryRoot, "artifacts", "direct-bombadil-upload", plan.runId);
+    expect((await readdir(upload)).sort()).toEqual(["receipt.json", "summary.json"]);
+  });
+
+  test("includes tagged empty directories in the authoritative inventory hash", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const baselinePlan = artifactRunPlan(repositoryRoot, 16);
+    await runDirectBombadilFuzz(config, {
+      arguments: [],
+      artifactRun: baselinePlan,
+    }, dependencies().overrides);
+    const baselineReceipt = record(JSON.parse(await readFile(join(
+      repositoryRoot,
+      "artifacts",
+      "direct-bombadil-upload",
+      baselinePlan.runId,
+      "receipt.json",
+    ), "utf8")), "baseline receipt");
+
+    const emptyDirectoryPlan = artifactRunPlan(repositoryRoot, 17);
+    await runDirectBombadilFuzz(config, {
+      arguments: [],
+      artifactRun: emptyDirectoryPlan,
+    }, dependencies({
+      afterTrace: async (invocation) => {
+        await mkdir(join(invocation.outputPath, "empty"));
+      },
+    }).overrides);
+    const emptyDirectoryReceipt = record(JSON.parse(await readFile(join(
+      repositoryRoot,
+      "artifacts",
+      "direct-bombadil-upload",
+      emptyDirectoryPlan.runId,
+      "receipt.json",
+    ), "utf8")), "empty-directory receipt");
+    const baselineInventory = record(baselineReceipt.inventory, "baseline inventory");
+    const emptyDirectoryInventory = record(
+      emptyDirectoryReceipt.inventory,
+      "empty-directory inventory",
+    );
+    expect(emptyDirectoryInventory).toMatchObject({ entryCount: 2, fileCount: 1 });
+    expect(emptyDirectoryInventory.inventorySha256).not.toBe(
+      baselineInventory.inventorySha256,
+    );
+  });
+
+  test("preserves the primary failure when sanitized receipt publication also fails", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const plan = artifactRunPlan(repositoryRoot, 18);
+    await mkdir(join(
+      repositoryRoot,
+      "artifacts",
+      "direct-bombadil-upload",
+      `.staging-${plan.runId}`,
+    ), { recursive: true });
+    const error = await rejection(runDirectBombadilFuzz(config, {
+      arguments: [],
+      artifactRun: plan,
+    }, dependencies({ exitCode: 9 }).overrides));
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error.message).toContain("exited with status 9");
+    expect(error.message).toContain("receipt publication also failed");
+  });
+
+  test("publishes a sanitized rejection receipt before invalid configuration can spawn", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const runtime = dependencies();
+    const plan = artifactRunPlan(repositoryRoot, 14);
+    const error = await rejection(runDirectBombadilFuzz({
+      ...config,
+      artifactName: "../escape",
+      targetQuery: { token: "configuration-secret" },
+    }, { arguments: [], artifactRun: plan }, runtime.overrides));
+    expect(error.message).toContain("artifactName");
+    expect(runtime.calls).toEqual([]);
+    const upload = join(repositoryRoot, "artifacts", "direct-bombadil-upload", plan.runId);
+    const payload = await readFile(join(upload, "receipt.json"), "utf8");
+    expect(payload).not.toContain("configuration-secret");
+    expect(JSON.parse(payload)).toMatchObject({
+      failureCode: "configuration-rejected",
+      status: "rejected",
+    });
   });
 
   test("runs with policy-owned evidence despite arbitrary unrelated named snapshots", async () => {
@@ -1775,6 +2778,111 @@ describe("Direct Bombadil run lifecycle", () => {
         policy: { configured: true, failures: [], satisfied: true },
       },
     });
+  });
+
+  test("publishes an interrupted receipt when a signal wins during preflight", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const runtime = dependencies();
+    const signals = controllableSignals();
+    const runId = "00000000-0000-4000-8000-000000000035";
+    let runIdCount = 0;
+    const error = await rejection(runDirectBombadilFuzz(config, [], {
+      ...runtime.overrides,
+      createRunId: () => {
+        runIdCount += 1;
+        signals.emit("SIGTERM");
+        return runId;
+      },
+      signalController: signals.controller,
+    }));
+    expect(error.message).toContain("interrupted");
+    expect(runtime.calls).toEqual([]);
+    expect(signals.forwarded).toEqual(["SIGTERM"]);
+    expect(signals.listenerCount()).toBe(0);
+    expect(runIdCount).toBe(1);
+    expect(JSON.parse(await readFile(join(
+      resolveDirectBombadilUploadLeaf({ repositoryRoot, runId }),
+      "receipt.json",
+    ), "utf8"))).toMatchObject({
+      diagnosticsRetained: false,
+      failureCode: "interrupted",
+      status: "failed",
+    });
+  });
+
+  test("publishes an interrupted receipt when a signal wins during acquisition", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const runtime = dependencies();
+    const signals = controllableSignals();
+    const plan = artifactRunPlan(repositoryRoot, 36);
+    await rejection(runDirectBombadilFuzz(config, {
+      arguments: [],
+      artifactRun: plan,
+    }, {
+      ...runtime.overrides,
+      acquireServer: async () => {
+        runtime.calls.push("acquire-server");
+        signals.emit("SIGINT");
+        throw new Error("acquisition interrupted");
+      },
+      signalController: signals.controller,
+    }));
+    expect(runtime.calls).toEqual(["acquire-server"]);
+    expect(signals.forwarded).toEqual(["SIGINT"]);
+    expect(signals.listenerCount()).toBe(0);
+    expect(JSON.parse(await readFile(join(
+      resolveDirectBombadilUploadLeaf(plan),
+      "receipt.json",
+    ), "utf8"))).toMatchObject({
+      failureCode: "interrupted",
+      status: "failed",
+    });
+  });
+
+  test("converts a pre-commit signal into one interrupted immutable leaf", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const runtime = dependencies();
+    const signals = controllableSignals();
+    const plan = artifactRunPlan(repositoryRoot, 37, "private-vetted");
+    let commitCount = 0;
+    const error = await rejection(runDirectBombadilFuzz(config, {
+      arguments: [],
+      artifactRun: plan,
+    }, {
+      ...runtime.overrides,
+      beforeArtifactCommit: () => {
+        commitCount += 1;
+        signals.emit("SIGTERM");
+      },
+      signalController: signals.controller,
+    }));
+    expect(error.message).toContain("SIGTERM");
+    expect(commitCount).toBe(1);
+    expect(signals.forwarded).toEqual(["SIGTERM"]);
+    expect(signals.listenerCount()).toBe(0);
+    const upload = resolveDirectBombadilUploadLeaf(plan);
+    expect((await readdir(upload)).sort()).toEqual(["receipt.json", "summary.json"]);
+    expect(JSON.parse(await readFile(join(upload, "receipt.json"), "utf8"))).toMatchObject({
+      diagnosticsRetained: false,
+      failureCode: "interrupted",
+      status: "failed",
+    });
+  });
+
+  test("removes private diagnostics when a publication precheck rejects", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const plan = artifactRunPlan(repositoryRoot, 41, "private-vetted");
+    const error = await rejection(runDirectBombadilFuzz(config, {
+      arguments: [],
+      artifactRun: plan,
+    }, {
+      ...dependencies().overrides,
+      beforeArtifactCommit: () => {
+        throw new Error("run precommit rejected");
+      },
+    }));
+    expect(error.message).toContain("run precommit rejected");
+    expect(await readdir(dirname(resolveDirectBombadilUploadLeaf(plan)))).toEqual([]);
   });
 
   test("does not spawn when cancellation wins before server startup", async () => {
@@ -1999,16 +3107,102 @@ describe("Direct Bombadil run lifecycle", () => {
     expect(await readFile(String(server.logPath), "utf8")).toContain("server output");
   });
 
-  test("bounds server output after cleanup fails and still writes artifacts", async () => {
+  test("bounds a server-output drain independently of writer settlement", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const runtime = dependencies({
+      neverServerOutput: true,
+      serverOutputTimeoutMs: 10,
+    });
+    const plan = artifactRunPlan(repositoryRoot, 38);
+    const startedAt = Date.now();
+    const error = await rejection(runDirectBombadilFuzz(config, {
+      arguments: [],
+      artifactRun: plan,
+    }, runtime.overrides));
+    expect(error.message).toContain("server output did not settle");
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    const manifest = record(JSON.parse(await readFile(join(
+      repositoryRoot,
+      "artifacts",
+      "direct-bombadil",
+      "fixture-product",
+      "manifest.json",
+    ), "utf8")), "manifest");
+    expect(record(manifest.server, "server").outputFailure).toBeString();
+    expect(JSON.parse(await readFile(join(
+      resolveDirectBombadilUploadLeaf(plan),
+      "receipt.json",
+    ), "utf8"))).toMatchObject({
+      failureCode: "server",
+      status: "failed",
+    });
+  });
+
+  test("classifies local evidence-write failure as persistence", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const plan = artifactRunPlan(repositoryRoot, 39, "private-vetted");
+    const runtime = dependencies({
+      afterTrace: async (invocation) => {
+        await mkdir(join(dirname(invocation.outputPath), "bombadil.log"));
+      },
+    });
+    const error = await rejection(runDirectBombadilFuzz(config, {
+      arguments: [],
+      artifactRun: plan,
+    }, runtime.overrides));
+    expect(error.message).toContain("local diagnostic logs could not be persisted");
+    const upload = resolveDirectBombadilUploadLeaf(plan);
+    expect((await readdir(upload)).sort()).toEqual([
+      "diagnostics",
+      "receipt.json",
+      "summary.json",
+    ]);
+    expect(JSON.parse(await readFile(join(
+      upload,
+      "receipt.json",
+    ), "utf8"))).toMatchObject({
+      diagnosticsRetained: true,
+      failureCode: "persistence",
+      mode: "private-vetted",
+      status: "failed",
+    });
+  });
+
+  test("classifies an unreadable allowlisted output as artifact-policy", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const plan = artifactRunPlan(repositoryRoot, 40);
+    const runtime = dependencies({
+      afterTrace: async (invocation) => {
+        await chmod(join(invocation.outputPath, "trace.jsonl"), 0o000);
+      },
+    });
+    const error = await rejection(runDirectBombadilFuzz(config, {
+      arguments: [],
+      artifactRun: plan,
+    }, runtime.overrides));
+    expect(error.message).toContain("inventory could not be proven safe");
+    expect(JSON.parse(await readFile(join(
+      resolveDirectBombadilUploadLeaf(plan),
+      "receipt.json",
+    ), "utf8"))).toMatchObject({
+      failureCode: "artifact-policy",
+      status: "failed",
+    });
+  });
+
+  test("suppresses artifact inspection and private copying when server cleanup fails", async () => {
     const { config, repositoryRoot } = await fixture();
     const runtime = dependencies({
       neverServerOutput: true,
       serverOutputTimeoutMs: 10,
       stopFailure: true,
     });
+    const plan = artifactRunPlan(repositoryRoot, 19, "private-vetted");
     const startedAt = Date.now();
-    expect((await rejection(runDirectBombadilFuzz(config, [], runtime.overrides))).message)
-      .toContain("server cleanup failed");
+    expect((await rejection(runDirectBombadilFuzz(config, {
+      arguments: [],
+      artifactRun: plan,
+    }, runtime.overrides))).message).toContain("writers were not proven absent");
     expect(Date.now() - startedAt).toBeLessThan(1_000);
     const manifest = JSON.parse(await readFile(
       join(repositoryRoot, "artifacts", "direct-bombadil", "fixture-product", "manifest.json"),
@@ -2016,13 +3210,28 @@ describe("Direct Bombadil run lifecycle", () => {
     )) as Record<string, unknown>;
     expect(manifest).toMatchObject({
       status: "failed",
-      failure: "Error: server cleanup failed",
+      failure: expect.stringContaining("BombadilWriterSettlementError"),
       server: {
         logPresent: false,
-        outputFailure: expect.stringContaining("did not settle within 10ms"),
+        outputFailure: null,
       },
     });
     const server = record(manifest.server, "server");
     expect(await readFile(String(server.logPath), "utf8")).toBe("");
+    const upload = join(repositoryRoot, "artifacts", "direct-bombadil-upload", plan.runId);
+    expect((await readdir(upload)).sort()).toEqual(["receipt.json", "summary.json"]);
+    expect(JSON.parse(await readFile(join(upload, "receipt.json"), "utf8"))).toMatchObject({
+      failureCode: "writer-settlement",
+      inventory: { entryCount: 0, fileCount: 0, inventorySha256: null },
+      status: "failed",
+    });
+    expect(parseDirectBombadilArtifactReceipt(JSON.parse(await readFile(
+      join(upload, "receipt.json"),
+      "utf8",
+    ))).ok).toBeTrue();
+    expect(parseDirectBombadilSanitizedRunSummary(JSON.parse(await readFile(
+      join(upload, "summary.json"),
+      "utf8",
+    ))).ok).toBeTrue();
   });
 });

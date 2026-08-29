@@ -7,6 +7,12 @@ import * as testing from "@hraness/direct/testing";
 import * as browserVerification from "@hraness/direct/tooling/browser-verification";
 import * as bombadil from "@hraness/direct/tooling/bombadil";
 import type { DirectBombadilProperties } from "@hraness/direct/tooling/bombadil-campaign";
+import type {
+  DirectBombadilFuzzMatrixResult,
+  DirectBombadilFuzzResult,
+  DirectBombadilFuzzRunInput,
+  DirectBombadilMatrixRunInput,
+} from "@hraness/direct/tooling/bombadil";
 import * as bundleBoundary from "@hraness/direct/tooling/bundle-boundary";
 import * as web from "@hraness/direct/web";
 
@@ -60,6 +66,11 @@ describe("public package exports", () => {
   test("host tooling stays behind explicit subpaths", () => {
     expect(Object.keys(bombadil).toSorted()).toEqual([
       "attestDirectBombadilTrace",
+      "parseDirectBombadilArtifactReceipt",
+      "parseDirectBombadilMatrixReceipt",
+      "parseDirectBombadilMatrixSummary",
+      "parseDirectBombadilSanitizedRunSummary",
+      "resolveDirectBombadilUploadLeaf",
       "runDirectBombadilFuzz",
       "runDirectBombadilFuzzMatrix",
       "summarizeDirectBombadilTrace",
@@ -69,6 +80,11 @@ describe("public package exports", () => {
     expect(typeof browserVerification.readDirectBrowserContract).toBe("function");
     expect(typeof bombadil.runDirectBombadilFuzz).toBe("function");
     expect(typeof bombadil.attestDirectBombadilTrace).toBe("function");
+    expect(typeof bombadil.parseDirectBombadilArtifactReceipt).toBe("function");
+    expect(typeof bombadil.parseDirectBombadilMatrixReceipt).toBe("function");
+    expect(typeof bombadil.parseDirectBombadilMatrixSummary).toBe("function");
+    expect(typeof bombadil.parseDirectBombadilSanitizedRunSummary).toBe("function");
+    expect(typeof bombadil.resolveDirectBombadilUploadLeaf).toBe("function");
     expect(typeof bombadil.runDirectBombadilFuzzMatrix).toBe("function");
     expect(typeof bombadil.summarizeDirectBombadilTrace).toBe("function");
     expect(typeof bundleBoundary.checkBundleBoundary).toBe("function");
@@ -79,10 +95,53 @@ describe("public package exports", () => {
     expect("checkBundleBoundary" in testing).toBeFalse();
     type PublicRunnerArity = Parameters<typeof bombadil.runDirectBombadilFuzz>["length"];
     const supportedRunnerArities: readonly PublicRunnerArity[] = [1, 2];
+    const supportedRunOptions: DirectBombadilFuzzRunInput = {
+      arguments: ["--time-limit=12s"],
+      artifactRun: {
+        repositoryRoot: "/absolute/repository",
+        runId: "00000000-0000-4000-8000-000000000001",
+        uploadMode: "public-summary",
+      },
+    };
+    const supportedArgumentTuple = ["--time-limit=12s"] as const;
+    const supportedTupleInput: DirectBombadilFuzzRunInput = supportedArgumentTuple;
+    const legacyRunResult: DirectBombadilFuzzResult = {
+      artifactDirectory: "/absolute/repository/artifacts/direct-bombadil/package/run",
+      kind: "run",
+      manifestPath: "/absolute/repository/artifacts/direct-bombadil/package/manifest.json",
+      status: "passed",
+    };
+    const legacyMatrixResult: DirectBombadilFuzzMatrixResult = {
+      kind: "matrix",
+      results: [{ campaignId: "package", result: legacyRunResult }],
+    };
+    const supportedMatrixOptions: DirectBombadilMatrixRunInput = {
+      arguments: supportedArgumentTuple,
+      artifactRun: {
+        repositoryRoot: "/absolute/repository",
+        runId: "00000000-0000-4000-8000-000000000002",
+        uploadMode: "public-summary",
+      },
+    };
+    const unsupportedPrivateMatrixOptions: DirectBombadilMatrixRunInput = {
+      artifactRun: {
+        repositoryRoot: "/absolute/repository",
+        runId: "00000000-0000-4000-8000-000000000003",
+        // @ts-expect-error Matrix uploads are always sanitized public summaries.
+        uploadMode: "private-vetted",
+      },
+    };
     // @ts-expect-error Dependency injection stays internal to package tests.
     const unsupportedRunnerArity: PublicRunnerArity = 3;
     expect(supportedRunnerArities).toEqual([1, 2]);
-    void unsupportedRunnerArity;
+    void [
+      supportedMatrixOptions,
+      legacyMatrixResult,
+      supportedRunOptions,
+      supportedTupleInput,
+      unsupportedPrivateMatrixOptions,
+      unsupportedRunnerArity,
+    ];
     type CampaignProperties = DirectBombadilProperties;
     void (undefined as unknown as CampaignProperties);
   });

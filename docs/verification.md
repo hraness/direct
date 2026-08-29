@@ -334,15 +334,16 @@ Create a Bun wrapper such as `direct/fuzz-browser.ts`:
 
 ```ts
 #!/usr/bin/env bun
+import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runDirectBombadilFuzz } from "@hraness/direct/tooling/bombadil";
 
 const directRoot = fileURLToPath(new URL(".", import.meta.url));
-const repositoryRoot = resolve(directRoot, "../../..");
+const repositoryRoot = await realpath(resolve(directRoot, "../../.."));
 
-await runDirectBombadilFuzz({
+const config = {
   artifactName: "todos",
   baseUrl: "http://127.0.0.1:5173",
   entryPath: "/direct/",
@@ -379,7 +380,19 @@ await runDirectBombadilFuzz({
     readinessPath: "/direct/",
     startupTimeoutMs: 30_000,
   },
-}, process.argv.slice(2));
+} as const;
+
+const runId = process.env.DIRECT_BOMBADIL_RUN_ID;
+await runDirectBombadilFuzz(config, runId === undefined
+  ? process.argv.slice(2)
+  : {
+      arguments: process.argv.slice(2),
+      artifactRun: {
+        repositoryRoot,
+        runId,
+        uploadMode: "public-summary",
+      },
+    });
 ```
 
 `baseUrl` must be an HTTP root origin on `127.0.0.1` or `localhost` with an
@@ -432,6 +445,25 @@ Run random exploration for 12 to 300 seconds. The default is 20 seconds:
 bun direct/fuzz-browser.ts --time-limit 20s
 ```
 
+For a scheduled run, create one lowercase RFC 4122 UUID before starting the
+wrapper and publish its exact upload leaf as a job output. Pass that UUID in
+`artifactRun`; then an `if: always()` upload step can target only
+`artifacts/direct-bombadil-upload/<uuid>`, including terminal failures after
+the runner accepts a valid options envelope and establishes the canonical
+plan's unclaimed upload session. The runner strips
+`DIRECT_BOMBADIL_RUN_ID` from native and server children. Never upload the
+artifact-name root or
+the whole repository artifact directory because either can include older raw
+runs.
+
+```sh
+run_id="$(bun -e 'console.log(crypto.randomUUID())')"
+repository_root="$(git rev-parse --show-toplevel)"
+repository_root="$(cd "$repository_root" && pwd -P)"
+printf 'path=%s/artifacts/direct-bombadil-upload/%s\n' "$repository_root" "$run_id" >> "$GITHUB_OUTPUT"
+DIRECT_BOMBADIL_RUN_ID="$run_id" bun direct/fuzz-browser.ts --time-limit 20s
+```
+
 Use 12–30 seconds in the edit loop. A scheduled diagnostic lane can run each
 campaign for 60–300 seconds, serially, with an outer job timeout and retained
 failure artifacts. Random exploration should supplement the deterministic
@@ -441,17 +473,29 @@ particular random path.
 For multiple product scenarios, pass a bounded matrix to the shared runner:
 
 ```ts
-import { runDirectBombadilFuzzMatrix } from "@hraness/direct/tooling/bombadil";
+import {
+  resolveDirectBombadilUploadLeaf,
+  runDirectBombadilFuzzMatrix,
+} from "@hraness/direct/tooling/bombadil";
+
+const runId = process.env.DIRECT_BOMBADIL_RUN_ID;
+if (runId === undefined) throw new Error("DIRECT_BOMBADIL_RUN_ID is required");
+const artifactRun = { repositoryRoot, runId, uploadMode: "public-summary" } as const;
+console.log(resolveDirectBombadilUploadLeaf(artifactRun));
 
 await runDirectBombadilFuzzMatrix([
   { id: "populated", config: populatedCampaign },
   { id: "empty", config: emptyCampaign },
-], process.argv.slice(2));
+], { arguments: process.argv.slice(2), artifactRun });
 ```
 
 Without `--campaign`, the matrix runs every unique campaign serially. Select
 one for focused work with `--campaign empty`. Replay is intentionally rejected
 without that selector so a trace cannot be applied to the wrong scenario.
+Matrices accept only `public-summary` upload plans and publish one atomic parent
+leaf after every selected campaign reaches a terminal state. Run one selected
+campaign directly when access-controlled `private-vetted` diagnostics are
+required.
 
 Use `--base-url` to select another local root origin. Use `--replay` with a
 repository-local `.jsonl` trace instead of `--time-limit` to reproduce a prior
@@ -498,17 +542,21 @@ The runner invokes the exact native binary at the consumer repository root
 with headless mode, JavaScript instrumentation disabled, a bounded output
 directory, and exit-on-violation for random exploration. An outer wall-clock
 deadline covers the native process. Timeout, interruption, or exit triggers
-bounded process-group cleanup; timeout and interruption use TERM then KILL,
-while a completed leader cannot leave descendants holding output pipes. The
+bounded process-group cleanup; timeout, interruption, and artifact quota
+breaches use immediate KILL, and a completed leader cannot
+leave descendants holding output pipes. The
 configured local server is always stopped through the shared
 browser-verification lease helpers, and its output drain remains bounded even
 when cleanup itself fails.
 
-Each attempt writes `run.json`, `exploration-summary.json`, `bombadil.log`, and `server.log` below
-`artifacts/direct-bombadil/<artifactName>/<run>/`, including failures. The
-rolling `manifest.json` points to the latest record. `rawTracePath` reports a
-regular nonempty trace even if attestation fails; `tracePath` is present only
-after exact attestation. The v2 summary strictly parses the 0.7.2 envelopes and
+Once the run leaf exists, local diagnostics are written below
+`artifacts/direct-bombadil/<artifactName>/<uuid>/`. They can include
+`run.json`, `exploration-summary.json`, `bombadil.log`, `server.log`, and the
+native output. Early configuration rejection can precede that local leaf. The
+rolling `manifest.json` is a convenience pointer, not authoritative evidence.
+The exclusive UUID receipt and upload leaf are authoritative. `rawTracePath`
+reports a regular nonempty trace even if attestation fails; `tracePath` is
+present only after exact attestation. The v2 summary strictly parses the 0.7.2 envelopes and
 records the raw trace SHA-256, action-kind and safe target-tag counts, non-Wait
 count and longest Wait streak, origin-relative URL fingerprints, non-null
 transition-hash cardinality, canonical named-snapshot value hashes, property
@@ -522,15 +570,38 @@ paths. These diagnostics describe what Bombadil happened to explore. They do
 not measure code, state, interaction, or Direct catalog coverage, and the raw
 trace remains authoritative.
 
-Keep all generated artifacts out of source control by default. Upload a failed
-scheduled run to access-controlled CI storage with a bounded retention period;
-the raw trace can contain screenshots, query values, typed text, accessibility
-labels, extracted values, and local paths. Preserve it long enough to inspect
-and replay. Once the defect is understood, add the smallest deterministic
-regression at the owning parser, reducer, port, component, semantic browser, or
-Direct scenario boundary. Verify that regression fails before the fix and
-passes after it. Retain a reviewed trace fixture only when replay itself adds
-durable value; otherwise remove the sensitive trace after promotion.
+Keep all generated artifacts out of source control by default. The default
+`public-summary` upload leaf contains only a newly constructed bounded receipt
+and sanitized summary. It excludes raw traces, screenshots, URLs, query
+values, typed text, accessible labels, logs, absolute paths, and foreign error
+messages. `private-vetted` is an explicit opt-in for access-controlled CI; it
+descriptor-copies only allowlisted native files that pass the campaign count,
+depth, path, per-file, and aggregate-byte quotas. Two host logs have separate
+fixed capture bounds. The resulting upload must then match a newly constructed
+exact-tree inventory and hashes. Symlinks, hard links, special files, unstable
+files, and unapproved extensions fail closed. Live polling is best-effort
+disk-pressure containment. The final post-cleanup inventory and
+descriptor-bound hashes are the authoritative retained-artifact gate.
+`diagnosticsRetained` says whether a private leaf retained vetted raw files.
+Parse disk JSON from `unknown` with `parseDirectBombadilArtifactReceipt`,
+`parseDirectBombadilSanitizedRunSummary`, `parseDirectBombadilMatrixReceipt`,
+or `parseDirectBombadilMatrixSummary`; never cast `JSON.parse` output. The last
+synchronous interruption check precedes atomic rename dispatch. A later signal
+belongs to the caller after terminal publication.
+
+Bombadil and the configured server run in owned process groups, which the host
+settles before the final scan. Node does not expose `openat`, so this boundary
+does not claim containment against a hostile concurrent process running as the
+same user. Repository scheduling and exclusive run leaves remain required.
+If either writer group cannot be proven absent, the runner skips raw inventory,
+attestation, and private copying and publishes only a sanitized
+`writer-settlement` failure receipt.
+Preserve private diagnostics only long enough to inspect and replay. Once the
+defect is understood, add the smallest deterministic regression at the owning
+parser, reducer, port, component, semantic browser, or Direct scenario
+boundary. Verify that regression fails before the fix and passes after it.
+Retain a reviewed trace fixture only when replay itself adds durable value;
+otherwise remove the sensitive trace after promotion.
 
 ## Report coverage without promotion
 

@@ -12,9 +12,9 @@ state with predictable local fixtures. it does not click through the browser
 or test the systems it replaces.
 
 ```sh
-bun add --dev @hraness/direct@0.7.7
+bun add --dev @hraness/direct@0.7.8
 # or
-npm install --save-dev @hraness/direct@0.7.7
+npm install --save-dev @hraness/direct@0.7.8
 ```
 
 [Install @hraness/direct from npm](https://www.npmjs.com/package/@hraness/direct) ·
@@ -53,7 +53,7 @@ Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
 Use $direct to install hraness/direct from
-the npm registry at the exact 0.7.7 version. Follow the repository README, add
+the npm registry at the exact 0.7.8 version. Follow the repository README, add
 `@hraness/direct` to devDependencies only, and verify that the production
 dependency graph excludes Direct. Do not add a fixture composition until I
 ask.
@@ -69,7 +69,7 @@ Pin the public npm package to an exact immutable version:
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "0.7.7"
+    "@hraness/direct": "0.7.8"
   }
 }
 ```
@@ -279,7 +279,21 @@ the exact native 0.7.2 binary, attests the bounded trace with Direct's canonical
 parsers, writes pass or failure artifacts plus a compact exploration summary,
 and releases its owned processes. Use `runDirectBombadilFuzzMatrix` when a
 product owns several scenarios; it runs them serially and requires one exact
-campaign selector for replay.
+campaign selector for replay. Matrix upload plans are public-summary only and
+publish one atomic parent leaf; run a selected campaign directly for bounded
+access-controlled private diagnostics.
+
+Scheduled wrappers should precompute one lowercase UUID and pass it through
+the runner's `artifactRun` option. Resolve the exact leaf with
+`resolveDirectBombadilUploadLeaf` and upload only that leaf with `if: always()`.
+Its default
+public mode contains a bounded sanitized receipt and summary, including for
+rejected or failed runs. Raw traces, logs, screenshots, paths, labels, typed
+values, queries, and foreign errors stay local unless an access-controlled job
+explicitly selects the bounded `private-vetted` mode.
+Parse retained JSON from `unknown` with the four exported
+`parseDirectBombadil*Receipt` and `parseDirectBombadil*Summary` functions;
+never cast `JSON.parse` output to an evidence type.
 
 Startup is the only repairable contract phase. It must reach one exact Direct
 observation within ten seconds. From that sample onward, activation identity,
@@ -292,6 +306,12 @@ snapshots that expose semantic state without retaining page content. Run short
 12–30 second campaigns while editing and longer 60–300 second matrices in a
 scheduled diagnostic lane. Inspect and replay a retained failing trace, then
 promote the smallest readable failure to a deterministic product regression.
+Give every product-owned named snapshot an exact fail-closed parser or type
+predicate. A local random walk discovers reachable surprises; an Antithesis
+environment supplies deterministic simulation and reproducibility around the
+same bounded properties. Do not treat either one as a replacement for Direct's
+deterministic scenarios, semantic assertions, production-boundary checks, or
+ordinary browser gates.
 When a campaign must exercise an interaction, require a named product value to
 change after the intended action kind, as well as after a non-Wait action, so
 bootstrap, idle, prerequisite, and unrelated transitions do not satisfy the
