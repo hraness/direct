@@ -38,9 +38,9 @@ real interface and feature state
 Pin Direct as a development dependency:
 
 ```sh
-bun add --dev @hraness/direct@0.7.7
+bun add --dev @hraness/direct@0.7.8
 # or
-npm install --save-dev @hraness/direct@0.7.7
+npm install --save-dev @hraness/direct@0.7.8
 ```
 
 Keep Direct in `devDependencies`. A production entry must not import Direct,
@@ -87,7 +87,7 @@ Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
 Use $direct to install hraness/direct from
-the npm registry at the exact 0.7.7 version. Follow the repository README, add
+the npm registry at the exact 0.7.8 version. Follow the repository README, add
 `@hraness/direct` to devDependencies only, and verify that the production
 dependency graph excludes Direct. Do not add a fixture composition until I
 ask.
@@ -103,7 +103,7 @@ Pin the public npm package to an exact immutable version:
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "0.7.7"
+    "@hraness/direct": "0.7.8"
   }
 }
 ```
