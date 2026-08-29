@@ -10,7 +10,10 @@ export default defineConfig({
   root: exampleRoot,
   plugins: [react()],
   server: {
+    host: "127.0.0.1",
     open: "/direct/",
+    port: 5173,
+    strictPort: true,
   },
   build: {
     emptyOutDir: true,
