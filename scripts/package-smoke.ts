@@ -361,11 +361,11 @@ function bombadilToolingTypeChecks(profile: BombadilFeatureProfile): string {
         uploadMode: "public-summary",
       },
     };
+    // @ts-expect-error Packaged matrix uploads are public-summary only.
     const unsupportedPrivateBombadilMatrixInput: BombadilMatrixInput = {
       artifactRun: {
         repositoryRoot: "/absolute/repository",
         runId: "00000000-0000-4000-8000-000000000003",
-        // @ts-expect-error Packaged matrix uploads are public-summary only.
         uploadMode: "private-vetted",
       },
     };

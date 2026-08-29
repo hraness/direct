@@ -389,14 +389,18 @@ async function rejection(promise: Promise<unknown>): Promise<Error> {
   throw new Error("Expected the operation to reject");
 }
 
+type ControllableSignal = Parameters<
+  DirectBombadilRunnerDependencies["signalController"]["forward"]
+>[0];
+
 function controllableSignals(): {
   readonly controller: DirectBombadilRunnerDependencies["signalController"];
-  readonly emit: (signal: NodeJS.Signals) => void;
-  readonly forwarded: NodeJS.Signals[];
+  readonly emit: (signal: ControllableSignal) => void;
+  readonly forwarded: ControllableSignal[];
   readonly listenerCount: () => number;
 } {
-  const listeners = new Map<NodeJS.Signals, Set<(signal: NodeJS.Signals) => void>>();
-  const forwarded: NodeJS.Signals[] = [];
+  const listeners = new Map<ControllableSignal, Set<(signal: ControllableSignal) => void>>();
+  const forwarded: ControllableSignal[] = [];
   return {
     controller: {
       forward: (signal) => {

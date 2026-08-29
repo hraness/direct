@@ -713,8 +713,12 @@ export function spawnVerificationServer(options: {
   readonly omitEnvironment?: readonly string[];
 }): ManagedVerificationServer {
   const detachedProcessGroup = options.detachedProcessGroup ?? false;
-  const environment = { ...process.env, ...options.env };
-  for (const name of options.omitEnvironment ?? []) delete environment[name];
+  const omittedEnvironment = new Set(options.omitEnvironment ?? []);
+  const environment: Record<string, string | undefined> = Object.fromEntries(
+    Object.entries({ ...process.env, ...options.env }).filter(
+      ([name]) => !omittedEnvironment.has(name),
+    ),
+  );
   const process_ = Bun.spawn([...options.command], {
     cwd: options.cwd,
     detached: detachedProcessGroup,

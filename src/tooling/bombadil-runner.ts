@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { constants as fileSystemConstants, type BigIntStats } from "node:fs";
 import {
   lstat,
@@ -664,19 +665,22 @@ export interface DirectBombadilRunnerDependencies {
   readonly stopServer: typeof stopVerificationServer;
 }
 
+const PROCESS_INTERRUPT_SIGNALS = ["SIGINT", "SIGTERM"] as const;
+type ProcessInterruptSignal = (typeof PROCESS_INTERRUPT_SIGNALS)[number];
+
 interface ProcessSignalEmitter {
   readonly once: (
-    signal: NodeJS.Signals,
-    listener: (signal: NodeJS.Signals) => void,
+    signal: ProcessInterruptSignal,
+    listener: (signal: ProcessInterruptSignal) => void,
   ) => unknown;
   readonly removeListener: (
-    signal: NodeJS.Signals,
-    listener: (signal: NodeJS.Signals) => void,
+    signal: ProcessInterruptSignal,
+    listener: (signal: ProcessInterruptSignal) => void,
   ) => unknown;
 }
 
 interface ProcessSignalController extends ProcessSignalEmitter {
-  readonly forward: (signal: NodeJS.Signals) => void;
+  readonly forward: (signal: ProcessInterruptSignal) => void;
 }
 
 type ValidatedConfig = Omit<
@@ -2535,7 +2539,7 @@ async function publishRunUpload(options: {
   readonly failure: unknown;
   readonly failureCode?: DirectBombadilArtifactFailureCode;
   readonly inventory: ArtifactInventory;
-  readonly interruptedSignal?: () => NodeJS.Signals | null;
+  readonly interruptedSignal?: () => ProcessInterruptSignal | null;
   readonly localOutputPath: string;
   readonly policy: ValidatedArtifactPolicy;
   readonly privateDiagnosticsAllowed: boolean;
@@ -2714,7 +2718,7 @@ async function publishMatrixUpload(options: {
   readonly completedAt: Date;
   readonly failure: unknown;
   readonly failureCode?: DirectBombadilArtifactFailureCode;
-  readonly interruptedSignal?: () => NodeJS.Signals | null;
+  readonly interruptedSignal?: () => ProcessInterruptSignal | null;
   readonly omittedCampaignCount?: number;
   readonly session: AtomicArtifactUploadSession;
 }): Promise<{ readonly failure: unknown }> {
@@ -4532,11 +4536,12 @@ export async function runBombadilNativeProcess(
   invocation: DirectBombadilInvocation,
 ): Promise<BombadilProcessResult> {
   const artifactPolicy = validateArtifactPolicy(invocation.artifactPolicy);
-  const childEnvironment: Record<string, string | undefined> = {
-    ...process.env,
-    NO_COLOR: "1",
-  };
-  delete childEnvironment[ARTIFACT_COORDINATION_ENVIRONMENT];
+  const childEnvironment: Record<string, string | undefined> = Object.fromEntries(
+    Object.entries({
+      ...process.env,
+      NO_COLOR: "1",
+    }).filter(([name]) => name !== ARTIFACT_COORDINATION_ENVIRONMENT),
+  );
   const process_ = Bun.spawn([...invocation.command], {
     cwd: invocation.cwd,
     detached: true,
@@ -4655,6 +4660,8 @@ export async function runBombadilNativeProcess(
   }
 }
 
+const processEvents: EventEmitter = process;
+
 const defaultDependencies: DirectBombadilRunnerDependencies = {
   acquireServer: acquireVerificationServer,
   createAbortController: () => new AbortController(),
@@ -4663,8 +4670,8 @@ const defaultDependencies: DirectBombadilRunnerDependencies = {
   runBombadil: runBombadilNativeProcess,
   signalController: {
     forward: (signal) => process.kill(process.pid, signal),
-    once: (signal, listener) => process.once(signal, listener),
-    removeListener: (signal, listener) => process.removeListener(signal, listener),
+    once: (signal, listener) => processEvents.once(signal, listener),
+    removeListener: (signal, listener) => processEvents.removeListener(signal, listener),
   },
   serverOutputTimeoutMs: SERVER_OUTPUT_TIMEOUT_MS,
   spawnServer: spawnVerificationServer,
@@ -4905,16 +4912,17 @@ export async function runDirectBombadilFuzzMatrix(
     return { kind: "help" };
   }
   const matrixAbortController = dependencies.createAbortController?.() ?? new AbortController();
-  let interruptedSignal: NodeJS.Signals | null = null;
-  const interrupt = (signal: NodeJS.Signals): void => {
+  let interruptedSignal: ProcessInterruptSignal | null = null;
+  const interrupt = (signal: ProcessInterruptSignal): void => {
     interruptedSignal ??= signal;
     matrixAbortController.abort();
   };
-  const interruptSignals = ["SIGINT", "SIGTERM"] as const;
   const processSignals = dependencies.signalController;
-  for (const signal of interruptSignals) processSignals.once(signal, interrupt);
+  for (const signal of PROCESS_INTERRUPT_SIGNALS) processSignals.once(signal, interrupt);
   const releaseSignalHandlers = (): void => {
-    for (const signal of interruptSignals) processSignals.removeListener(signal, interrupt);
+    for (const signal of PROCESS_INTERRUPT_SIGNALS) {
+      processSignals.removeListener(signal, interrupt);
+    }
   };
   let invalidMatrixUploadMode: boolean;
   let matrixPlan: DirectBombadilArtifactRunPlan;
@@ -4943,7 +4951,7 @@ export async function runDirectBombadilFuzzMatrix(
     uploadSession = await prepareArtifactUploadSession(matrixPlan);
   } catch (error) {
     releaseSignalHandlers();
-    const signalToForward = interruptedSignal as NodeJS.Signals | null;
+    const signalToForward = interruptedSignal as ProcessInterruptSignal | null;
     if (signalToForward !== null) processSignals.forward(signalToForward);
     throw error;
   }
@@ -5131,7 +5139,7 @@ export async function runDirectBombadilFuzzMatrix(
     };
   } finally {
     releaseSignalHandlers();
-    const signalToForward = interruptedSignal as NodeJS.Signals | null;
+    const signalToForward = interruptedSignal as ProcessInterruptSignal | null;
     if (signalToForward !== null) processSignals.forward(signalToForward);
   }
 }
@@ -5157,7 +5165,7 @@ async function runDirectBombadilFuzzInternal(
   preparedUpload?: Readonly<{
     readonly abortSignal?: AbortSignal;
     readonly forwardSignal?: boolean;
-    readonly interruptedSignal?: () => NodeJS.Signals | null;
+    readonly interruptedSignal?: () => ProcessInterruptSignal | null;
     readonly plan: DirectBombadilArtifactRunPlan;
     readonly session: ArtifactUploadSession;
   }>,
@@ -5170,18 +5178,17 @@ async function runDirectBombadilFuzzInternal(
     return { kind: "help" };
   }
   const abortController = dependencies.createAbortController?.() ?? new AbortController();
-  let interruptedSignal: NodeJS.Signals | null = null;
+  let interruptedSignal: ProcessInterruptSignal | null = null;
   let ownedServer: ManagedVerificationServer | null = null;
-  const interrupt = (signal: NodeJS.Signals): void => {
+  const interrupt = (signal: ProcessInterruptSignal): void => {
     interruptedSignal ??= signal;
     abortController.abort();
     if (ownedServer?.exitCode() === null) ownedServer.terminate();
   };
-  const interruptSignals = ["SIGINT", "SIGTERM"] as const;
   // @types/bun augments Node's process events and has changed this overload
   // across patch releases. Bind the stable signal subset used by this runner.
   const processSignals = dependencies.signalController;
-  for (const signal of interruptSignals) processSignals.once(signal, interrupt);
+  for (const signal of PROCESS_INTERRUPT_SIGNALS) processSignals.once(signal, interrupt);
   const abortFromPreparedMatrix = (): void => {
     interruptedSignal ??= preparedUpload?.interruptedSignal?.() ?? null;
     abortController.abort();
@@ -5502,7 +5509,7 @@ async function runDirectBombadilFuzzInternal(
       );
     }
   }
-  const signalAfterRun = interruptedSignal as NodeJS.Signals | null;
+  const signalAfterRun = interruptedSignal as ProcessInterruptSignal | null;
   if (signalAfterRun !== null && failure === null) {
     failure = new Error(`Bombadil fuzzing was interrupted by ${signalAfterRun}`);
   }
@@ -5595,7 +5602,7 @@ async function runDirectBombadilFuzzInternal(
         ? null
         : renderUnknown(explorationSummaryFailure),
       initialDirect: attestation?.initial ?? null,
-      interruptedSignal: interruptedSignal as NodeJS.Signals | null,
+      interruptedSignal: interruptedSignal as ProcessInterruptSignal | null,
       failure: failure === null ? null : renderUnknown(failure),
     });
     const runRecordPath = join(artifactRun.runDirectory, "run.json");
@@ -5612,7 +5619,7 @@ async function runDirectBombadilFuzzInternal(
     }
 
     const failureBeforeUpload = failure;
-    const signalBeforeUpload = interruptedSignal as NodeJS.Signals | null;
+    const signalBeforeUpload = interruptedSignal as ProcessInterruptSignal | null;
     if (signalBeforeUpload !== null && failure === null) {
       failure = new Error(`Bombadil fuzzing was interrupted by ${signalBeforeUpload}`);
     }
@@ -5686,10 +5693,10 @@ async function runDirectBombadilFuzzInternal(
     };
   } finally {
     preparedUpload?.abortSignal?.removeEventListener("abort", abortFromPreparedMatrix);
-    for (const signal of interruptSignals) {
+    for (const signal of PROCESS_INTERRUPT_SIGNALS) {
       processSignals.removeListener(signal, interrupt);
     }
-    const signalToForward = interruptedSignal as NodeJS.Signals | null;
+    const signalToForward = interruptedSignal as ProcessInterruptSignal | null;
     if (signalToForward !== null && preparedUpload?.forwardSignal !== false) {
       processSignals.forward(signalToForward);
     }
