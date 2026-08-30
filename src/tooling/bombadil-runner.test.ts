@@ -30,8 +30,10 @@ import {
   parseDirectBombadilMatrixReceipt,
   parseDirectBombadilMatrixSummary,
   parseDirectBombadilSanitizedRunSummary,
+  requireMatchingLiveChromeDownloadIdentityForTest,
   resolveDirectBombadilUploadLeaf,
   runBombadilNativeProcess,
+  runBombadilNativeProcessForTest,
   runDirectBombadilFuzz,
   runDirectBombadilFuzzMatrix,
   summarizeDirectBombadilTrace,
@@ -2387,6 +2389,141 @@ describe("Direct Bombadil process lifecycle", () => {
     }))).message).toContain("outside the artifact allowlist");
   });
 
+  test("admits a first-seen Chrome completion only after a clean live baseline", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-fast-complete-"));
+    temporaryDirectories.push(directory);
+    const downloads = join(directory, "downloads");
+    const completionPath = join(downloads, CHROME_TRANSIENT_TEST_ID);
+    const policy = {
+      maxDepth: 4,
+      maxEntries: 8,
+      maxFileBytes: 1_024,
+      maxFiles: 4,
+      maxPathBytes: 256,
+      maxTotalBytes: 2_048,
+    };
+
+    await monitorBombadilArtifactTreeForTest({
+      cleanBaselineEstablished: true,
+      policy,
+      root: directory,
+      scans: [{
+        beforeScan: async () => {
+          await mkdir(downloads);
+          await writeFile(completionPath, "complete\n");
+        },
+      }, {}],
+    });
+
+    const replacementRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-fast-replace-"));
+    const retainedRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-fast-retained-"));
+    temporaryDirectories.push(replacementRoot, retainedRoot);
+    const replacementDownloads = join(replacementRoot, "downloads");
+    const replacementCompletion = join(replacementDownloads, CHROME_TRANSIENT_TEST_ID);
+    const retainedCompletion = join(retainedRoot, "retained");
+    expect((await rejection(monitorBombadilArtifactTreeForTest({
+      cleanBaselineEstablished: true,
+      policy,
+      root: replacementRoot,
+      scans: [{
+        beforeScan: async () => {
+          await mkdir(replacementDownloads);
+          await writeFile(replacementCompletion, "complete\n");
+        },
+      }, {
+        beforeScan: async () => {
+          await rename(replacementCompletion, retainedCompletion);
+          await writeFile(replacementCompletion, "replacement\n");
+        },
+      }],
+    }))).message).toContain("changed inode identity");
+  });
+
+  test("does not let a clean baseline hide contradictory partial lineage", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-fast-cross-"));
+    temporaryDirectories.push(directory);
+    const downloads = join(directory, "downloads");
+    const partialPath = join(downloads, `${CHROME_TRANSIENT_TEST_ID}.crdownload`);
+    const policy = {
+      maxDepth: 4,
+      maxEntries: 8,
+      maxFileBytes: 1_024,
+      maxFiles: 4,
+      maxPathBytes: 256,
+      maxTotalBytes: 2_048,
+    };
+
+    expect((await rejection(monitorBombadilArtifactTreeForTest({
+      cleanBaselineEstablished: true,
+      policy,
+      root: directory,
+      scans: [{
+        beforeScan: async () => {
+          await mkdir(downloads);
+          await writeFile(partialPath, "partial\n");
+        },
+      }, {
+        beforeScan: async () => {
+          await writeFile(join(downloads, CHROME_TRANSIENT_OTHER_TEST_ID), "complete\n");
+        },
+      }],
+    }))).message).toContain("lacks live partial provenance");
+  });
+
+  test("rejects same-scan partial and unobserved completion lineage independent of UUID", async () => {
+    const policy = {
+      maxDepth: 4,
+      maxEntries: 8,
+      maxFileBytes: 1_024,
+      maxFiles: 4,
+      maxPathBytes: 256,
+      maxTotalBytes: 2_048,
+    };
+    for (const [completionId, completionFirst] of [
+      [CHROME_TRANSIENT_TEST_ID, false],
+      [CHROME_TRANSIENT_OTHER_TEST_ID, true],
+    ] as const) {
+      const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-same-scan-"));
+      temporaryDirectories.push(directory);
+      const downloads = join(directory, "downloads");
+      expect((await rejection(monitorBombadilArtifactTreeForTest({
+        cleanBaselineEstablished: true,
+        policy,
+        root: directory,
+        scans: [{
+          beforeScan: async () => {
+            await mkdir(downloads);
+            const partialPath = join(
+              downloads,
+              `${CHROME_TRANSIENT_TEST_ID}.crdownload`,
+            );
+            const completionPath = join(downloads, completionId);
+            if (completionFirst) {
+              await writeFile(completionPath, "complete\n");
+              await writeFile(partialPath, "partial\n");
+            } else {
+              await writeFile(partialPath, "partial\n");
+              await writeFile(completionPath, "complete\n");
+            }
+          },
+        }],
+      }))).message).toContain("lacks live partial provenance across the current scan");
+    }
+  });
+
+  test("rejects a same-scan Chrome completion replacement by inode identity", () => {
+    expect(() => requireMatchingLiveChromeDownloadIdentityForTest({
+      completion: { device: 1n, inode: 202n },
+      existing: { device: 1n, inode: 101n },
+      relativePath: `downloads/${CHROME_TRANSIENT_TEST_ID}`,
+    })).toThrow("changed inode identity");
+    expect(() => requireMatchingLiveChromeDownloadIdentityForTest({
+      completion: { device: 1n, inode: 101n },
+      existing: { device: 1n, inode: 101n },
+      relativePath: `downloads/${CHROME_TRANSIENT_TEST_ID}`,
+    })).not.toThrow();
+  });
+
   test("rejects unproven, cross-UUID, and replacement-inode Chrome completions", async () => {
     const policy = {
       maxDepth: 4,
@@ -2513,6 +2650,337 @@ describe("Direct Bombadil process lifecycle", () => {
         },
       }],
     }))).message).toContain("lacks live partial provenance");
+  });
+
+  test("carries raced Chrome completions through immediate retry quotas", async () => {
+    const cases = [
+      {
+        expected: "file quota",
+        policy: {
+          maxDepth: 4,
+          maxEntries: 8,
+          maxFileBytes: 1_024,
+          maxFiles: 1,
+          maxPathBytes: 256,
+          maxTotalBytes: 2_048,
+        },
+        afterRetry: async (directory: string, completionPath: string) => {
+          await rm(completionPath);
+          await writeFile(join(directory, "trace.jsonl"), "retained\n");
+        },
+      },
+      {
+        expected: "aggregate artifact byte quota",
+        policy: {
+          maxDepth: 4,
+          maxEntries: 8,
+          maxFileBytes: 1_024,
+          maxFiles: 4,
+          maxPathBytes: 256,
+          maxTotalBytes: 10,
+        },
+        afterRetry: async (directory: string, completionPath: string) => {
+          await rm(completionPath);
+          await writeFile(join(directory, "trace.jsonl"), "123456");
+        },
+      },
+      {
+        expected: "aggregate artifact byte quota",
+        policy: {
+          maxDepth: 4,
+          maxEntries: 8,
+          maxFileBytes: 1_024,
+          maxFiles: 4,
+          maxPathBytes: 256,
+          maxTotalBytes: 5,
+        },
+        afterRetry: async (_directory: string, completionPath: string) => {
+          await writeFile(completionPath, "1");
+        },
+      },
+      {
+        expected: "entry quota",
+        policy: {
+          maxDepth: 4,
+          maxEntries: 3,
+          maxFileBytes: 1_024,
+          maxFiles: 4,
+          maxPathBytes: 256,
+          maxTotalBytes: 2_048,
+        },
+        afterRetry: async (directory: string, completionPath: string) => {
+          await rm(completionPath);
+          await mkdir(join(directory, "empty-a"));
+          await mkdir(join(directory, "empty-b"));
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-retry-quota-"));
+      temporaryDirectories.push(directory);
+      const downloads = join(directory, "downloads");
+      const partialPath = join(downloads, `${CHROME_TRANSIENT_TEST_ID}.crdownload`);
+      const completionPath = join(downloads, CHROME_TRANSIENT_TEST_ID);
+      let renamed = false;
+      expect((await rejection(monitorBombadilArtifactTreeForTest({
+        cleanBaselineEstablished: true,
+        policy: testCase.policy,
+        root: directory,
+        scans: [{
+          afterLiveChromeDownloadRenameRetry: async () => {
+            await testCase.afterRetry(directory, completionPath);
+          },
+          beforeEntryInspect: async (path) => {
+            if (!renamed && path === partialPath) {
+              renamed = true;
+              await rename(partialPath, completionPath);
+            }
+          },
+          beforeScan: async () => {
+            await mkdir(downloads);
+            await writeFile(partialPath, "123456");
+          },
+        }],
+      }))).message).toContain(testCase.expected);
+      expect(renamed).toBeTrue();
+    }
+  });
+
+  test("rejects quota debt already observed before a Chrome rename retry", async () => {
+    for (const [policy, expected] of [
+      [{
+        maxDepth: 4,
+        maxEntries: 8,
+        maxFileBytes: 1_024,
+        maxFiles: 1,
+        maxPathBytes: 256,
+        maxTotalBytes: 2_048,
+      }, "file quota"],
+      [{
+        maxDepth: 4,
+        maxEntries: 8,
+        maxFileBytes: 1_024,
+        maxFiles: 4,
+        maxPathBytes: 256,
+        maxTotalBytes: 10,
+      }, "aggregate artifact byte quota"],
+    ] as const) {
+      const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-scan-debt-"));
+      temporaryDirectories.push(directory);
+      const downloads = join(directory, "downloads");
+      const partialPath = join(downloads, `${CHROME_TRANSIENT_TEST_ID}.crdownload`);
+      const completionPath = join(downloads, CHROME_TRANSIENT_TEST_ID);
+      let retryHookCalled = false;
+      const error = await rejection(monitorBombadilArtifactTreeForTest({
+        cleanBaselineEstablished: true,
+        policy,
+        root: directory,
+        scans: [{
+          afterLiveChromeDownloadRenameRetry: () => {
+            retryHookCalled = true;
+          },
+          beforeEntryInspect: async (path) => {
+            if (path === partialPath) await rename(partialPath, completionPath);
+          },
+          beforeScan: async () => {
+            await mkdir(downloads);
+            await writeFile(join(directory, "trace.jsonl"), "123456");
+            await writeFile(partialPath, "123456");
+          },
+        }],
+      }));
+      expect(error.name).toBe("BombadilArtifactPolicyError");
+      expect(error.message).toContain(expected);
+      expect(retryHookCalled).toBeFalse();
+    }
+  });
+
+  test("counts carried Chrome provenance against historical identities", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-retry-history-"));
+    temporaryDirectories.push(directory);
+    const downloads = join(directory, "downloads");
+    const firstPartial = join(downloads, `${CHROME_TRANSIENT_TEST_ID}.crdownload`);
+    const firstCompletion = join(downloads, CHROME_TRANSIENT_TEST_ID);
+    const nextPartial = join(downloads, `${CHROME_TRANSIENT_OTHER_TEST_ID}.crdownload`);
+    const nextCompletion = join(downloads, CHROME_TRANSIENT_OTHER_TEST_ID);
+    let renamedNext = false;
+    expect((await rejection(monitorBombadilArtifactTreeForTest({
+      cleanBaselineEstablished: true,
+      policy: {
+        maxDepth: 4,
+        maxEntries: 8,
+        maxFileBytes: 1_024,
+        maxFiles: 1,
+        maxPathBytes: 256,
+        maxTotalBytes: 2_048,
+      },
+      root: directory,
+      scans: [{
+        beforeScan: async () => {
+          await mkdir(downloads);
+          await writeFile(firstPartial, "partial\n");
+        },
+      }, {
+        beforeScan: async () => {
+          await rename(firstPartial, firstCompletion);
+        },
+      }, {
+        beforeEntryInspect: async (path) => {
+          if (!renamedNext && path === nextPartial) {
+            renamedNext = true;
+            await rename(nextPartial, nextCompletion);
+          }
+        },
+        beforeScan: async () => {
+          await rm(firstCompletion);
+          await writeFile(nextPartial, "partial\n");
+        },
+      }],
+    }))).message).toContain("live download provenance quota");
+    expect(renamedNext).toBeTrue();
+  });
+
+  test("stops immediate Chrome rename retries when monitoring is aborted", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-retry-abort-"));
+    temporaryDirectories.push(directory);
+    const downloads = join(directory, "downloads");
+    const partialPath = join(downloads, `${CHROME_TRANSIENT_TEST_ID}.crdownload`);
+    const completionPath = join(downloads, CHROME_TRANSIENT_TEST_ID);
+    const controller = new AbortController();
+    let retryCount = 0;
+    await mkdir(downloads);
+    await writeFile(partialPath, "partial\n");
+    await monitorBombadilArtifactTreeForTest({
+      abortSignal: controller.signal,
+      policy: {
+        maxDepth: 4,
+        maxEntries: 8,
+        maxFileBytes: 1_024,
+        maxFiles: 4,
+        maxPathBytes: 256,
+        maxTotalBytes: 2_048,
+      },
+      root: directory,
+      scans: [{}, {
+        afterLiveChromeDownloadRenameRetry: () => {
+          retryCount += 1;
+          controller.abort();
+        },
+        beforeEntryInspect: async (path) => {
+          if (path === partialPath) await rename(partialPath, completionPath);
+        },
+      }],
+    });
+    expect(retryCount).toBe(1);
+  });
+
+  test("rejects cumulative carried quotas before an abort can discard them", async () => {
+    for (const [policy, expected] of [
+      [{
+        maxDepth: 4,
+        maxEntries: 8,
+        maxFileBytes: 1_024,
+        maxFiles: 4,
+        maxPathBytes: 256,
+        maxTotalBytes: 10,
+      }, "aggregate artifact byte quota"],
+      [{
+        maxDepth: 4,
+        maxEntries: 2,
+        maxFileBytes: 1_024,
+        maxFiles: 4,
+        maxPathBytes: 256,
+        maxTotalBytes: 2_048,
+      }, "entry quota"],
+    ] as const) {
+      const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-carry-abort-"));
+      temporaryDirectories.push(directory);
+      const downloads = join(directory, "downloads");
+      const runIds = [CHROME_TRANSIENT_TEST_ID, CHROME_TRANSIENT_OTHER_TEST_ID] as const;
+      const controller = new AbortController();
+      let retryCount = 0;
+      const error = await rejection(monitorBombadilArtifactTreeForTest({
+        abortSignal: controller.signal,
+        cleanBaselineEstablished: true,
+        policy,
+        root: directory,
+        scans: [{
+          afterLiveChromeDownloadRenameRetry: async (completionPath) => {
+            retryCount += 1;
+            await rm(completionPath);
+            if (retryCount === 1) {
+              await writeFile(join(downloads, `${runIds[1]}.crdownload`), "123456");
+            } else {
+              controller.abort();
+            }
+          },
+          beforeEntryInspect: async (path) => {
+            if (!path.endsWith(".crdownload")) return;
+            await rename(path, path.slice(0, -".crdownload".length));
+          },
+          beforeScan: async () => {
+            await mkdir(downloads);
+            await writeFile(join(downloads, `${runIds[0]}.crdownload`), "123456");
+          },
+        }],
+      }));
+      expect(error.name).toBe("BombadilArtifactPolicyError");
+      expect(error.message).toContain(expected);
+      expect(retryCount).toBe(1);
+      expect(controller.signal.aborted).toBeFalse();
+    }
+  });
+
+  test("bounds repeated Chrome rename retries independently of artifact quotas", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-retry-bound-"));
+    temporaryDirectories.push(directory);
+    const downloads = join(directory, "downloads");
+    const runIds = [
+      "123e4567-e89b-42d3-a456-426614174000",
+      "123e4567-e89b-42d3-a456-426614174001",
+      "123e4567-e89b-42d3-a456-426614174002",
+      "123e4567-e89b-42d3-a456-426614174003",
+      "123e4567-e89b-42d3-a456-426614174004",
+    ] as const;
+    let retryCount = 0;
+    let currentIndex = 0;
+    const error = await rejection(monitorBombadilArtifactTreeForTest({
+      cleanBaselineEstablished: true,
+      policy: {
+        maxDepth: 4,
+        maxEntries: 16,
+        maxFileBytes: 1_024,
+        maxFiles: 8,
+        maxPathBytes: 256,
+        maxTotalBytes: 8_192,
+      },
+      root: directory,
+      scans: [{
+        afterLiveChromeDownloadRenameRetry: async (completionPath) => {
+          retryCount += 1;
+          await rm(completionPath);
+          currentIndex += 1;
+          if (currentIndex < runIds.length) {
+            await writeFile(
+              join(downloads, `${runIds[currentIndex]}.crdownload`),
+              "partial\n",
+            );
+          }
+        },
+        beforeEntryInspect: async (path) => {
+          if (!path.endsWith(".crdownload")) return;
+          await rename(path, path.slice(0, -".crdownload".length));
+        },
+        beforeScan: async () => {
+          await mkdir(downloads);
+          await writeFile(join(downloads, `${runIds[0]}.crdownload`), "partial\n");
+        },
+      }],
+    }));
+    expect(error.name).toBe("BombadilArtifactPolicyError");
+    expect(error.message).toContain("rename activity did not settle safely");
+    expect(retryCount).toBe(4);
   });
 
   test("keeps rename probes monotonic and fails closed on sibling inspection errors", async () => {
@@ -2736,6 +3204,57 @@ describe("Direct Bombadil process lifecycle", () => {
       wallClockTimeoutMs: 5_000,
     });
     expect(result).toMatchObject({ exitCode: 0, termination: null });
+  });
+
+  test("rejects a dirty output baseline before spawning the native process", async () => {
+    for (const fileName of [
+      CHROME_TRANSIENT_TEST_ID,
+      `${CHROME_TRANSIENT_TEST_ID}.crdownload`,
+    ]) {
+      const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-dirty-baseline-"));
+      const sentinelRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-unspawned-"));
+      temporaryDirectories.push(directory, sentinelRoot);
+      const downloads = join(directory, "downloads");
+      const sentinelPath = join(sentinelRoot, "spawned");
+      await mkdir(downloads);
+      await writeFile(join(downloads, fileName), "preexisting\n");
+
+      const error = await rejection(runBombadilNativeProcess({
+        command: [
+          process.execPath,
+          "-e",
+          `require("node:fs").writeFileSync(${JSON.stringify(sentinelPath)}, "spawned");`,
+        ],
+        cwd: directory,
+        outputPath: directory,
+        targetUrl: "http://127.0.0.1:4919/",
+        wallClockTimeoutMs: 5_000,
+      }));
+      expect(error.name).toBe("BombadilArtifactPolicyError");
+      expect(error.message).toContain("absent or empty before the live artifact epoch");
+      expect(await Bun.file(sentinelPath).exists()).toBeFalse();
+    }
+  });
+
+  test("keeps a first-seen Chrome completion out of stopped-process evidence", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-fast-retained-"));
+    temporaryDirectories.push(directory);
+    const downloads = join(directory, "downloads");
+    const completionPath = join(downloads, CHROME_TRANSIENT_TEST_ID);
+    const source = [
+      "const fs = require('node:fs');",
+      `fs.mkdirSync(${JSON.stringify(downloads)}, { recursive: true });`,
+      `fs.writeFileSync(${JSON.stringify(completionPath)}, 'complete');`,
+    ].join(" ");
+    const error = await rejection(runBombadilNativeProcess({
+      command: [process.execPath, "-e", source],
+      cwd: directory,
+      outputPath: directory,
+      targetUrl: "http://127.0.0.1:4919/",
+      wallClockTimeoutMs: 5_000,
+    }));
+    expect(error.name).toBe("BombadilArtifactPolicyError");
+    expect(error.message).toContain("outside the artifact allowlist");
   });
 
   test("tolerates only live-scan entry disappearance and fails final proof closed", async () => {
@@ -3089,6 +3608,79 @@ describe("Direct Bombadil process lifecycle", () => {
     expect(result.termination).toBe("aborted");
     expect(result.stdout).toContain("abort output");
     expect(Date.now() - startedAt).toBeLessThan(2_000);
+  });
+
+  test("never spawns after cancellation before or during the artifact baseline", async () => {
+    const alreadyAbortedRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-pre-aborted-"));
+    temporaryDirectories.push(alreadyAbortedRoot);
+    const alreadyAbortedSentinel = join(alreadyAbortedRoot, "spawned");
+    const alreadyAborted = new AbortController();
+    let alreadyAbortedBaselineCalled = false;
+    alreadyAborted.abort();
+    const alreadyAbortedResult = await runBombadilNativeProcessForTest({
+      abortSignal: alreadyAborted.signal,
+      command: [
+        process.execPath,
+        "-e",
+        `require("node:fs").writeFileSync(${JSON.stringify(alreadyAbortedSentinel)}, "spawned");`,
+      ],
+      cwd: alreadyAbortedRoot,
+      outputPath: alreadyAbortedRoot,
+      targetUrl: "http://127.0.0.1:4919/",
+      wallClockTimeoutMs: 5_000,
+    }, {
+      beforeArtifactBaselineInspect: () => {
+        alreadyAbortedBaselineCalled = true;
+      },
+    });
+    expect(alreadyAbortedResult).toMatchObject({
+      exitCode: 137,
+      stderr: "",
+      stdout: "",
+      termination: "aborted",
+    });
+    expect(alreadyAbortedBaselineCalled).toBeFalse();
+    expect(await Bun.file(alreadyAbortedSentinel).exists()).toBeFalse();
+
+    const deferredRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-baseline-abort-"));
+    temporaryDirectories.push(deferredRoot);
+    const deferredSentinel = join(deferredRoot, "spawned");
+    const deferredAbort = new AbortController();
+    let releaseBaseline!: () => void;
+    let reportBaselineReached!: () => void;
+    const baselineReached = new Promise<void>((resolveReached) => {
+      reportBaselineReached = resolveReached;
+    });
+    const baselineRelease = new Promise<void>((resolveRelease) => {
+      releaseBaseline = resolveRelease;
+    });
+    const deferredResult = runBombadilNativeProcessForTest({
+      abortSignal: deferredAbort.signal,
+      command: [
+        process.execPath,
+        "-e",
+        `require("node:fs").writeFileSync(${JSON.stringify(deferredSentinel)}, "spawned");`,
+      ],
+      cwd: deferredRoot,
+      outputPath: deferredRoot,
+      targetUrl: "http://127.0.0.1:4919/",
+      wallClockTimeoutMs: 5_000,
+    }, {
+      beforeArtifactBaselineInspect: async () => {
+        reportBaselineReached();
+        await baselineRelease;
+      },
+    });
+    await baselineReached;
+    deferredAbort.abort();
+    releaseBaseline();
+    expect(await deferredResult).toMatchObject({
+      exitCode: 137,
+      stderr: "",
+      stdout: "",
+      termination: "aborted",
+    });
+    expect(await Bun.file(deferredSentinel).exists()).toBeFalse();
   });
 
   test("gives an aborted artifact writer no quota-growing TERM grace", async () => {
