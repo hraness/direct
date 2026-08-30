@@ -21,9 +21,9 @@ global `direct` CLI.
 For a new installation, pin the reviewed public release:
 
 ```sh
-bun add --dev @hraness/direct@0.7.11
+bun add --dev @hraness/direct@0.7.12
 # or, in an npm project
-npm install --save-dev @hraness/direct@0.7.11
+npm install --save-dev @hraness/direct@0.7.12
 ```
 
 The equivalent manifest entry is:
@@ -31,7 +31,7 @@ The equivalent manifest entry is:
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "0.7.11"
+    "@hraness/direct": "0.7.12"
   }
 }
 ```
@@ -43,8 +43,8 @@ If the task starts with skill installation rather than a loaded skill, install
 the single repository skill with either command:
 
 ```sh
-npx skills add hraness/direct#v0.7.11
-bunx skills add hraness/direct#v0.7.11
+npx skills add hraness/direct#v0.7.12
+bunx skills add hraness/direct#v0.7.12
 ```
 
 Restart or reload the agent runner if it does not discover newly installed
