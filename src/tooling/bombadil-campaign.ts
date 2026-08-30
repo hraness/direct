@@ -23,6 +23,7 @@ import {
   inputs,
   scroll,
 } from "@antithesishq/bombadil/browser/defaults/actions";
+import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
 
 const DIRECT_BROWSER_BRIDGE_SCHEMA = "direct.browser-bridge/v2";
 const DIRECT_SESSION_MANIFEST_SCHEMA = "direct.session-manifest/v1";
@@ -319,8 +320,10 @@ function boundedNamedSnapshotJson(value: unknown): BombadilJson | undefined {
   const cloned = cloneNamedSnapshotJson(value);
   if (cloned === undefined) return undefined;
   const source = JSON.stringify(cloned);
-  return new TextEncoder().encode(source).byteLength
-      <= MAX_NAMED_SNAPSHOT_CANONICAL_BYTES
+  return isUtf8ByteLengthAtMost(
+    source,
+    MAX_NAMED_SNAPSHOT_CANONICAL_BYTES,
+  )
     ? cloned
     : undefined;
 }

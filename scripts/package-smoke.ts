@@ -502,6 +502,43 @@ function bombadilArtifactDeliverySmoke(profile: BombadilFeatureProfile): string 
   `;
 }
 
+function bombadilBoaNamedSnapshotLoadSmokeSource(): string {
+  return `
+    import type { JSON as BombadilJson } from "@antithesishq/bombadil";
+    import { pasteText } from "@antithesishq/bombadil/terminal/defaults/actions";
+    import {
+      createDirectBombadilNamedSnapshot,
+    } from "@hraness/direct/tooling/bombadil-campaign";
+
+    if (typeof globalThis.TextEncoder !== "undefined") {
+      throw new Error("Bombadil 0.7.2 Boa unexpectedly provides TextEncoder");
+    }
+
+    function hasStatus(value: BombadilJson): value is { readonly status: string } {
+      return typeof value === "object"
+        && value !== null
+        && !Array.isArray(value)
+        && typeof Reflect.get(value, "status") === "string";
+    }
+
+    const asciiFallback = createDirectBombadilNamedSnapshot({
+      fallback: { status: "unavailable" },
+      name: "package.ascii",
+      read: () => { throw new Error("fallback required"); },
+      validate: hasStatus,
+    });
+    const unicodeFallback = createDirectBombadilNamedSnapshot({
+      fallback: { status: "é 😀 \\ud800" },
+      name: "package.unicode",
+      read: () => { throw new Error("fallback required"); },
+      validate: hasStatus,
+    });
+    void [asciiFallback, unicodeFallback];
+
+    export const loadSmokeActions = pasteText("x");
+  `;
+}
+
 const repository = process.cwd();
 const packageManifest = await Bun.file(join(repository, "package.json")).json();
 if (
@@ -513,6 +550,10 @@ if (
   throw new Error("package.json must declare a string version");
 }
 const bombadilFeatureProfile = selectBombadilFeatureProfile(packageManifest.version);
+const supportsBombadilBoaNamedSnapshots = Bun.semver.order(
+  packageManifest.version,
+  "0.7.10",
+) >= 0;
 const work = await mkdtemp(join(tmpdir(), "hraness-package-smoke-"));
 try {
   const packageInput = parsePackageInput(process.argv.slice(2), repository);
@@ -608,6 +649,26 @@ try {
     tooling: false,
   }));
   await run([process.execPath, "x", "tsc", "-p", "./tsconfig.campaign.json"], consumer);
+  if (supportsBombadilBoaNamedSnapshots) {
+    await writeFile(
+      join(consumer, "boa-named-snapshot-load-smoke.ts"),
+      bombadilBoaNamedSnapshotLoadSmokeSource(),
+    );
+    await run([
+      join(consumer, "node_modules", ".bin", "bombadil"),
+      "terminal",
+      "test",
+      "./boa-named-snapshot-load-smoke.ts",
+      "--time-limit",
+      "5s",
+      "--output-path",
+      join(work, "boa-named-snapshot-load-smoke"),
+      "--",
+      process.execPath,
+      "-e",
+      "process.exit(0)",
+    ], consumer);
+  }
   await writeFile(join(consumer, "installed-tooling-smoke.ts"), `
     import type {
       DirectBombadilProperties,

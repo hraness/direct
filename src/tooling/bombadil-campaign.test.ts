@@ -379,6 +379,30 @@ describe("Direct Bombadil named snapshots", () => {
     expect(snapshot.read({ window: { phase: beyondLimit } })).toBeNull();
   });
 
+  test("accepts the exact canonical UTF-8 limit and rejects one byte more", () => {
+    const snapshot = createDirectBombadilNamedSnapshot({
+      fallback: "fallback",
+      name: "product.boundary",
+      read: (state) => Reflect.get(state.window, "value"),
+      validate: (value): value is string => typeof value === "string",
+    }) as unknown as FakeCell;
+    const maximumBytes = 2 * 1024 * 1024;
+    const exactValues = [
+      () => "a".repeat(maximumBytes - 2),
+      () => "é".repeat((maximumBytes - 2) / 2),
+      () => "€".repeat((maximumBytes - 2) / 3),
+      () => `${"😀".repeat(524_287)}é`,
+      () => "\ud800".repeat((maximumBytes - 2) / 6),
+      () => "\udc00".repeat((maximumBytes - 2) / 6),
+    ];
+
+    for (const createExactValue of exactValues) {
+      const exactValue = createExactValue();
+      expect(snapshot.read({ window: { value: exactValue } })).toBe(exactValue);
+      expect(snapshot.read({ window: { value: `${exactValue}a` } })).toBe("fallback");
+    }
+  });
+
   test("rejects non-JSON or predicate-invalid fallbacks before registering an extractor", () => {
     expect(() => createDirectBombadilNamedSnapshot({
       fallback: null,

@@ -44,6 +44,12 @@ const historicalRecoverySources = [
     commit: "13e5fa5d4628706d113252420b57579090363ffc",
     version: "0.7.8",
   },
+  {
+    commit: "2d702f22916321bea55c2290b791f59fb3430bd1",
+    expectedFileCount: 56,
+    expectedUnpackedBytes: 997_768,
+    version: "0.7.9",
+  },
 ] as const;
 
 function workflowStepScript(workflow: string, name: string): string {
@@ -178,7 +184,7 @@ describe("npm release workflows", () => {
       readonly version?: unknown;
     };
     expect(manifest).toEqual(expect.objectContaining({
-      version: "0.7.9",
+      version: "0.7.10",
       description: "A TypeScript harness for deterministic frontend testing and development with repeatable scenarios, local fixtures, and browser verification for coding agents.",
       keywords: [
         "frontend-development",
@@ -376,7 +382,7 @@ describe("npm release workflows", () => {
     const binaryDirectory = join(directory, "bin");
     const commandLog = join(directory, "commands.log");
     const publishMarker = join(directory, "published.txt");
-    const tarball = join(directory, "hraness-direct-0.7.9.tgz");
+    const tarball = join(directory, "hraness-direct-0.7.10.tgz");
     const metadata = join(directory, "npm-pack.json");
     const digest = join(directory, "npm-package.sha256");
     const sourceSha = "b".repeat(40);
@@ -394,7 +400,7 @@ describe("npm release workflows", () => {
         writeFile(metadata, "reviewed metadata fixture\n", "utf8"),
         writeFile(digest, "reviewed digest fixture\n", "utf8"),
       ]);
-      await writeFile(gitStub, `#!/bin/bash\nset -euo pipefail\nprintf 'git %s\\n' "$*" >> "$COMMAND_LOG"\ncase "$*" in\n  *"rev-parse refs/heads/main"*) printf '%s\\n' "$DEFAULT_SHA" ;;\n  *"rev-parse refs/tags/v0.7.9^{commit}"*) printf '%s\\n' "$TAG_SHA" ;;\n  *"merge-base --is-ancestor"*) [[ "$ANCESTRY_STATE" == ancestor ]] ;;\n  *"tag --list v*"*) printf '%s\\n' "$REMOTE_TAGS" ;;\nesac\n`, "utf8");
+      await writeFile(gitStub, `#!/bin/bash\nset -euo pipefail\nprintf 'git %s\\n' "$*" >> "$COMMAND_LOG"\ncase "$*" in\n  *"rev-parse refs/heads/main"*) printf '%s\\n' "$DEFAULT_SHA" ;;\n  *"rev-parse refs/tags/v0.7.10^{commit}"*) printf '%s\\n' "$TAG_SHA" ;;\n  *"merge-base --is-ancestor"*) [[ "$ANCESTRY_STATE" == ancestor ]] ;;\n  *"tag --list v*"*) printf '%s\\n' "$REMOTE_TAGS" ;;\nesac\n`, "utf8");
       await writeFile(sha256Stub, `#!/bin/bash\nset -euo pipefail\nprintf 'sha256sum %s\\n' "$*" >> "$COMMAND_LOG"\ncase "$1" in\n  "$TARBALL") value="$EXPECTED_ARCHIVE_SHA256" ;;\n  "$METADATA") value="$EXPECTED_METADATA_SHA256" ;;\n  "$DIGEST") value="$EXPECTED_DIGEST_SHA256" ;;\n  *) echo "unexpected hash target: $1" >&2; exit 1 ;;\nesac\nprintf '%s  %s\\n' "$value" "$1"\n`, "utf8");
       await writeFile(npmStub, `#!/bin/bash\nset -euo pipefail\nprintf 'npm %s\\n' "$*" >> "$COMMAND_LOG"\nif [[ "\${1-}" == view ]]; then\n  printf '%s\\n' "$PUBLISHED_VERSIONS_JSON"\n  exit 0\nfi\nprintf 'published\\n' > "$PUBLISH_MARKER"\n`, "utf8");
       await Promise.all([chmod(gitStub, 0o755), chmod(npmStub, 0o755), chmod(sha256Stub, 0o755)]);
@@ -410,15 +416,15 @@ describe("npm release workflows", () => {
         EXPECTED_DIGEST_SHA256: digestSha256,
         EXPECTED_METADATA_SHA256: metadataSha256,
         EXPECTED_SOURCE_SHA: sourceSha,
-        EXPECTED_VERSION: "0.7.9",
-        GITHUB_REF: "refs/tags/v0.7.9",
+        EXPECTED_VERSION: "0.7.10",
+        GITHUB_REF: "refs/tags/v0.7.10",
         GITHUB_REPOSITORY: "hraness/direct",
         GITHUB_SHA: sourceSha,
         METADATA: metadata,
         PATH: `${binaryDirectory}:${process.env.PATH ?? ""}`,
-        PUBLISHED_VERSIONS_JSON: '["0.7.4","0.7.5","0.7.6","0.7.7","0.7.8"]',
+        PUBLISHED_VERSIONS_JSON: '["0.7.4","0.7.5","0.7.6","0.7.7","0.7.8","0.7.9"]',
         PUBLISH_MARKER: publishMarker,
-        REMOTE_TAGS: "v0.7.4\nv0.7.5\nv0.7.6\nv0.7.7\nv0.7.8\nv0.7.9",
+        REMOTE_TAGS: "v0.7.4\nv0.7.5\nv0.7.6\nv0.7.7\nv0.7.8\nv0.7.9\nv0.7.10",
         RUNNER_TEMP: directory,
         TAG_SHA: sourceSha,
         TARBALL: tarball,
@@ -449,7 +455,7 @@ describe("npm release workflows", () => {
       });
       expect(moved.exitCode).not.toBe(0);
       expect(`${moved.stdout}${moved.stderr}`).toContain(
-        "Tag v0.7.9 changed after artifact verification",
+        "Tag v0.7.10 changed after artifact verification",
       );
       expect(await Bun.file(publishMarker).exists()).toBe(false);
 
@@ -460,18 +466,18 @@ describe("npm release workflows", () => {
       });
       expect(detached.exitCode).not.toBe(0);
       expect(`${detached.stdout}${detached.stderr}`).toContain(
-        "Tag v0.7.9 is no longer reachable from main",
+        "Tag v0.7.10 is no longer reachable from main",
       );
       expect(await Bun.file(publishMarker).exists()).toBe(false);
 
       await rm(commandLog, { force: true });
       const superseded = await runWorkflowScript(script, {
         ...baseEnvironment,
-        REMOTE_TAGS: "v0.7.4\nv0.7.5\nv0.7.6\nv0.7.7\nv0.7.8\nv0.7.9\nv0.7.10",
+        REMOTE_TAGS: "v0.7.4\nv0.7.5\nv0.7.6\nv0.7.7\nv0.7.8\nv0.7.9\nv0.7.10\nv0.7.11",
       });
       expect(superseded.exitCode).not.toBe(0);
       expect(`${superseded.stdout}${superseded.stderr}`).toContain(
-        "Tag v0.7.9 is not the newest stable tag v0.7.10",
+        "Tag v0.7.10 is not the newest stable tag v0.7.11",
       );
       expect(await readFile(commandLog, "utf8")).not.toContain("npm publish");
       expect(await Bun.file(publishMarker).exists()).toBe(false);
@@ -479,11 +485,11 @@ describe("npm release workflows", () => {
       await rm(commandLog, { force: true });
       const staleVersion = await runWorkflowScript(script, {
         ...baseEnvironment,
-        PUBLISHED_VERSIONS_JSON: '["0.7.4","0.7.10"]',
+        PUBLISHED_VERSIONS_JSON: '["0.7.4","0.7.11"]',
       });
       expect(staleVersion.exitCode).not.toBe(0);
       expect(`${staleVersion.stdout}${staleVersion.stderr}`).toContain(
-        "@hraness/direct@0.7.9 is not newer than published stable 0.7.10",
+        "@hraness/direct@0.7.10 is not newer than published stable 0.7.11",
       );
       expect(await Bun.file(publishMarker).exists()).toBe(false);
 
