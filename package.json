@@ -65,6 +65,9 @@
       "import": "./dist/tooling/bundle-boundary.js"
     }
   },
+  "imports": {
+    "#bombadil-named-snapshot": "./src/tooling/bombadil-named-snapshot.ts"
+  },
   "main": "./dist/index.js",
   "types": "./src/index.ts",
   "files": [
@@ -98,6 +101,7 @@
     "src/tooling/browser-verification.ts",
     "src/tooling/bombadil-internal.d.ts",
     "src/tooling/bombadil-campaign.ts",
+    "src/tooling/bombadil-named-snapshot.ts",
     "src/tooling/bombadil-runner.ts",
     "src/tooling/bombadil.ts",
     "src/tooling/bundle-boundary.ts",

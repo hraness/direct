@@ -16,6 +16,14 @@ const publishWorkflowUrl = new URL("../.github/workflows/npm-publish.yml", impor
 const releaseWorkflowUrl = new URL("../.github/workflows/release.yml", import.meta.url);
 const ciWorkflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
 const manifestUrl = new URL("../package.json", import.meta.url);
+const bombadilCampaignUrl = new URL(
+  "../src/tooling/bombadil-campaign.ts",
+  import.meta.url,
+);
+const bombadilNamedSnapshotUrl = new URL(
+  "../src/tooling/bombadil-named-snapshot.ts",
+  import.meta.url,
+);
 const readmeUrl = new URL("../README.md", import.meta.url);
 const packageSmokeUrl = new URL("./package-smoke.ts", import.meta.url);
 const packagePreparationUrl = new URL("./prepare-npm-package.ts", import.meta.url);
@@ -173,6 +181,125 @@ function writeHeaderChecksum(tar: Buffer, offset: number): void {
 }
 
 describe("npm release workflows", () => {
+  test("binds the packaged Boa specification to the driver-neutral snapshot source", async () => {
+    const [campaign, manifestSource, namedSnapshot, smoke] = await Promise.all([
+      readFile(bombadilCampaignUrl, "utf8"),
+      readFile(manifestUrl, "utf8"),
+      readFile(bombadilNamedSnapshotUrl, "utf8"),
+      readFile(packageSmokeUrl, "utf8"),
+    ]);
+    const manifest = JSON.parse(manifestSource) as {
+      readonly exports?: Readonly<Record<string, unknown>>;
+      readonly files?: readonly unknown[];
+      readonly imports?: Readonly<Record<string, unknown>>;
+      readonly sideEffects?: readonly unknown[];
+    };
+    const boaSourceStart = smoke.indexOf(
+      "function bombadilBoaNamedSnapshotLoadSmokeSource(): string {",
+    );
+    const boaSourceEnd = smoke.indexOf("\n\nconst repository = process.cwd();", boaSourceStart);
+    expect(boaSourceStart).toBeGreaterThanOrEqual(0);
+    expect(boaSourceEnd).toBeGreaterThan(boaSourceStart);
+    const boaSource = smoke.slice(boaSourceStart, boaSourceEnd);
+    const namedSnapshotImportPrelude = `import { extract } from "@antithesishq/bombadil";
+import type {
+  Cell,
+  JSON as BombadilJson,
+} from "@antithesishq/bombadil";
+import type {
+  State as BombadilBrowserState,
+} from "@antithesishq/bombadil/browser";
+
+import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
+`;
+    const expectedNamedSnapshotImports = [
+      ...namedSnapshotImportPrelude.matchAll(/^import[\s\S]*?;\n/gmu),
+    ].map((match) => match[0]);
+    const namedSnapshotImports = [
+      ...namedSnapshot.matchAll(/^import[\s\S]*?;\n/gmu),
+    ].map((match) => match[0]);
+    const manifestExports = manifest.exports ?? {};
+
+    expect(manifest.files).toContain("src/tooling/bombadil-named-snapshot.ts");
+    expect(Object.hasOwn(
+      manifestExports,
+      "./tooling/bombadil-named-snapshot",
+    )).toBe(false);
+    expect(manifestExports["./tooling/bombadil-campaign"]).toBe(
+      "./src/tooling/bombadil-campaign.ts",
+    );
+    expect(manifest.imports).toEqual({
+      "#bombadil-named-snapshot": "./src/tooling/bombadil-named-snapshot.ts",
+    });
+    expect(manifest.sideEffects ?? []).not.toContain(
+      "./src/tooling/bombadil-named-snapshot.ts",
+    );
+    expect(campaign).toContain(
+      'import { createDirectBombadilNamedSnapshot } from "#bombadil-named-snapshot";',
+    );
+    expect(campaign).toContain("export { createDirectBombadilNamedSnapshot };");
+    expect(campaign).not.toContain("export function createDirectBombadilNamedSnapshot");
+    expect(namedSnapshot.startsWith(namedSnapshotImportPrelude)).toBe(true);
+    expect(namedSnapshotImports).toEqual(expectedNamedSnapshotImports);
+    expect(namedSnapshot.match(/@antithesishq\/bombadil\/browser/gu) ?? []).toHaveLength(1);
+    expect(namedSnapshot.replace(namedSnapshotImportPrelude, "")).not.toContain(
+      "@antithesishq/bombadil/browser",
+    );
+    expect(namedSnapshot).not.toContain("@antithesishq/bombadil/browser/defaults");
+    expect(namedSnapshot).not.toMatch(/\brequire\s*\(|\bimport\s*\(/u);
+    expect(boaSource).toContain(
+      'from "./node_modules/@hraness/direct/src/tooling/bombadil-named-snapshot.ts";',
+    );
+    expect(boaSource).not.toContain(
+      'from "@hraness/direct/tooling/bombadil-campaign";',
+    );
+    expect(boaSource).not.toContain("@antithesishq/bombadil/browser");
+    expect(boaSource).not.toContain("@antithesishq/bombadil/terminal");
+    expect(boaSource).not.toContain("pasteText");
+    expect(boaSource).toContain(
+      `export const loadSmokeActions = actions(() => [{
+      TypeText: { CharSet: [{ Literal: "x" }] },
+    }]);`,
+    );
+    expect(boaSource).toContain("export const loadSmokeFallbacks = always(() =>");
+    expect(boaSource).toContain('asciiFallback.current.status === "unavailable"');
+    expect(boaSource).toContain(
+      'fallback: { status: "é 😀 \\\\ud800" },',
+    );
+    expect(boaSource).toContain(
+      'unicodeFallback.current.status === "é 😀 \\\\\\\\uD800"',
+    );
+    expect([...boaSource.matchAll(/^\s*export\b[^\n]*/gmu)]
+      .map((match) => match[0].trim())).toEqual([
+      "export const loadSmokeActions = actions(() => [{",
+      "export const loadSmokeFallbacks = always(() =>",
+    ]);
+    expect(smoke).toContain('"bombadil-named-snapshot.ts",');
+    expect(smoke).toContain(
+      "const [repositoryNamedSnapshotSource, installedNamedSnapshotSource] = await Promise.all([",
+    );
+    expect(smoke).toContain(
+      "if (installedNamedSnapshotSource !== repositoryNamedSnapshotSource)",
+    );
+    expect(smoke).toContain(
+      "Installed Bombadil named-snapshot source does not match the reviewed package source",
+    );
+    expect(smoke).toContain(`
+      "terminal",
+      "test",
+      "--specification",
+      "./boa-named-snapshot-load-smoke.ts",
+      "--time-limit",
+      "5s",
+      "--output-path",
+      join(work, "boa-named-snapshot-load-smoke"),
+      "--",
+      process.execPath,
+      "-e",
+      "process.exit(0)",
+    `);
+  });
+
   test("keeps npm discoverability metadata focused and aligned with the README", async () => {
     const [manifestSource, readme] = await Promise.all([
       readFile(manifestUrl, "utf8"),

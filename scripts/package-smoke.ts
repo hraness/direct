@@ -504,11 +504,14 @@ function bombadilArtifactDeliverySmoke(profile: BombadilFeatureProfile): string 
 
 function bombadilBoaNamedSnapshotLoadSmokeSource(): string {
   return `
-    import type { JSON as BombadilJson } from "@antithesishq/bombadil";
-    import { pasteText } from "@antithesishq/bombadil/terminal/defaults/actions";
+    import {
+      actions,
+      always,
+      type JSON as BombadilJson,
+    } from "@antithesishq/bombadil";
     import {
       createDirectBombadilNamedSnapshot,
-    } from "@hraness/direct/tooling/bombadil-campaign";
+    } from "./node_modules/@hraness/direct/src/tooling/bombadil-named-snapshot.ts";
 
     if (typeof globalThis.TextEncoder !== "undefined") {
       throw new Error("Bombadil 0.7.2 Boa unexpectedly provides TextEncoder");
@@ -533,9 +536,14 @@ function bombadilBoaNamedSnapshotLoadSmokeSource(): string {
       read: () => { throw new Error("fallback required"); },
       validate: hasStatus,
     });
-    void [asciiFallback, unicodeFallback];
 
-    export const loadSmokeActions = pasteText("x");
+    export const loadSmokeActions = actions(() => [{
+      TypeText: { CharSet: [{ Literal: "x" }] },
+    }]);
+    export const loadSmokeFallbacks = always(() =>
+      asciiFallback.current.status === "unavailable"
+      && unicodeFallback.current.status === "é 😀 \\\\uD800"
+    );
   `;
 }
 
@@ -650,6 +658,29 @@ try {
   }));
   await run([process.execPath, "x", "tsc", "-p", "./tsconfig.campaign.json"], consumer);
   if (supportsBombadilBoaNamedSnapshots) {
+    const namedSnapshotSourceSegments = [
+      "src",
+      "tooling",
+      "bombadil-named-snapshot.ts",
+    ] as const;
+    const [repositoryNamedSnapshotSource, installedNamedSnapshotSource] = await Promise.all([
+      readFile(join(repository, ...namedSnapshotSourceSegments), "utf8"),
+      readFile(
+        join(
+          consumer,
+          "node_modules",
+          "@hraness",
+          "direct",
+          ...namedSnapshotSourceSegments,
+        ),
+        "utf8",
+      ),
+    ]);
+    if (installedNamedSnapshotSource !== repositoryNamedSnapshotSource) {
+      throw new Error(
+        "Installed Bombadil named-snapshot source does not match the reviewed package source",
+      );
+    }
     await writeFile(
       join(consumer, "boa-named-snapshot-load-smoke.ts"),
       bombadilBoaNamedSnapshotLoadSmokeSource(),
@@ -658,6 +689,7 @@ try {
       join(consumer, "node_modules", ".bin", "bombadil"),
       "terminal",
       "test",
+      "--specification",
       "./boa-named-snapshot-load-smoke.ts",
       "--time-limit",
       "5s",
