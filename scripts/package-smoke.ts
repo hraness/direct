@@ -502,6 +502,51 @@ function bombadilArtifactDeliverySmoke(profile: BombadilFeatureProfile): string 
   `;
 }
 
+function bombadilBoaNamedSnapshotLoadSmokeSource(): string {
+  return `
+    import {
+      actions,
+      always,
+      type JSON as BombadilJson,
+    } from "@antithesishq/bombadil";
+    import {
+      createDirectBombadilNamedSnapshot,
+    } from "./node_modules/@hraness/direct/src/tooling/bombadil-named-snapshot.ts";
+
+    if (typeof globalThis.TextEncoder !== "undefined") {
+      throw new Error("Bombadil 0.7.2 Boa unexpectedly provides TextEncoder");
+    }
+
+    function hasStatus(value: BombadilJson): value is { readonly status: string } {
+      return typeof value === "object"
+        && value !== null
+        && !Array.isArray(value)
+        && typeof Reflect.get(value, "status") === "string";
+    }
+
+    const asciiFallback = createDirectBombadilNamedSnapshot({
+      fallback: { status: "unavailable" },
+      name: "package.ascii",
+      read: () => { throw new Error("fallback required"); },
+      validate: hasStatus,
+    });
+    const unicodeFallback = createDirectBombadilNamedSnapshot({
+      fallback: { status: "é 😀 \\ud800" },
+      name: "package.unicode",
+      read: () => { throw new Error("fallback required"); },
+      validate: hasStatus,
+    });
+
+    export const loadSmokeActions = actions(() => [{
+      TypeText: { CharSet: [{ Literal: "x" }] },
+    }]);
+    export const loadSmokeFallbacks = always(() =>
+      asciiFallback.current.status === "unavailable"
+      && unicodeFallback.current.status === "é 😀 \\\\uD800"
+    );
+  `;
+}
+
 const repository = process.cwd();
 const packageManifest = await Bun.file(join(repository, "package.json")).json();
 if (
@@ -513,6 +558,10 @@ if (
   throw new Error("package.json must declare a string version");
 }
 const bombadilFeatureProfile = selectBombadilFeatureProfile(packageManifest.version);
+const supportsBombadilBoaNamedSnapshots = Bun.semver.order(
+  packageManifest.version,
+  "0.7.10",
+) >= 0;
 const work = await mkdtemp(join(tmpdir(), "hraness-package-smoke-"));
 try {
   const packageInput = parsePackageInput(process.argv.slice(2), repository);
@@ -608,6 +657,50 @@ try {
     tooling: false,
   }));
   await run([process.execPath, "x", "tsc", "-p", "./tsconfig.campaign.json"], consumer);
+  if (supportsBombadilBoaNamedSnapshots) {
+    const namedSnapshotSourceSegments = [
+      "src",
+      "tooling",
+      "bombadil-named-snapshot.ts",
+    ] as const;
+    const [repositoryNamedSnapshotSource, installedNamedSnapshotSource] = await Promise.all([
+      readFile(join(repository, ...namedSnapshotSourceSegments), "utf8"),
+      readFile(
+        join(
+          consumer,
+          "node_modules",
+          "@hraness",
+          "direct",
+          ...namedSnapshotSourceSegments,
+        ),
+        "utf8",
+      ),
+    ]);
+    if (installedNamedSnapshotSource !== repositoryNamedSnapshotSource) {
+      throw new Error(
+        "Installed Bombadil named-snapshot source does not match the reviewed package source",
+      );
+    }
+    await writeFile(
+      join(consumer, "boa-named-snapshot-load-smoke.ts"),
+      bombadilBoaNamedSnapshotLoadSmokeSource(),
+    );
+    await run([
+      join(consumer, "node_modules", ".bin", "bombadil"),
+      "terminal",
+      "test",
+      "--specification",
+      "./boa-named-snapshot-load-smoke.ts",
+      "--time-limit",
+      "5s",
+      "--output-path",
+      join(work, "boa-named-snapshot-load-smoke"),
+      "--",
+      process.execPath,
+      "-e",
+      "process.exit(0)",
+    ], consumer);
+  }
   await writeFile(join(consumer, "installed-tooling-smoke.ts"), `
     import type {
       DirectBombadilProperties,

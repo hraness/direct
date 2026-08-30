@@ -16,6 +16,14 @@ const publishWorkflowUrl = new URL("../.github/workflows/npm-publish.yml", impor
 const releaseWorkflowUrl = new URL("../.github/workflows/release.yml", import.meta.url);
 const ciWorkflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
 const manifestUrl = new URL("../package.json", import.meta.url);
+const bombadilCampaignUrl = new URL(
+  "../src/tooling/bombadil-campaign.ts",
+  import.meta.url,
+);
+const bombadilNamedSnapshotUrl = new URL(
+  "../src/tooling/bombadil-named-snapshot.ts",
+  import.meta.url,
+);
 const readmeUrl = new URL("../README.md", import.meta.url);
 const packageSmokeUrl = new URL("./package-smoke.ts", import.meta.url);
 const packagePreparationUrl = new URL("./prepare-npm-package.ts", import.meta.url);
@@ -43,6 +51,12 @@ const historicalRecoverySources = [
   {
     commit: "13e5fa5d4628706d113252420b57579090363ffc",
     version: "0.7.8",
+  },
+  {
+    commit: "2d702f22916321bea55c2290b791f59fb3430bd1",
+    expectedFileCount: 56,
+    expectedUnpackedBytes: 997_768,
+    version: "0.7.9",
   },
 ] as const;
 
@@ -167,6 +181,125 @@ function writeHeaderChecksum(tar: Buffer, offset: number): void {
 }
 
 describe("npm release workflows", () => {
+  test("binds the packaged Boa specification to the driver-neutral snapshot source", async () => {
+    const [campaign, manifestSource, namedSnapshot, smoke] = await Promise.all([
+      readFile(bombadilCampaignUrl, "utf8"),
+      readFile(manifestUrl, "utf8"),
+      readFile(bombadilNamedSnapshotUrl, "utf8"),
+      readFile(packageSmokeUrl, "utf8"),
+    ]);
+    const manifest = JSON.parse(manifestSource) as {
+      readonly exports?: Readonly<Record<string, unknown>>;
+      readonly files?: readonly unknown[];
+      readonly imports?: Readonly<Record<string, unknown>>;
+      readonly sideEffects?: readonly unknown[];
+    };
+    const boaSourceStart = smoke.indexOf(
+      "function bombadilBoaNamedSnapshotLoadSmokeSource(): string {",
+    );
+    const boaSourceEnd = smoke.indexOf("\n\nconst repository = process.cwd();", boaSourceStart);
+    expect(boaSourceStart).toBeGreaterThanOrEqual(0);
+    expect(boaSourceEnd).toBeGreaterThan(boaSourceStart);
+    const boaSource = smoke.slice(boaSourceStart, boaSourceEnd);
+    const namedSnapshotImportPrelude = `import { extract } from "@antithesishq/bombadil";
+import type {
+  Cell,
+  JSON as BombadilJson,
+} from "@antithesishq/bombadil";
+import type {
+  State as BombadilBrowserState,
+} from "@antithesishq/bombadil/browser";
+
+import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
+`;
+    const expectedNamedSnapshotImports = [
+      ...namedSnapshotImportPrelude.matchAll(/^import[\s\S]*?;\n/gmu),
+    ].map((match) => match[0]);
+    const namedSnapshotImports = [
+      ...namedSnapshot.matchAll(/^import[\s\S]*?;\n/gmu),
+    ].map((match) => match[0]);
+    const manifestExports = manifest.exports ?? {};
+
+    expect(manifest.files).toContain("src/tooling/bombadil-named-snapshot.ts");
+    expect(Object.hasOwn(
+      manifestExports,
+      "./tooling/bombadil-named-snapshot",
+    )).toBe(false);
+    expect(manifestExports["./tooling/bombadil-campaign"]).toBe(
+      "./src/tooling/bombadil-campaign.ts",
+    );
+    expect(manifest.imports).toEqual({
+      "#bombadil-named-snapshot": "./src/tooling/bombadil-named-snapshot.ts",
+    });
+    expect(manifest.sideEffects ?? []).not.toContain(
+      "./src/tooling/bombadil-named-snapshot.ts",
+    );
+    expect(campaign).toContain(
+      'import { createDirectBombadilNamedSnapshot } from "#bombadil-named-snapshot";',
+    );
+    expect(campaign).toContain("export { createDirectBombadilNamedSnapshot };");
+    expect(campaign).not.toContain("export function createDirectBombadilNamedSnapshot");
+    expect(namedSnapshot.startsWith(namedSnapshotImportPrelude)).toBe(true);
+    expect(namedSnapshotImports).toEqual(expectedNamedSnapshotImports);
+    expect(namedSnapshot.match(/@antithesishq\/bombadil\/browser/gu) ?? []).toHaveLength(1);
+    expect(namedSnapshot.replace(namedSnapshotImportPrelude, "")).not.toContain(
+      "@antithesishq/bombadil/browser",
+    );
+    expect(namedSnapshot).not.toContain("@antithesishq/bombadil/browser/defaults");
+    expect(namedSnapshot).not.toMatch(/\brequire\s*\(|\bimport\s*\(/u);
+    expect(boaSource).toContain(
+      'from "./node_modules/@hraness/direct/src/tooling/bombadil-named-snapshot.ts";',
+    );
+    expect(boaSource).not.toContain(
+      'from "@hraness/direct/tooling/bombadil-campaign";',
+    );
+    expect(boaSource).not.toContain("@antithesishq/bombadil/browser");
+    expect(boaSource).not.toContain("@antithesishq/bombadil/terminal");
+    expect(boaSource).not.toContain("pasteText");
+    expect(boaSource).toContain(
+      `export const loadSmokeActions = actions(() => [{
+      TypeText: { CharSet: [{ Literal: "x" }] },
+    }]);`,
+    );
+    expect(boaSource).toContain("export const loadSmokeFallbacks = always(() =>");
+    expect(boaSource).toContain('asciiFallback.current.status === "unavailable"');
+    expect(boaSource).toContain(
+      'fallback: { status: "é 😀 \\\\ud800" },',
+    );
+    expect(boaSource).toContain(
+      'unicodeFallback.current.status === "é 😀 \\\\\\\\uD800"',
+    );
+    expect([...boaSource.matchAll(/^\s*export\b[^\n]*/gmu)]
+      .map((match) => match[0].trim())).toEqual([
+      "export const loadSmokeActions = actions(() => [{",
+      "export const loadSmokeFallbacks = always(() =>",
+    ]);
+    expect(smoke).toContain('"bombadil-named-snapshot.ts",');
+    expect(smoke).toContain(
+      "const [repositoryNamedSnapshotSource, installedNamedSnapshotSource] = await Promise.all([",
+    );
+    expect(smoke).toContain(
+      "if (installedNamedSnapshotSource !== repositoryNamedSnapshotSource)",
+    );
+    expect(smoke).toContain(
+      "Installed Bombadil named-snapshot source does not match the reviewed package source",
+    );
+    expect(smoke).toContain(`
+      "terminal",
+      "test",
+      "--specification",
+      "./boa-named-snapshot-load-smoke.ts",
+      "--time-limit",
+      "5s",
+      "--output-path",
+      join(work, "boa-named-snapshot-load-smoke"),
+      "--",
+      process.execPath,
+      "-e",
+      "process.exit(0)",
+    `);
+  });
+
   test("keeps npm discoverability metadata focused and aligned with the README", async () => {
     const [manifestSource, readme] = await Promise.all([
       readFile(manifestUrl, "utf8"),
@@ -178,7 +311,7 @@ describe("npm release workflows", () => {
       readonly version?: unknown;
     };
     expect(manifest).toEqual(expect.objectContaining({
-      version: "0.7.9",
+      version: "0.7.10",
       description: "A TypeScript harness for deterministic frontend testing and development with repeatable scenarios, local fixtures, and browser verification for coding agents.",
       keywords: [
         "frontend-development",
@@ -376,7 +509,7 @@ describe("npm release workflows", () => {
     const binaryDirectory = join(directory, "bin");
     const commandLog = join(directory, "commands.log");
     const publishMarker = join(directory, "published.txt");
-    const tarball = join(directory, "hraness-direct-0.7.9.tgz");
+    const tarball = join(directory, "hraness-direct-0.7.10.tgz");
     const metadata = join(directory, "npm-pack.json");
     const digest = join(directory, "npm-package.sha256");
     const sourceSha = "b".repeat(40);
@@ -394,7 +527,7 @@ describe("npm release workflows", () => {
         writeFile(metadata, "reviewed metadata fixture\n", "utf8"),
         writeFile(digest, "reviewed digest fixture\n", "utf8"),
       ]);
-      await writeFile(gitStub, `#!/bin/bash\nset -euo pipefail\nprintf 'git %s\\n' "$*" >> "$COMMAND_LOG"\ncase "$*" in\n  *"rev-parse refs/heads/main"*) printf '%s\\n' "$DEFAULT_SHA" ;;\n  *"rev-parse refs/tags/v0.7.9^{commit}"*) printf '%s\\n' "$TAG_SHA" ;;\n  *"merge-base --is-ancestor"*) [[ "$ANCESTRY_STATE" == ancestor ]] ;;\n  *"tag --list v*"*) printf '%s\\n' "$REMOTE_TAGS" ;;\nesac\n`, "utf8");
+      await writeFile(gitStub, `#!/bin/bash\nset -euo pipefail\nprintf 'git %s\\n' "$*" >> "$COMMAND_LOG"\ncase "$*" in\n  *"rev-parse refs/heads/main"*) printf '%s\\n' "$DEFAULT_SHA" ;;\n  *"rev-parse refs/tags/v0.7.10^{commit}"*) printf '%s\\n' "$TAG_SHA" ;;\n  *"merge-base --is-ancestor"*) [[ "$ANCESTRY_STATE" == ancestor ]] ;;\n  *"tag --list v*"*) printf '%s\\n' "$REMOTE_TAGS" ;;\nesac\n`, "utf8");
       await writeFile(sha256Stub, `#!/bin/bash\nset -euo pipefail\nprintf 'sha256sum %s\\n' "$*" >> "$COMMAND_LOG"\ncase "$1" in\n  "$TARBALL") value="$EXPECTED_ARCHIVE_SHA256" ;;\n  "$METADATA") value="$EXPECTED_METADATA_SHA256" ;;\n  "$DIGEST") value="$EXPECTED_DIGEST_SHA256" ;;\n  *) echo "unexpected hash target: $1" >&2; exit 1 ;;\nesac\nprintf '%s  %s\\n' "$value" "$1"\n`, "utf8");
       await writeFile(npmStub, `#!/bin/bash\nset -euo pipefail\nprintf 'npm %s\\n' "$*" >> "$COMMAND_LOG"\nif [[ "\${1-}" == view ]]; then\n  printf '%s\\n' "$PUBLISHED_VERSIONS_JSON"\n  exit 0\nfi\nprintf 'published\\n' > "$PUBLISH_MARKER"\n`, "utf8");
       await Promise.all([chmod(gitStub, 0o755), chmod(npmStub, 0o755), chmod(sha256Stub, 0o755)]);
@@ -410,15 +543,15 @@ describe("npm release workflows", () => {
         EXPECTED_DIGEST_SHA256: digestSha256,
         EXPECTED_METADATA_SHA256: metadataSha256,
         EXPECTED_SOURCE_SHA: sourceSha,
-        EXPECTED_VERSION: "0.7.9",
-        GITHUB_REF: "refs/tags/v0.7.9",
+        EXPECTED_VERSION: "0.7.10",
+        GITHUB_REF: "refs/tags/v0.7.10",
         GITHUB_REPOSITORY: "hraness/direct",
         GITHUB_SHA: sourceSha,
         METADATA: metadata,
         PATH: `${binaryDirectory}:${process.env.PATH ?? ""}`,
-        PUBLISHED_VERSIONS_JSON: '["0.7.4","0.7.5","0.7.6","0.7.7","0.7.8"]',
+        PUBLISHED_VERSIONS_JSON: '["0.7.4","0.7.5","0.7.6","0.7.7","0.7.8","0.7.9"]',
         PUBLISH_MARKER: publishMarker,
-        REMOTE_TAGS: "v0.7.4\nv0.7.5\nv0.7.6\nv0.7.7\nv0.7.8\nv0.7.9",
+        REMOTE_TAGS: "v0.7.4\nv0.7.5\nv0.7.6\nv0.7.7\nv0.7.8\nv0.7.9\nv0.7.10",
         RUNNER_TEMP: directory,
         TAG_SHA: sourceSha,
         TARBALL: tarball,
@@ -449,7 +582,7 @@ describe("npm release workflows", () => {
       });
       expect(moved.exitCode).not.toBe(0);
       expect(`${moved.stdout}${moved.stderr}`).toContain(
-        "Tag v0.7.9 changed after artifact verification",
+        "Tag v0.7.10 changed after artifact verification",
       );
       expect(await Bun.file(publishMarker).exists()).toBe(false);
 
@@ -460,18 +593,18 @@ describe("npm release workflows", () => {
       });
       expect(detached.exitCode).not.toBe(0);
       expect(`${detached.stdout}${detached.stderr}`).toContain(
-        "Tag v0.7.9 is no longer reachable from main",
+        "Tag v0.7.10 is no longer reachable from main",
       );
       expect(await Bun.file(publishMarker).exists()).toBe(false);
 
       await rm(commandLog, { force: true });
       const superseded = await runWorkflowScript(script, {
         ...baseEnvironment,
-        REMOTE_TAGS: "v0.7.4\nv0.7.5\nv0.7.6\nv0.7.7\nv0.7.8\nv0.7.9\nv0.7.10",
+        REMOTE_TAGS: "v0.7.4\nv0.7.5\nv0.7.6\nv0.7.7\nv0.7.8\nv0.7.9\nv0.7.10\nv0.7.11",
       });
       expect(superseded.exitCode).not.toBe(0);
       expect(`${superseded.stdout}${superseded.stderr}`).toContain(
-        "Tag v0.7.9 is not the newest stable tag v0.7.10",
+        "Tag v0.7.10 is not the newest stable tag v0.7.11",
       );
       expect(await readFile(commandLog, "utf8")).not.toContain("npm publish");
       expect(await Bun.file(publishMarker).exists()).toBe(false);
@@ -479,11 +612,11 @@ describe("npm release workflows", () => {
       await rm(commandLog, { force: true });
       const staleVersion = await runWorkflowScript(script, {
         ...baseEnvironment,
-        PUBLISHED_VERSIONS_JSON: '["0.7.4","0.7.10"]',
+        PUBLISHED_VERSIONS_JSON: '["0.7.4","0.7.11"]',
       });
       expect(staleVersion.exitCode).not.toBe(0);
       expect(`${staleVersion.stdout}${staleVersion.stderr}`).toContain(
-        "@hraness/direct@0.7.9 is not newer than published stable 0.7.10",
+        "@hraness/direct@0.7.10 is not newer than published stable 0.7.11",
       );
       expect(await Bun.file(publishMarker).exists()).toBe(false);
 
