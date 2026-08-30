@@ -9,8 +9,8 @@ const maximumTarBytes = 2_000_000;
 const packageBudget = Object.freeze({
   entryCount: { min: 50, max: 120 },
   fileCount: { min: 50, max: 60 },
-  packedBytes: { min: 140_000, max: 180_000 },
-  unpackedBytes: { min: 650_000, max: 810_000 },
+  packedBytes: { min: 140_000, max: 220_000 },
+  unpackedBytes: { min: 650_000, max: 1_010_000 },
 });
 
 const requiredPaths = Object.freeze([

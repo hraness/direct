@@ -1293,10 +1293,35 @@ async function collectStream(stream, logLimit) {
     output = tail(`${output}${decoder.decode(chunk.value, { stream: true })}`, logLimit);
   }
 }
+function verificationProcessGroupExists(processId) {
+  try {
+    process.kill(-processId, 0);
+    return true;
+  } catch (error) {
+    if (error.code === "ESRCH")
+      return false;
+    if (error.code === "EPERM")
+      return true;
+    throw error;
+  }
+}
+async function waitForVerificationProcessGroupExit(processId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (verificationProcessGroupExists(processId)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`verification server process group ${String(processId)} survived cleanup`);
+    }
+    await Bun.sleep(Math.min(25, Math.max(1, deadline - Date.now())));
+  }
+}
 function spawnVerificationServer(options) {
+  const detachedProcessGroup = options.detachedProcessGroup ?? false;
+  const omittedEnvironment = new Set(options.omitEnvironment ?? []);
+  const environment = Object.fromEntries(Object.entries({ ...process.env, ...options.env }).filter(([name]) => !omittedEnvironment.has(name)));
   const process_ = Bun.spawn([...options.command], {
     cwd: options.cwd,
-    env: { ...process.env, ...options.env },
+    detached: detachedProcessGroup,
+    env: environment,
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe"
@@ -1307,12 +1332,31 @@ function spawnVerificationServer(options) {
     collectStream(process_.stderr, logLimit)
   ]).then(([stdout, stderr]) => tail(`${stdout}
 ${stderr}`.trim(), logLimit));
+  const signal = (value) => {
+    if (detachedProcessGroup) {
+      try {
+        process.kill(-process_.pid, value);
+        return;
+      } catch (error) {
+        if (error.code !== "ESRCH")
+          throw error;
+      }
+    }
+    if (process_.exitCode === null)
+      process_.kill(value);
+  };
   return {
     exited: process_.exited,
     exitCode: () => process_.exitCode,
+    ...detachedProcessGroup ? {
+      killDescendants: async (timeoutMs) => {
+        signal("SIGKILL");
+        await waitForVerificationProcessGroupExit(process_.pid, timeoutMs);
+      }
+    } : {},
     output,
-    terminate: () => process_.kill("SIGTERM"),
-    kill: () => process_.kill("SIGKILL")
+    terminate: () => signal("SIGTERM"),
+    kill: () => signal("SIGKILL")
   };
 }
 async function runVerificationCommand(options) {
@@ -1384,6 +1428,7 @@ async function stopVerificationServerWithOutput(server, stopTimeoutMs = DEFAULT_
       throw new Error(`verification server did not exit within ${stopTimeoutMs}ms after SIGKILL`);
     }
   }
+  await server.killDescendants?.(stopTimeoutMs);
   const output = await settleWithin(server.output, stopTimeoutMs);
   if (!output.settled) {
     throw new Error(`verification server output did not settle within ${stopTimeoutMs}ms after exit`);
@@ -1491,7 +1536,9 @@ async function writeJsonAtomically(path, value) {
 `, "utf8");
     await rename(temporaryPath, path);
   } catch (error) {
-    await rm(temporaryPath, { force: true });
+    await rm(temporaryPath, { force: true }).catch(() => {
+      return;
+    });
     throw error;
   }
 }
