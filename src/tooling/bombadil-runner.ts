@@ -721,6 +721,17 @@ interface ArtifactInventory {
   readonly totalBytes: number;
 }
 
+interface LiveChromeDownloadIdentity {
+  readonly device: bigint;
+  readonly inode: bigint;
+  readonly phase: "complete" | "partial";
+}
+
+interface LiveChromeDownloadScanContext {
+  readonly next: Map<string, LiveChromeDownloadIdentity>;
+  readonly previous: ReadonlyMap<string, LiveChromeDownloadIdentity>;
+}
+
 interface ArtifactUploadSessionBase {
   readonly finalDirectory: string;
   readonly mode: DirectBombadilUploadMode;
@@ -760,6 +771,13 @@ class BombadilArtifactPolicyError extends Error {
   public constructor(message: string) {
     super(message);
     this.name = "BombadilArtifactPolicyError";
+  }
+}
+
+class LiveChromeDownloadRenameRetry extends Error {
+  public constructor() {
+    super("Chrome download renamed during live artifact inspection");
+    this.name = "LiveChromeDownloadRenameRetry";
   }
 }
 
@@ -1766,13 +1784,26 @@ function artifactOutputFileIsAllowed(relativePath: string): boolean {
     || PRIVATE_DIAGNOSTIC_EXTENSIONS.has(extname(relativePath).toLowerCase());
 }
 
-function isLiveChromeDownloadTransient(relativePath: string): boolean {
-  // This exception is intentionally lexical and live-only. Stopped-process
-  // scans never opt in, so a transient cannot enter authoritative evidence.
+function parseLiveChromeDownloadPartial(relativePath: string): string | null {
   const prefix = "downloads/";
   const suffix = ".crdownload";
-  if (!relativePath.startsWith(prefix) || !relativePath.endsWith(suffix)) return false;
-  return UUID_PATTERN.test(relativePath.slice(prefix.length, -suffix.length));
+  if (!relativePath.startsWith(prefix) || !relativePath.endsWith(suffix)) return null;
+  const runId = relativePath.slice(prefix.length, -suffix.length);
+  return UUID_PATTERN.test(runId) ? runId : null;
+}
+
+function parseLiveChromeDownloadCompletion(relativePath: string): string | null {
+  const prefix = "downloads/";
+  if (!relativePath.startsWith(prefix)) return null;
+  const runId = relativePath.slice(prefix.length);
+  return UUID_PATTERN.test(runId) ? runId : null;
+}
+
+function sameLiveChromeDownloadIdentity(
+  left: Readonly<{ readonly device: bigint; readonly inode: bigint }>,
+  right: Readonly<{ readonly device: bigint; readonly inode: bigint }>,
+): boolean {
+  return left.device === right.device && left.inode === right.inode;
 }
 
 function sameBigIntFileMetadata(
@@ -1959,9 +1990,14 @@ function decodeTraceLines(bytes: Uint8Array): readonly string[] {
 async function scanBombadilArtifactTree(options: {
   readonly allowTransientEntryAbsence?: boolean;
   readonly allowLiveChromeDownloadTransients?: boolean;
+  readonly afterEntryInspect?: (absolutePath: string) => Promise<void> | void;
   readonly beforeDirectoryOpen?: (absolutePath: string) => Promise<void> | void;
   readonly beforeEntryInspect?: (absolutePath: string) => Promise<void> | void;
+  readonly beforeLiveChromeDownloadCompletionProbe?: (
+    absolutePath: string,
+  ) => Promise<void> | void;
   readonly hashFiles: boolean;
+  readonly liveChromeDownloadScan?: LiveChromeDownloadScanContext;
   readonly policy: ValidatedArtifactPolicy;
   readonly root: string;
   readonly rootMayBeAbsent?: boolean;
@@ -1969,6 +2005,14 @@ async function scanBombadilArtifactTree(options: {
   if (options.allowLiveChromeDownloadTransients === true && options.hashFiles) {
     throw new BombadilArtifactPolicyError(
       "Live Chrome download transients cannot enter an authoritative artifact inventory",
+    );
+  }
+  if (
+    options.liveChromeDownloadScan !== undefined
+    && (options.allowLiveChromeDownloadTransients !== true || options.hashFiles)
+  ) {
+    throw new BombadilArtifactPolicyError(
+      "Chrome download provenance is restricted to unhashed live artifact scans",
     );
   }
   let rootMetadata: BigIntStats | null;
@@ -2037,17 +2081,100 @@ async function scanBombadilArtifactTree(options: {
           }
           const absolutePath = join(current.absolutePath, entry.name);
           await options.beforeEntryInspect?.(absolutePath);
-          const metadata = await lstat(absolutePath, { bigint: true });
+          let metadata: BigIntStats;
+          try {
+            metadata = await lstat(absolutePath, { bigint: true });
+          } catch (error) {
+            const partialRunId = parseLiveChromeDownloadPartial(relativePath);
+            if (
+              options.allowTransientEntryAbsence !== true
+              || options.liveChromeDownloadScan === undefined
+              || partialRunId === null
+              || !isRecord(error)
+              || error.code !== "ENOENT"
+            ) {
+              throw error;
+            }
+            const completionRelativePath = `downloads/${partialRunId}`;
+            validateArtifactRelativePath(completionRelativePath, options.policy);
+            const completionPath = join(current.absolutePath, partialRunId);
+            let completionMetadata: BigIntStats;
+            try {
+              await options.beforeLiveChromeDownloadCompletionProbe?.(completionPath);
+              completionMetadata = await lstat(completionPath, { bigint: true });
+            } catch (completionError) {
+              if (isRecord(completionError) && completionError.code === "ENOENT") {
+                // Preserve the original readdir-to-lstat absence only when
+                // the exact completion sibling is also absent.
+                throw error;
+              }
+              throw completionError;
+            }
+            const previous = options.liveChromeDownloadScan.previous.get(partialRunId);
+            if (completionMetadata.isSymbolicLink()) {
+              throw new BombadilArtifactPolicyError(
+                `Bombadil emitted a symbolic link at ${completionRelativePath}`,
+              );
+            }
+            if (!completionMetadata.isFile() || completionMetadata.nlink !== 1n) {
+              throw new BombadilArtifactPolicyError(
+                `Bombadil emitted a non-regular or multiply-linked file at ${completionRelativePath}`,
+              );
+            }
+            const completionSize = Number(completionMetadata.size);
+            if (
+              !Number.isSafeInteger(completionSize)
+              || completionSize > options.policy.maxFileBytes
+            ) {
+              throw new BombadilArtifactPolicyError(
+                `Bombadil artifact ${completionRelativePath} exceeds the per-file byte quota`,
+              );
+            }
+            if (previous === undefined) {
+              throw new BombadilArtifactPolicyError(
+                `Bombadil Chrome download completion ${completionRelativePath} lacks live partial provenance`,
+              );
+            }
+            if (previous.phase !== "partial") {
+              throw new BombadilArtifactPolicyError(
+                `Bombadil Chrome download ${completionRelativePath} reversed its live lifecycle`,
+              );
+            }
+            if (!sameLiveChromeDownloadIdentity(previous, {
+              device: completionMetadata.dev,
+              inode: completionMetadata.ino,
+            })) {
+              throw new BombadilArtifactPolicyError(
+                `Bombadil Chrome download completion ${completionRelativePath} changed inode identity`,
+              );
+            }
+            // The directory iterator described the old partial name. Discard
+            // this incoherent scan after proving the exact sibling rename;
+            // the next whole scan applies all aggregate quotas and advances
+            // the monitor-owned lineage.
+            throw new LiveChromeDownloadRenameRetry();
+          }
           if (metadata.isSymbolicLink()) {
             throw new BombadilArtifactPolicyError(
               `Bombadil emitted a symbolic link at ${relativePath}`,
             );
           }
-          const liveChromeDownloadTransient = isLiveChromeDownloadTransient(relativePath);
+          const liveChromeDownloadPartial = parseLiveChromeDownloadPartial(
+            relativePath,
+          );
+          const liveChromeDownloadCompletion = parseLiveChromeDownloadCompletion(
+            relativePath,
+          );
           if (metadata.isDirectory()) {
-            if (liveChromeDownloadTransient) {
+            if (
+              liveChromeDownloadPartial !== null
+              || (
+                options.liveChromeDownloadScan !== undefined
+                && liveChromeDownloadCompletion !== null
+              )
+            ) {
               throw new BombadilArtifactPolicyError(
-                `Bombadil emitted a directory at Chrome transient path ${relativePath}`,
+                `Bombadil emitted a directory at Chrome download path ${relativePath}`,
               );
             }
             directories.push(relativePath);
@@ -2059,12 +2186,53 @@ async function scanBombadilArtifactTree(options: {
               `Bombadil emitted a non-regular or multiply-linked file at ${relativePath}`,
             );
           }
+          const liveIdentity = {
+            device: metadata.dev,
+            inode: metadata.ino,
+          };
+          let liveRunId: string | null = null;
+          if (
+            options.allowLiveChromeDownloadTransients === true
+            && liveChromeDownloadPartial !== null
+          ) {
+            const previous = options.liveChromeDownloadScan?.previous.get(
+              liveChromeDownloadPartial,
+            );
+            if (previous !== undefined) {
+              if (previous.phase !== "partial") {
+                throw new BombadilArtifactPolicyError(
+                  `Bombadil Chrome download ${relativePath} reversed its live lifecycle`,
+                );
+              }
+              if (!sameLiveChromeDownloadIdentity(previous, liveIdentity)) {
+                throw new BombadilArtifactPolicyError(
+                  `Bombadil Chrome download partial ${relativePath} changed inode identity`,
+                );
+              }
+            }
+            liveRunId = liveChromeDownloadPartial;
+          } else if (
+            options.liveChromeDownloadScan !== undefined
+            && liveChromeDownloadCompletion !== null
+          ) {
+            const previous = options.liveChromeDownloadScan.previous.get(
+              liveChromeDownloadCompletion,
+            );
+            if (previous === undefined) {
+              throw new BombadilArtifactPolicyError(
+                `Bombadil Chrome download completion ${relativePath} lacks live partial provenance`,
+              );
+            }
+            if (!sameLiveChromeDownloadIdentity(previous, liveIdentity)) {
+              throw new BombadilArtifactPolicyError(
+                `Bombadil Chrome download completion ${relativePath} changed inode identity`,
+              );
+            }
+            liveRunId = liveChromeDownloadCompletion;
+          }
           if (
             !artifactOutputFileIsAllowed(relativePath)
-            && !(
-              options.allowLiveChromeDownloadTransients === true
-              && liveChromeDownloadTransient
-            )
+            && liveRunId === null
           ) {
             throw new BombadilArtifactPolicyError(
               `Bombadil emitted a file outside the artifact allowlist at ${relativePath}`,
@@ -2099,9 +2267,26 @@ async function scanBombadilArtifactTree(options: {
                 sha256: "",
                 size: fileSize,
               });
+          if (liveRunId !== null) {
+            const liveChromeDownload = options.liveChromeDownloadScan;
+            if (liveChromeDownload !== undefined) {
+              const alreadyKnown = liveChromeDownload.next.has(liveRunId);
+              if (!alreadyKnown && liveChromeDownload.next.size >= options.policy.maxFiles) {
+                throw new BombadilArtifactPolicyError(
+                  "Bombadil live download provenance quota was exceeded",
+                );
+              }
+              liveChromeDownload.next.set(liveRunId, {
+                ...liveIdentity,
+                phase: liveChromeDownloadCompletion === null ? "partial" : "complete",
+              });
+            }
+          }
+          await options.afterEntryInspect?.(absolutePath);
         }
       });
     } catch (error) {
+      if (error instanceof LiveChromeDownloadRenameRetry) throw error;
       if (
         options.allowTransientEntryAbsence === true
         && isRecord(error)
@@ -2150,6 +2335,45 @@ async function scanBombadilArtifactTree(options: {
   };
 }
 
+async function scanLiveBombadilArtifactTree(options: {
+  readonly afterEntryInspect?: (absolutePath: string) => Promise<void> | void;
+  readonly beforeDirectoryOpen?: (absolutePath: string) => Promise<void> | void;
+  readonly beforeEntryInspect?: (absolutePath: string) => Promise<void> | void;
+  readonly beforeLiveChromeDownloadCompletionProbe?: (
+    absolutePath: string,
+  ) => Promise<void> | void;
+  readonly outputPath: string;
+  readonly policy: ValidatedArtifactPolicy;
+  readonly previous: ReadonlyMap<string, LiveChromeDownloadIdentity>;
+}): Promise<ReadonlyMap<string, LiveChromeDownloadIdentity>> {
+  const next = new Map<string, LiveChromeDownloadIdentity>(options.previous);
+  await scanBombadilArtifactTree({
+    ...(options.afterEntryInspect === undefined
+      ? {}
+      : { afterEntryInspect: options.afterEntryInspect }),
+    allowTransientEntryAbsence: true,
+    allowLiveChromeDownloadTransients: true,
+    ...(options.beforeDirectoryOpen === undefined
+      ? {}
+      : { beforeDirectoryOpen: options.beforeDirectoryOpen }),
+    ...(options.beforeEntryInspect === undefined
+      ? {}
+      : { beforeEntryInspect: options.beforeEntryInspect }),
+    ...(options.beforeLiveChromeDownloadCompletionProbe === undefined
+      ? {}
+      : {
+          beforeLiveChromeDownloadCompletionProbe:
+            options.beforeLiveChromeDownloadCompletionProbe,
+        }),
+    hashFiles: false,
+    liveChromeDownloadScan: { next, previous: options.previous },
+    policy: options.policy,
+    root: options.outputPath,
+    rootMayBeAbsent: true,
+  });
+  return next;
+}
+
 /** @internal Exercise transient versus authoritative artifact scans in package tests. */
 export async function inspectBombadilArtifactTreeForTest(options: {
   readonly allowTransientEntryAbsence?: boolean;
@@ -2164,6 +2388,57 @@ export async function inspectBombadilArtifactTreeForTest(options: {
     ...options,
     policy: validateArtifactPolicy(options.policy),
   });
+}
+
+/** @internal Exercise successive live-monitor scans without exposing provenance. */
+export async function monitorBombadilArtifactTreeForTest(options: {
+  readonly policy: DirectBombadilArtifactPolicy;
+  readonly root: string;
+  readonly scans: readonly {
+    readonly afterEntryInspect?: (absolutePath: string) => Promise<void> | void;
+    readonly beforeDirectoryOpen?: (absolutePath: string) => Promise<void> | void;
+    readonly beforeEntryInspect?: (absolutePath: string) => Promise<void> | void;
+    readonly beforeLiveChromeDownloadCompletionProbe?: (
+      absolutePath: string,
+    ) => Promise<void> | void;
+    readonly beforeScan?: () => Promise<void> | void;
+  }[];
+}): Promise<void> {
+  const policy = validateArtifactPolicy(options.policy);
+  let provenance: ReadonlyMap<string, LiveChromeDownloadIdentity> = new Map();
+  for (const scan of options.scans) {
+    await scan.beforeScan?.();
+    try {
+      provenance = await scanLiveBombadilArtifactTree({
+        ...(scan.afterEntryInspect === undefined
+          ? {}
+          : { afterEntryInspect: scan.afterEntryInspect }),
+        ...(scan.beforeDirectoryOpen === undefined
+          ? {}
+          : { beforeDirectoryOpen: scan.beforeDirectoryOpen }),
+        ...(scan.beforeEntryInspect === undefined
+          ? {}
+          : { beforeEntryInspect: scan.beforeEntryInspect }),
+        ...(scan.beforeLiveChromeDownloadCompletionProbe === undefined
+          ? {}
+          : {
+              beforeLiveChromeDownloadCompletionProbe:
+                scan.beforeLiveChromeDownloadCompletionProbe,
+            }),
+        outputPath: options.root,
+        policy,
+        previous: provenance,
+      });
+    } catch (error) {
+      if (
+        error instanceof LiveChromeDownloadRenameRetry
+        || (isRecord(error) && error.code === "ENOENT")
+      ) {
+        continue;
+      }
+      throw error;
+    }
+  }
 }
 
 async function ensureSafeChildDirectories(
@@ -4519,20 +4794,19 @@ async function monitorBombadilArtifactTree(options: {
   readonly outputPath: string;
   readonly policy: ValidatedArtifactPolicy;
 }): Promise<void> {
+  let provenance: ReadonlyMap<string, LiveChromeDownloadIdentity> = new Map();
   while (!options.abortSignal.aborted) {
     try {
-      await scanBombadilArtifactTree({
-        allowTransientEntryAbsence: true,
-        // Chrome can expose this exact partial-download shape while its writer
-        // is live. It remains subject to every quota and final scans reject it.
-        allowLiveChromeDownloadTransients: true,
-        hashFiles: false,
+      provenance = await scanLiveBombadilArtifactTree({
+        outputPath: options.outputPath,
         policy: options.policy,
-        root: options.outputPath,
-        rootMayBeAbsent: true,
+        previous: provenance,
       });
     } catch (error) {
-      if (isRecord(error) && error.code === "ENOENT") {
+      if (
+        error instanceof LiveChromeDownloadRenameRetry
+        || (isRecord(error) && error.code === "ENOENT")
+      ) {
         // A live producer may atomically replace or remove an entry. The final
         // stopped-process scan is authoritative; polling only bounds growth.
       } else {

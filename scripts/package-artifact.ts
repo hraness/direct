@@ -10,7 +10,7 @@ const packageBudget = Object.freeze({
   entryCount: { min: 50, max: 120 },
   fileCount: { min: 50, max: 60 },
   packedBytes: { min: 140_000, max: 220_000 },
-  unpackedBytes: { min: 650_000, max: 1_010_000 },
+  unpackedBytes: { min: 650_000, max: 1_030_000 },
 });
 
 const requiredPaths = Object.freeze([

@@ -10,7 +10,9 @@ import {
   readFile,
   readdir,
   realpath,
+  rename,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -22,6 +24,7 @@ import {
   closeBombadilArtifactCopyHandles,
   createDirectBombadilInvocation,
   inspectBombadilArtifactTreeForTest,
+  monitorBombadilArtifactTreeForTest,
   parseDirectBombadilArtifactReceipt,
   parseDirectBombadilFuzzArguments,
   parseDirectBombadilMatrixReceipt,
@@ -45,6 +48,7 @@ import type {
 
 const ARTIFACT_IO_TEST_TIMEOUT_MS = 30_000;
 const CHROME_TRANSIENT_TEST_ID = "123e4567-e89b-42d3-a456-426614174000";
+const CHROME_TRANSIENT_OTHER_TEST_ID = "123e4567-e89b-42d3-a456-426614174001";
 const temporaryDirectories: string[] = [];
 
 function artifactRunPlan<
@@ -2340,6 +2344,312 @@ describe("Direct Bombadil process lifecycle", () => {
     });
   });
 
+  test("accepts only a proven same-inode Chrome rename while the monitor is live", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-rename-"));
+    temporaryDirectories.push(directory);
+    const downloads = join(directory, "downloads");
+    await mkdir(downloads);
+    const partialPath = join(downloads, `${CHROME_TRANSIENT_TEST_ID}.crdownload`);
+    const completionPath = join(downloads, CHROME_TRANSIENT_TEST_ID);
+    const policy = {
+      maxDepth: 4,
+      maxEntries: 8,
+      maxFileBytes: 1_024,
+      maxFiles: 4,
+      maxPathBytes: 256,
+      maxTotalBytes: 2_048,
+    };
+    await writeFile(partialPath, "partial\n");
+    const partialMetadata = await stat(partialPath, { bigint: true });
+
+    await monitorBombadilArtifactTreeForTest({
+      policy,
+      root: directory,
+      scans: [{}, {
+        beforeScan: async () => {
+          await rename(partialPath, completionPath);
+        },
+      }, {}],
+    });
+    const completionMetadata = await stat(completionPath, { bigint: true });
+    expect(completionMetadata.dev).toBe(partialMetadata.dev);
+    expect(completionMetadata.ino).toBe(partialMetadata.ino);
+
+    expect((await rejection(inspectBombadilArtifactTreeForTest({
+      hashFiles: false,
+      policy,
+      root: directory,
+    }))).message).toContain("outside the artifact allowlist");
+    expect((await rejection(inspectBombadilArtifactTreeForTest({
+      hashFiles: true,
+      policy,
+      root: directory,
+    }))).message).toContain("outside the artifact allowlist");
+  });
+
+  test("rejects unproven, cross-UUID, and replacement-inode Chrome completions", async () => {
+    const policy = {
+      maxDepth: 4,
+      maxEntries: 8,
+      maxFileBytes: 1_024,
+      maxFiles: 4,
+      maxPathBytes: 256,
+      maxTotalBytes: 2_048,
+    };
+
+    const unprovenRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-unproven-"));
+    temporaryDirectories.push(unprovenRoot);
+    await mkdir(join(unprovenRoot, "downloads"));
+    await writeFile(join(unprovenRoot, "downloads", CHROME_TRANSIENT_TEST_ID), "complete\n");
+    expect((await rejection(monitorBombadilArtifactTreeForTest({
+      policy,
+      root: unprovenRoot,
+      scans: [{}],
+    }))).message).toContain("lacks live partial provenance");
+
+    const crossUuidRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-cross-uuid-"));
+    temporaryDirectories.push(crossUuidRoot);
+    const crossUuidDownloads = join(crossUuidRoot, "downloads");
+    await mkdir(crossUuidDownloads);
+    const crossUuidPartial = join(
+      crossUuidDownloads,
+      `${CHROME_TRANSIENT_TEST_ID}.crdownload`,
+    );
+    await writeFile(crossUuidPartial, "partial\n");
+    expect((await rejection(monitorBombadilArtifactTreeForTest({
+      policy,
+      root: crossUuidRoot,
+      scans: [{}, {
+        beforeScan: async () => {
+          await rename(
+            crossUuidPartial,
+            join(crossUuidDownloads, CHROME_TRANSIENT_OTHER_TEST_ID),
+          );
+        },
+      }],
+    }))).message).toContain("lacks live partial provenance");
+
+    const replacementRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-replacement-"));
+    const retainedRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-retained-"));
+    temporaryDirectories.push(replacementRoot, retainedRoot);
+    const replacementDownloads = join(replacementRoot, "downloads");
+    await mkdir(replacementDownloads);
+    const replacementPartial = join(
+      replacementDownloads,
+      `${CHROME_TRANSIENT_TEST_ID}.crdownload`,
+    );
+    const retainedPartial = join(retainedRoot, "retained.crdownload");
+    const replacementCompletion = join(replacementDownloads, CHROME_TRANSIENT_TEST_ID);
+    await writeFile(replacementPartial, "partial\n");
+    const originalMetadata = await stat(replacementPartial, { bigint: true });
+    expect((await rejection(monitorBombadilArtifactTreeForTest({
+      policy,
+      root: replacementRoot,
+      scans: [{}, {
+        beforeScan: async () => {
+          await rename(replacementPartial, retainedPartial);
+          await writeFile(replacementCompletion, "replacement\n");
+          const replacementMetadata = await stat(replacementCompletion, { bigint: true });
+          expect(replacementMetadata.ino).not.toBe(originalMetadata.ino);
+        },
+      }],
+    }))).message).toContain("changed inode identity");
+  });
+
+  test("probes an exact readdir-to-lstat Chrome rename without minting new provenance", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-rename-race-"));
+    temporaryDirectories.push(directory);
+    const downloads = join(directory, "downloads");
+    await mkdir(downloads);
+    const partialPath = join(downloads, `${CHROME_TRANSIENT_TEST_ID}.crdownload`);
+    const completionPath = join(downloads, CHROME_TRANSIENT_TEST_ID);
+    const policy = {
+      maxDepth: 4,
+      maxEntries: 8,
+      maxFileBytes: 1_024,
+      maxFiles: 4,
+      maxPathBytes: 256,
+      maxTotalBytes: 2_048,
+    };
+    await writeFile(partialPath, "partial\n");
+    let renamed = false;
+    await monitorBombadilArtifactTreeForTest({
+      policy,
+      root: directory,
+      scans: [{}, {
+        beforeEntryInspect: async (path) => {
+          if (!renamed && path === partialPath) {
+            renamed = true;
+            await rename(partialPath, completionPath);
+          }
+        },
+      }, {}],
+    });
+    expect(renamed).toBeTrue();
+
+    const missingRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-missing-race-"));
+    temporaryDirectories.push(missingRoot);
+    const missingDownloads = join(missingRoot, "downloads");
+    await mkdir(missingDownloads);
+    const missingPartial = join(
+      missingDownloads,
+      `${CHROME_TRANSIENT_TEST_ID}.crdownload`,
+    );
+    await writeFile(missingPartial, "partial\n");
+    let removed = false;
+    expect((await rejection(monitorBombadilArtifactTreeForTest({
+      policy,
+      root: missingRoot,
+      scans: [{
+        beforeEntryInspect: async (path) => {
+          if (!removed && path === missingPartial) {
+            removed = true;
+            await rm(missingPartial);
+          }
+        },
+      }, {
+        beforeScan: async () => {
+          await writeFile(join(missingDownloads, CHROME_TRANSIENT_TEST_ID), "complete\n");
+        },
+      }],
+    }))).message).toContain("lacks live partial provenance");
+  });
+
+  test("keeps rename probes monotonic and fails closed on sibling inspection errors", async () => {
+    const policy = {
+      maxDepth: 4,
+      maxEntries: 8,
+      maxFileBytes: 1_024,
+      maxFiles: 4,
+      maxPathBytes: 256,
+      maxTotalBytes: 2_048,
+    };
+
+    const reversalRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-reversal-"));
+    temporaryDirectories.push(reversalRoot);
+    const reversalDownloads = join(reversalRoot, "downloads");
+    await mkdir(reversalDownloads);
+    const reversalPartial = join(
+      reversalDownloads,
+      `${CHROME_TRANSIENT_TEST_ID}.crdownload`,
+    );
+    const reversalCompletion = join(reversalDownloads, CHROME_TRANSIENT_TEST_ID);
+    await writeFile(reversalPartial, "partial\n");
+    let racedBackToCompletion = false;
+    expect((await rejection(monitorBombadilArtifactTreeForTest({
+      policy,
+      root: reversalRoot,
+      scans: [{}, {
+        beforeScan: async () => {
+          await rename(reversalPartial, reversalCompletion);
+        },
+      }, {
+        beforeScan: async () => {
+          await rename(reversalCompletion, reversalPartial);
+        },
+        beforeEntryInspect: async (path) => {
+          if (!racedBackToCompletion && path === reversalPartial) {
+            racedBackToCompletion = true;
+            await rename(reversalPartial, reversalCompletion);
+          }
+        },
+      }],
+    }))).message).toContain("reversed its live lifecycle");
+    expect(racedBackToCompletion).toBeTrue();
+
+    const deniedRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-probe-denied-"));
+    temporaryDirectories.push(deniedRoot);
+    const deniedDownloads = join(deniedRoot, "downloads");
+    await mkdir(deniedDownloads);
+    const deniedPartial = join(
+      deniedDownloads,
+      `${CHROME_TRANSIENT_TEST_ID}.crdownload`,
+    );
+    const deniedCompletion = join(deniedDownloads, CHROME_TRANSIENT_TEST_ID);
+    await writeFile(deniedPartial, "partial\n");
+    let renamedBeforeDeniedProbe = false;
+    const denied = await rejection(monitorBombadilArtifactTreeForTest({
+      policy,
+      root: deniedRoot,
+      scans: [{}, {
+        beforeEntryInspect: async (path) => {
+          if (!renamedBeforeDeniedProbe && path === deniedPartial) {
+            renamedBeforeDeniedProbe = true;
+            await rename(deniedPartial, deniedCompletion);
+          }
+        },
+        beforeLiveChromeDownloadCompletionProbe: () => {
+          throw Object.assign(new Error("probe denied"), { code: "EACCES" });
+        },
+      }],
+    }));
+    expect(renamedBeforeDeniedProbe).toBeTrue();
+    expect(denied.name).toBe("BombadilArtifactPolicyError");
+    expect(denied.message).toContain("probe denied");
+  });
+
+  test("commits partial provenance only after the whole live scan succeeds", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-atomic-scan-"));
+    temporaryDirectories.push(directory);
+    const downloads = join(directory, "downloads");
+    await mkdir(downloads);
+    const partialPath = join(downloads, `${CHROME_TRANSIENT_TEST_ID}.crdownload`);
+    const completionPath = join(downloads, CHROME_TRANSIENT_TEST_ID);
+    await writeFile(partialPath, "partial\n");
+    let failedAfterInspection = false;
+    expect((await rejection(monitorBombadilArtifactTreeForTest({
+      policy: {
+        maxDepth: 4,
+        maxEntries: 8,
+        maxFileBytes: 1_024,
+        maxFiles: 4,
+        maxPathBytes: 256,
+        maxTotalBytes: 2_048,
+      },
+      root: directory,
+      scans: [{
+        afterEntryInspect: (path) => {
+          if (!failedAfterInspection && path === partialPath) {
+            failedAfterInspection = true;
+            throw Object.assign(new Error("late live disappearance"), { code: "ENOENT" });
+          }
+        },
+      }, {
+        beforeScan: async () => {
+          await rename(partialPath, completionPath);
+        },
+      }],
+    }))).message).toContain("lacks live partial provenance");
+    expect(failedAfterInspection).toBeTrue();
+  });
+
+  test("bounds cumulative live Chrome download provenance by the file quota", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-provenance-"));
+    temporaryDirectories.push(directory);
+    const downloads = join(directory, "downloads");
+    await mkdir(downloads);
+    const firstPartial = join(downloads, `${CHROME_TRANSIENT_TEST_ID}.crdownload`);
+    const secondPartial = join(downloads, `${CHROME_TRANSIENT_OTHER_TEST_ID}.crdownload`);
+    await writeFile(firstPartial, "first\n");
+    expect((await rejection(monitorBombadilArtifactTreeForTest({
+      policy: {
+        maxDepth: 4,
+        maxEntries: 4,
+        maxFileBytes: 1_024,
+        maxFiles: 1,
+        maxPathBytes: 256,
+        maxTotalBytes: 2_048,
+      },
+      root: directory,
+      scans: [{}, {
+        beforeScan: async () => {
+          await rm(firstPartial);
+          await writeFile(secondPartial, "second\n");
+        },
+      }],
+    }))).message).toContain("provenance quota");
+  });
+
   test("rejects traversal, foreign, unknown, and settled Chrome download files", async () => {
     const policy = {
       maxDepth: 4,
@@ -2352,9 +2662,13 @@ describe("Direct Bombadil process lifecycle", () => {
     const transientId = CHROME_TRANSIENT_TEST_ID;
     const rejectedPaths = [
       "downloads/not-a-uuid.crdownload",
+      "downloads/not-a-uuid",
       `downloads/${transientId.toUpperCase()}.crdownload`,
+      `downloads/${transientId.toUpperCase()}`,
       `downloads/nested/${transientId}.crdownload`,
+      `downloads/nested/${transientId}`,
       `foreign/${transientId}.crdownload`,
+      `foreign/${transientId}`,
       `downloads/${transientId}.part`,
       `downloads/${transientId}`,
     ];
@@ -2972,53 +3286,58 @@ describe("Direct Bombadil run lifecycle", () => {
     });
   });
 
-  test("keeps a settled Chrome transient out of sanitized public evidence", async () => {
+  test("keeps settled Chrome download paths out of sanitized public evidence", async () => {
     const { config, repositoryRoot } = await fixture();
     const transientId = CHROME_TRANSIENT_TEST_ID;
     const privateContent = "private-partial-download-content";
-    const runtime = dependencies({
-      afterTrace: async (invocation) => {
-        const downloads = join(invocation.outputPath, "downloads");
-        await mkdir(downloads);
-        await writeFile(join(downloads, `${transientId}.crdownload`), privateContent);
-      },
-    });
-    const plan = artifactRunPlan(repositoryRoot, 45);
-    const error = await rejection(runDirectBombadilFuzz(config, {
-      arguments: [],
-      artifactRun: plan,
-    }, runtime.overrides));
-    expect(error.name).toBe("BombadilArtifactPolicyError");
-    expect(error.message).toContain("outside the artifact allowlist");
+    for (const [suffix, fileName] of [
+      [45, `${transientId}.crdownload`],
+      [46, transientId],
+    ] as const) {
+      const runtime = dependencies({
+        afterTrace: async (invocation) => {
+          const downloads = join(invocation.outputPath, "downloads");
+          await mkdir(downloads);
+          await writeFile(join(downloads, fileName), privateContent);
+        },
+      });
+      const plan = artifactRunPlan(repositoryRoot, suffix);
+      const error = await rejection(runDirectBombadilFuzz(config, {
+        arguments: [],
+        artifactRun: plan,
+      }, runtime.overrides));
+      expect(error.name).toBe("BombadilArtifactPolicyError");
+      expect(error.message).toContain("outside the artifact allowlist");
 
-    const upload = resolveDirectBombadilUploadLeaf(plan);
-    expect((await readdir(upload)).sort()).toEqual(["receipt.json", "summary.json"]);
-    const receiptText = await readFile(join(upload, "receipt.json"), "utf8");
-    const summaryText = await readFile(join(upload, "summary.json"), "utf8");
-    const receipt = JSON.parse(receiptText) as unknown;
-    const summary = JSON.parse(summaryText) as unknown;
-    expect(receipt).toMatchObject({
-      diagnosticsRetained: false,
-      failureCode: "artifact-policy",
-      inventory: {
-        entryCount: 0,
-        fileCount: 0,
-        inventorySha256: null,
-        totalBytes: 0,
-      },
-      mode: "public-summary",
-      status: "failed",
-    });
-    expect(summary).toMatchObject({
-      failureCode: "artifact-policy",
-      status: "failed",
-    });
-    expect(parseDirectBombadilArtifactReceipt(receipt).ok).toBeTrue();
-    expect(parseDirectBombadilSanitizedRunSummary(summary).ok).toBeTrue();
-    const publicPayload = `${receiptText}\n${summaryText}`;
-    expect(publicPayload).not.toContain(transientId);
-    expect(publicPayload).not.toContain(privateContent);
-    expect(publicPayload).not.toContain(repositoryRoot);
+      const upload = resolveDirectBombadilUploadLeaf(plan);
+      expect((await readdir(upload)).sort()).toEqual(["receipt.json", "summary.json"]);
+      const receiptText = await readFile(join(upload, "receipt.json"), "utf8");
+      const summaryText = await readFile(join(upload, "summary.json"), "utf8");
+      const receipt = JSON.parse(receiptText) as unknown;
+      const summary = JSON.parse(summaryText) as unknown;
+      expect(receipt).toMatchObject({
+        diagnosticsRetained: false,
+        failureCode: "artifact-policy",
+        inventory: {
+          entryCount: 0,
+          fileCount: 0,
+          inventorySha256: null,
+          totalBytes: 0,
+        },
+        mode: "public-summary",
+        status: "failed",
+      });
+      expect(summary).toMatchObject({
+        failureCode: "artifact-policy",
+        status: "failed",
+      });
+      expect(parseDirectBombadilArtifactReceipt(receipt).ok).toBeTrue();
+      expect(parseDirectBombadilSanitizedRunSummary(summary).ok).toBeTrue();
+      const publicPayload = `${receiptText}\n${summaryText}`;
+      expect(publicPayload).not.toContain(transientId);
+      expect(publicPayload).not.toContain(privateContent);
+      expect(publicPayload).not.toContain(repositoryRoot);
+    }
   });
 
   test("rejects multiply-linked artifacts before private copying", async () => {
