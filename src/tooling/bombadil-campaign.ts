@@ -72,6 +72,14 @@ export interface DirectBombadilObservation {
   readonly violationsValid: boolean;
 }
 
+type DirectBombadilInitial = Readonly<{
+  readonly [key: string | number | symbol]: BombadilJson;
+  readonly activationHash: string;
+  readonly activeRoute: string;
+  readonly activeScenario: string;
+  readonly catalogHash: string;
+}> | null;
+
 export interface DirectBombadilProperties {
   readonly startupContract: Formula;
   readonly exactContract: Formula;
@@ -369,12 +377,7 @@ export function readDirectBombadilObservation(
 
 /** Builds bounded startup plus strict recurring Direct browser invariants. */
 export function createDirectBombadilProperties(): DirectBombadilProperties {
-  let initial: Readonly<{
-    activationHash: string;
-    activeRoute: string;
-    activeScenario: string;
-    catalogHash: string;
-  }> | null = null;
+  let initial: DirectBombadilInitial = null;
   const direct = extract<BombadilBrowserState, DirectBombadilObservation>((state) => {
     const observation = readDirectBombadilObservation(state.window);
     if (initial === null && observationHasExactContract(observation)) {
@@ -387,25 +390,36 @@ export function createDirectBombadilProperties(): DirectBombadilProperties {
     }
     return observation;
   }).named("direct");
+  // Only cell snapshots cross Bombadil's browser-extractor and Boa-formula realms.
+  const directInitial = extract<BombadilBrowserState, DirectBombadilInitial>(() => initial);
 
-  const startupContract = eventually(() => initial !== null).within(10, "seconds");
-  const exactContract = always(() => initial === null || (
-    observationHasExactContract(direct.current)
-    && direct.current.activationHash === initial.activationHash
-    && direct.current.activeRoute === initial.activeRoute
-    && direct.current.activeScenario === initial.activeScenario
-  ));
-  const stableCatalog = always(() => initial === null || (
-    observationHasExactContract(direct.current)
-    && direct.current.catalogHash === initial.catalogHash
-  ));
-  const noDeclaredViolations = always(() => initial === null || (
-    observationHasExactContract(direct.current)
-    && direct.current.violationsValid
-    && direct.current.violations.every((value: number) => value === 0)
-  ));
+  const startupContract = eventually(() => directInitial.current !== null).within(10, "seconds");
+  const exactContract = always(() => {
+    const expected = directInitial.current;
+    return expected === null || (
+      observationHasExactContract(direct.current)
+      && direct.current.activationHash === expected.activationHash
+      && direct.current.activeRoute === expected.activeRoute
+      && direct.current.activeScenario === expected.activeScenario
+    );
+  });
+  const stableCatalog = always(() => {
+    const expected = directInitial.current;
+    return expected === null || (
+      observationHasExactContract(direct.current)
+      && direct.current.catalogHash === expected.catalogHash
+    );
+  });
+  const noDeclaredViolations = always(() => {
+    const expected = directInitial.current;
+    return expected === null || (
+      observationHasExactContract(direct.current)
+      && direct.current.violationsValid
+      && direct.current.violations.every((value: number) => value === 0)
+    );
+  });
   const eventualQuiescence = always(
-    eventually(() => initial !== null && direct.current.isQuiescent)
+    eventually(() => directInitial.current !== null && direct.current.isQuiescent)
       .within(10, "seconds"),
   );
 

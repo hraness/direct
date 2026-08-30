@@ -579,12 +579,18 @@ describe("Direct Bombadil actions", () => {
 
 describe("Direct Bombadil formulas", () => {
   test("splits bounded startup from strict recurring health", () => {
+    const cellOffset = cells.length;
     const properties = createDirectBombadilProperties() as unknown as Record<string, FakeFormula>;
-    const cell = cells.at(-1);
-    if (cell === undefined) throw new Error("Expected one Direct extractor cell");
+    const formulaCells = cells.slice(cellOffset);
+    const [cell, initialCell] = formulaCells;
+    expect(formulaCells.map((candidate) => candidate.name)).toEqual(["direct", null]);
+    if (cell === undefined || initialCell === undefined) {
+      throw new Error("Expected Direct observation and initial extractor cells");
+    }
     expect(cell.name).toBe("direct");
     const sample = (window: unknown): void => {
       cell.current = cell.read({ window });
+      initialCell.current = initialCell.read({ window });
     };
     sample({});
 
@@ -611,6 +617,14 @@ describe("Direct Bombadil formulas", () => {
     expect(evaluate(properties.stableCatalog?.body)).toBeTrue();
     expect(evaluate(properties.noDeclaredViolations?.body)).toBeTrue();
     const initial = cell.current as Readonly<Record<string, unknown>>;
+    const latchedInitial = initialCell.current;
+    expect(latchedInitial).toEqual({
+      activationHash: initial.activationHash,
+      activeRoute: initial.activeRoute,
+      activeScenario: initial.activeScenario,
+      catalogHash: initial.catalogHash,
+    });
+    expect(Object.isFrozen(latchedInitial)).toBeTrue();
     for (const [key, value] of [
       ["activeScenario", ""],
       ["activeRoute", ""],
@@ -625,6 +639,7 @@ describe("Direct Bombadil formulas", () => {
     sample(contractFixture({
       catalogHash: "fnv1a-64:ffffffffffffffff",
     }));
+    expect(initialCell.current).toBe(latchedInitial);
     expect(evaluate(properties.exactContract?.body)).toBeTrue();
     expect(evaluate(properties.stableCatalog?.body)).toBeFalse();
 
@@ -638,32 +653,52 @@ describe("Direct Bombadil formulas", () => {
     expect(boundedEventually.milliseconds).toBe(10_000);
   });
 
-  test("permits bootstrap absence before recurring exact health", () => {
+  test("reads the transported initial cell across Boa formula closures", () => {
+    const cellOffset = cells.length;
     const properties = createDirectBombadilProperties() as unknown as Record<string, FakeFormula>;
-    const cell = cells.at(-1);
-    if (cell === undefined) throw new Error("Expected one Direct extractor cell");
-    const sample = (window: unknown): void => {
-      cell.current = cell.read({ window });
-    };
-    sample({});
+    const formulaCells = cells.slice(cellOffset);
+    const [cell, initialCell] = formulaCells;
+    expect(formulaCells.map((candidate) => candidate.name)).toEqual(["direct", null]);
+    if (cell === undefined || initialCell === undefined) {
+      throw new Error("Expected Direct observation and initial extractor cells");
+    }
+
+    cell.current = readDirectBombadilObservation({});
+    initialCell.current = null;
     expect(evaluate(properties.startupContract?.body)).toBeFalse();
     expect(evaluate(properties.exactContract?.body)).toBeTrue();
     expect(evaluate(properties.noDeclaredViolations?.body)).toBeTrue();
     expect(evaluate(properties.stableCatalog?.body)).toBeTrue();
 
+    expect(properties.startupContract?.milliseconds).toBe(10_000);
     const eventual = properties.eventualQuiescence?.body as FakeFormula;
+    expect(eventual.milliseconds).toBe(10_000);
     expect(evaluate(eventual.body)).toBeFalse();
 
-    sample(contractFixture());
+    const exact = readDirectBombadilObservation(contractFixture({ isQuiescent: false }));
+    const transportedInitial = Object.freeze({
+      activationHash: exact.activationHash,
+      activeRoute: exact.activeRoute,
+      activeScenario: exact.activeScenario,
+      catalogHash: exact.catalogHash,
+    });
+    cell.current = exact;
+    initialCell.current = transportedInitial;
     expect(evaluate(properties.startupContract?.body)).toBeTrue();
     expect(evaluate(properties.exactContract?.body)).toBeTrue();
     expect(evaluate(properties.noDeclaredViolations?.body)).toBeTrue();
     expect(evaluate(properties.stableCatalog?.body)).toBeTrue();
-    expect(evaluate(eventual.body)).toBeTrue();
+    expect(evaluate(eventual.body)).toBeFalse();
 
-    sample({});
+    cell.current = { ...exact, activeRoute: "/changed" };
     expect(evaluate(properties.exactContract?.body)).toBeFalse();
+    cell.current = { ...exact, catalogHash: "fnv1a-64:ffffffffffffffff" };
     expect(evaluate(properties.stableCatalog?.body)).toBeFalse();
+    cell.current = { ...exact, violations: [1] };
     expect(evaluate(properties.noDeclaredViolations?.body)).toBeFalse();
+
+    cell.current = { ...exact, isQuiescent: true };
+    expect(evaluate(eventual.body)).toBeTrue();
+    expect(initialCell.current).toBe(transportedInitial);
   });
 });
