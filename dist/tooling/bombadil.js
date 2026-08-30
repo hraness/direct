@@ -2100,6 +2100,13 @@ function validateArtifactRelativePath(relativePath, policy) {
 function artifactOutputFileIsAllowed(relativePath) {
   return relativePath === "trace.jsonl" || PRIVATE_DIAGNOSTIC_EXTENSIONS.has(extname(relativePath).toLowerCase());
 }
+function isLiveChromeDownloadTransient(relativePath) {
+  const prefix = "downloads/";
+  const suffix = ".crdownload";
+  if (!relativePath.startsWith(prefix) || !relativePath.endsWith(suffix))
+    return false;
+  return UUID_PATTERN.test(relativePath.slice(prefix.length, -suffix.length));
+}
 function sameBigIntFileMetadata(left, right) {
   return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.ctimeNs === right.ctimeNs && left.mtimeNs === right.mtimeNs;
 }
@@ -2217,6 +2224,9 @@ function decodeTraceLines(bytes) {
   return lines;
 }
 async function scanBombadilArtifactTree(options) {
+  if (options.allowLiveChromeDownloadTransients === true && options.hashFiles) {
+    throw new BombadilArtifactPolicyError("Live Chrome download transients cannot enter an authoritative artifact inventory");
+  }
   let rootMetadata;
   try {
     rootMetadata = await lstat(options.root, { bigint: true });
@@ -2279,7 +2289,11 @@ async function scanBombadilArtifactTree(options) {
           if (metadata.isSymbolicLink()) {
             throw new BombadilArtifactPolicyError(`Bombadil emitted a symbolic link at ${relativePath}`);
           }
+          const liveChromeDownloadTransient = isLiveChromeDownloadTransient(relativePath);
           if (metadata.isDirectory()) {
+            if (liveChromeDownloadTransient) {
+              throw new BombadilArtifactPolicyError(`Bombadil emitted a directory at Chrome transient path ${relativePath}`);
+            }
             directories.push(relativePath);
             pending.push({ absolutePath, relativePath });
             continue;
@@ -2287,7 +2301,7 @@ async function scanBombadilArtifactTree(options) {
           if (!metadata.isFile() || metadata.nlink !== 1n) {
             throw new BombadilArtifactPolicyError(`Bombadil emitted a non-regular or multiply-linked file at ${relativePath}`);
           }
-          if (!artifactOutputFileIsAllowed(relativePath)) {
+          if (!artifactOutputFileIsAllowed(relativePath) && !(options.allowLiveChromeDownloadTransients === true && liveChromeDownloadTransient)) {
             throw new BombadilArtifactPolicyError(`Bombadil emitted a file outside the artifact allowlist at ${relativePath}`);
           }
           if (files.length + 1 > options.policy.maxFiles) {
@@ -3985,6 +3999,7 @@ async function monitorBombadilArtifactTree(options) {
     try {
       await scanBombadilArtifactTree({
         allowTransientEntryAbsence: true,
+        allowLiveChromeDownloadTransients: true,
         hashFiles: false,
         policy: options.policy,
         root: options.outputPath,
