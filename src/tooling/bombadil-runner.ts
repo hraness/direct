@@ -1766,6 +1766,15 @@ function artifactOutputFileIsAllowed(relativePath: string): boolean {
     || PRIVATE_DIAGNOSTIC_EXTENSIONS.has(extname(relativePath).toLowerCase());
 }
 
+function isLiveChromeDownloadTransient(relativePath: string): boolean {
+  // This exception is intentionally lexical and live-only. Stopped-process
+  // scans never opt in, so a transient cannot enter authoritative evidence.
+  const prefix = "downloads/";
+  const suffix = ".crdownload";
+  if (!relativePath.startsWith(prefix) || !relativePath.endsWith(suffix)) return false;
+  return UUID_PATTERN.test(relativePath.slice(prefix.length, -suffix.length));
+}
+
 function sameBigIntFileMetadata(
   left: Readonly<{ dev: bigint; ino: bigint; size: bigint; ctimeNs: bigint; mtimeNs: bigint }>,
   right: Readonly<{ dev: bigint; ino: bigint; size: bigint; ctimeNs: bigint; mtimeNs: bigint }>,
@@ -1949,6 +1958,7 @@ function decodeTraceLines(bytes: Uint8Array): readonly string[] {
 
 async function scanBombadilArtifactTree(options: {
   readonly allowTransientEntryAbsence?: boolean;
+  readonly allowLiveChromeDownloadTransients?: boolean;
   readonly beforeDirectoryOpen?: (absolutePath: string) => Promise<void> | void;
   readonly beforeEntryInspect?: (absolutePath: string) => Promise<void> | void;
   readonly hashFiles: boolean;
@@ -1956,6 +1966,11 @@ async function scanBombadilArtifactTree(options: {
   readonly root: string;
   readonly rootMayBeAbsent?: boolean;
 }): Promise<ArtifactInventory> {
+  if (options.allowLiveChromeDownloadTransients === true && options.hashFiles) {
+    throw new BombadilArtifactPolicyError(
+      "Live Chrome download transients cannot enter an authoritative artifact inventory",
+    );
+  }
   let rootMetadata: BigIntStats | null;
   try {
     rootMetadata = await lstat(options.root, { bigint: true });
@@ -2028,7 +2043,13 @@ async function scanBombadilArtifactTree(options: {
               `Bombadil emitted a symbolic link at ${relativePath}`,
             );
           }
+          const liveChromeDownloadTransient = isLiveChromeDownloadTransient(relativePath);
           if (metadata.isDirectory()) {
+            if (liveChromeDownloadTransient) {
+              throw new BombadilArtifactPolicyError(
+                `Bombadil emitted a directory at Chrome transient path ${relativePath}`,
+              );
+            }
             directories.push(relativePath);
             pending.push({ absolutePath, relativePath });
             continue;
@@ -2038,7 +2059,13 @@ async function scanBombadilArtifactTree(options: {
               `Bombadil emitted a non-regular or multiply-linked file at ${relativePath}`,
             );
           }
-          if (!artifactOutputFileIsAllowed(relativePath)) {
+          if (
+            !artifactOutputFileIsAllowed(relativePath)
+            && !(
+              options.allowLiveChromeDownloadTransients === true
+              && liveChromeDownloadTransient
+            )
+          ) {
             throw new BombadilArtifactPolicyError(
               `Bombadil emitted a file outside the artifact allowlist at ${relativePath}`,
             );
@@ -2126,6 +2153,7 @@ async function scanBombadilArtifactTree(options: {
 /** @internal Exercise transient versus authoritative artifact scans in package tests. */
 export async function inspectBombadilArtifactTreeForTest(options: {
   readonly allowTransientEntryAbsence?: boolean;
+  readonly allowLiveChromeDownloadTransients?: boolean;
   readonly beforeDirectoryOpen?: (absolutePath: string) => Promise<void> | void;
   readonly beforeEntryInspect?: (absolutePath: string) => Promise<void> | void;
   readonly hashFiles: boolean;
@@ -4495,6 +4523,9 @@ async function monitorBombadilArtifactTree(options: {
     try {
       await scanBombadilArtifactTree({
         allowTransientEntryAbsence: true,
+        // Chrome can expose this exact partial-download shape while its writer
+        // is live. It remains subject to every quota and final scans reject it.
+        allowLiveChromeDownloadTransients: true,
         hashFiles: false,
         policy: options.policy,
         root: options.outputPath,

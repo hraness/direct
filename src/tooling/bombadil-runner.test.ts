@@ -44,6 +44,7 @@ import type {
 } from "./browser-verification.js";
 
 const ARTIFACT_IO_TEST_TIMEOUT_MS = 30_000;
+const CHROME_TRANSIENT_TEST_ID = "123e4567-e89b-42d3-a456-426614174000";
 const temporaryDirectories: string[] = [];
 
 function artifactRunPlan<
@@ -2287,6 +2288,142 @@ describe("Direct Bombadil exploration summary", () => {
 });
 
 describe("Direct Bombadil process lifecycle", () => {
+  test("permits only an exact Chrome download transient during the live scan", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-transient-"));
+    temporaryDirectories.push(directory);
+    const downloads = join(directory, "downloads");
+    await mkdir(downloads);
+    const transientName = `${CHROME_TRANSIENT_TEST_ID}.crdownload`;
+    const transientPath = join(downloads, transientName);
+    const policy = {
+      maxDepth: 4,
+      maxEntries: 8,
+      maxFileBytes: 1_024,
+      maxFiles: 4,
+      maxPathBytes: 256,
+      maxTotalBytes: 2_048,
+    };
+
+    await writeFile(transientPath, "partial\n");
+    await inspectBombadilArtifactTreeForTest({
+      allowLiveChromeDownloadTransients: true,
+      hashFiles: false,
+      policy,
+      root: directory,
+    });
+    expect((await rejection(inspectBombadilArtifactTreeForTest({
+      hashFiles: false,
+      policy,
+      root: directory,
+    }))).message).toContain("outside the artifact allowlist");
+    expect((await rejection(inspectBombadilArtifactTreeForTest({
+      allowLiveChromeDownloadTransients: true,
+      hashFiles: true,
+      policy,
+      root: directory,
+    }))).message).toContain("cannot enter an authoritative artifact inventory");
+
+    await writeFile(transientPath, Buffer.alloc(policy.maxFileBytes + 1));
+    expect((await rejection(inspectBombadilArtifactTreeForTest({
+      allowLiveChromeDownloadTransients: true,
+      hashFiles: false,
+      policy,
+      root: directory,
+    }))).message).toContain("per-file byte quota");
+
+    await rm(transientPath);
+    await writeFile(join(directory, "trace.jsonl"), "settled\n");
+    await inspectBombadilArtifactTreeForTest({
+      hashFiles: true,
+      policy,
+      root: directory,
+    });
+  });
+
+  test("rejects traversal, foreign, unknown, and settled Chrome download files", async () => {
+    const policy = {
+      maxDepth: 4,
+      maxEntries: 8,
+      maxFileBytes: 1_024,
+      maxFiles: 4,
+      maxPathBytes: 256,
+      maxTotalBytes: 2_048,
+    };
+    const transientId = CHROME_TRANSIENT_TEST_ID;
+    const rejectedPaths = [
+      "downloads/not-a-uuid.crdownload",
+      `downloads/${transientId.toUpperCase()}.crdownload`,
+      `downloads/nested/${transientId}.crdownload`,
+      `foreign/${transientId}.crdownload`,
+      `downloads/${transientId}.part`,
+      `downloads/${transientId}`,
+    ];
+    for (const relativePath of rejectedPaths) {
+      const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-rejected-"));
+      temporaryDirectories.push(directory);
+      const parts = relativePath.split("/");
+      const fileName = parts.pop();
+      if (fileName === undefined) throw new Error("Expected a rejected file name");
+      const parent = join(directory, ...parts);
+      await mkdir(parent, { recursive: true });
+      await writeFile(join(parent, fileName), "untrusted\n");
+      expect((await rejection(inspectBombadilArtifactTreeForTest({
+        allowLiveChromeDownloadTransients: true,
+        hashFiles: false,
+        policy,
+        root: directory,
+      }))).message).toContain("outside the artifact allowlist");
+    }
+
+    const traversalRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-traversal-"));
+    const outsideRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-outside-"));
+    temporaryDirectories.push(traversalRoot, outsideRoot);
+    const outside = join(outsideRoot, "outside.txt");
+    const downloads = join(traversalRoot, "downloads");
+    await writeFile(outside, "private\n");
+    await mkdir(downloads);
+    await symlink(outside, join(downloads, `${transientId}.crdownload`));
+    expect((await rejection(inspectBombadilArtifactTreeForTest({
+      allowLiveChromeDownloadTransients: true,
+      hashFiles: false,
+      policy,
+      root: traversalRoot,
+    }))).message).toContain("symbolic link");
+  });
+
+  test("lets an exact Chrome transient drain before stopped-process proof", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-lifecycle-"));
+    temporaryDirectories.push(directory);
+    const downloads = join(directory, "downloads");
+    const transientPath = join(
+      downloads,
+      `${CHROME_TRANSIENT_TEST_ID}.crdownload`,
+    );
+    const source = [
+      "const fs = require('node:fs');",
+      `fs.mkdirSync(${JSON.stringify(downloads)}, { recursive: true });`,
+      `fs.writeFileSync(${JSON.stringify(transientPath)}, 'partial');`,
+      `setTimeout(() => { fs.rmSync(${JSON.stringify(transientPath)}); process.exit(0); }, 350);`,
+      "setInterval(() => {}, 1000);",
+    ].join(" ");
+    const result = await runBombadilNativeProcess({
+      artifactPolicy: {
+        maxDepth: 4,
+        maxEntries: 8,
+        maxFileBytes: 1_024,
+        maxFiles: 4,
+        maxPathBytes: 256,
+        maxTotalBytes: 2_048,
+      },
+      command: [process.execPath, "-e", source],
+      cwd: directory,
+      outputPath: directory,
+      targetUrl: "http://127.0.0.1:4919/",
+      wallClockTimeoutMs: 5_000,
+    });
+    expect(result).toMatchObject({ exitCode: 0, termination: null });
+  });
+
   test("tolerates only live-scan entry disappearance and fails final proof closed", async () => {
     const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-entry-race-"));
     temporaryDirectories.push(directory);
@@ -2833,6 +2970,55 @@ describe("Direct Bombadil run lifecycle", () => {
       failureCode: "artifact-policy",
       status: "failed",
     });
+  });
+
+  test("keeps a settled Chrome transient out of sanitized public evidence", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const transientId = CHROME_TRANSIENT_TEST_ID;
+    const privateContent = "private-partial-download-content";
+    const runtime = dependencies({
+      afterTrace: async (invocation) => {
+        const downloads = join(invocation.outputPath, "downloads");
+        await mkdir(downloads);
+        await writeFile(join(downloads, `${transientId}.crdownload`), privateContent);
+      },
+    });
+    const plan = artifactRunPlan(repositoryRoot, 45);
+    const error = await rejection(runDirectBombadilFuzz(config, {
+      arguments: [],
+      artifactRun: plan,
+    }, runtime.overrides));
+    expect(error.name).toBe("BombadilArtifactPolicyError");
+    expect(error.message).toContain("outside the artifact allowlist");
+
+    const upload = resolveDirectBombadilUploadLeaf(plan);
+    expect((await readdir(upload)).sort()).toEqual(["receipt.json", "summary.json"]);
+    const receiptText = await readFile(join(upload, "receipt.json"), "utf8");
+    const summaryText = await readFile(join(upload, "summary.json"), "utf8");
+    const receipt = JSON.parse(receiptText) as unknown;
+    const summary = JSON.parse(summaryText) as unknown;
+    expect(receipt).toMatchObject({
+      diagnosticsRetained: false,
+      failureCode: "artifact-policy",
+      inventory: {
+        entryCount: 0,
+        fileCount: 0,
+        inventorySha256: null,
+        totalBytes: 0,
+      },
+      mode: "public-summary",
+      status: "failed",
+    });
+    expect(summary).toMatchObject({
+      failureCode: "artifact-policy",
+      status: "failed",
+    });
+    expect(parseDirectBombadilArtifactReceipt(receipt).ok).toBeTrue();
+    expect(parseDirectBombadilSanitizedRunSummary(summary).ok).toBeTrue();
+    const publicPayload = `${receiptText}\n${summaryText}`;
+    expect(publicPayload).not.toContain(transientId);
+    expect(publicPayload).not.toContain(privateContent);
+    expect(publicPayload).not.toContain(repositoryRoot);
   });
 
   test("rejects multiply-linked artifacts before private copying", async () => {
