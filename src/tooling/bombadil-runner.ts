@@ -2457,7 +2457,7 @@ async function scanLiveBombadilArtifactTree(options: {
   const carriedFiles = new Map<string, number>();
   let previous = options.previous;
   for (let retryCount = 0; retryCount < MAX_LIVE_CHROME_RENAME_RETRIES; retryCount += 1) {
-    if (options.abortSignal?.aborted === true) return previous;
+    if (bombadilAbortRequested(options.abortSignal)) return previous;
     const currentPartials = new Set<string>();
     const currentUnobservedCompletions = new Set<string>();
     const currentAccountedFiles = new Map<string, number>();
@@ -2577,7 +2577,7 @@ async function scanLiveBombadilArtifactTree(options: {
       await options.afterLiveChromeDownloadRenameRetry?.(
         join(options.outputPath, "downloads", error.completion.runId),
       );
-      if (options.abortSignal?.aborted === true) return previous;
+      if (bombadilAbortRequested(options.abortSignal)) return previous;
       continue;
     }
     if (
@@ -5137,6 +5137,10 @@ function abortedBombadilProcessResult(): BombadilProcessResult {
   };
 }
 
+function bombadilAbortRequested(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
 async function runBombadilNativeProcessInternal(
   invocation: DirectBombadilInvocation,
   hooks: Readonly<{
@@ -5144,7 +5148,7 @@ async function runBombadilNativeProcessInternal(
   }> = {},
 ): Promise<BombadilProcessResult> {
   const artifactPolicy = validateArtifactPolicy(invocation.artifactPolicy);
-  if (invocation.abortSignal?.aborted === true) {
+  if (bombadilAbortRequested(invocation.abortSignal)) {
     return abortedBombadilProcessResult();
   }
   await establishCleanBombadilArtifactBaseline({
@@ -5154,7 +5158,7 @@ async function runBombadilNativeProcessInternal(
     outputPath: invocation.outputPath,
     policy: artifactPolicy,
   });
-  if (invocation.abortSignal?.aborted === true) {
+  if (bombadilAbortRequested(invocation.abortSignal)) {
     return abortedBombadilProcessResult();
   }
   const childEnvironment: Record<string, string | undefined> = Object.fromEntries(
