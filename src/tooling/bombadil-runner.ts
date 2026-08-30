@@ -4419,24 +4419,26 @@ function captureStream(
 
 function signalProcessGroup(
   process_: ReturnType<typeof Bun.spawn>,
-  signal: "SIGKILL" | "SIGTERM",
-): boolean {
+  signal: "SIGKILL",
+): void {
   try {
     process.kill(-process_.pid, signal);
-    return true;
+    return;
   } catch (error) {
     if (!isRecord(error) || error.code !== "ESRCH") throw error;
     if (process_.exitCode === null) process_.kill(signal);
-    return false;
   }
 }
 
-function processGroupExists(processId: number): boolean {
+function processGroupMayExist(processId: number): boolean {
   try {
     process.kill(-processId, 0);
     return true;
   } catch (error) {
     if (isRecord(error) && error.code === "ESRCH") return false;
+    // EPERM does not prove absence. Keep polling the already-killed group;
+    // settlement must never authorize a second signal from a failed probe.
+    if (isRecord(error) && error.code === "EPERM") return true;
     throw error;
   }
 }
@@ -4446,7 +4448,7 @@ async function waitForProcessGroupExit(
   timeoutMs: number,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (processGroupExists(processId)) {
+  while (processGroupMayExist(processId)) {
     if (Date.now() >= deadline) {
       throw new Error(`Bombadil process group ${String(processId)} survived cleanup`);
     }
@@ -4468,34 +4470,14 @@ async function waitForBombadilLeaderExit(
   }
 }
 
-async function terminateProcessGroup(
-  process_: ReturnType<typeof Bun.spawn>,
-  graceMs: number,
-): Promise<void> {
-  signalProcessGroup(process_, "SIGTERM");
-  await Promise.race([
-    process_.exited.then(() => undefined),
-    Bun.sleep(graceMs),
-  ]);
-  // The group may still contain descendants after its leader exits on TERM.
-  if (processGroupExists(process_.pid)) signalProcessGroup(process_, "SIGKILL");
-  await waitForBombadilLeaderExit(process_, graceMs);
-  await waitForProcessGroupExit(process_.pid, graceMs);
-}
-
 async function settleBombadilProcessGroup(options: {
-  readonly immediate: boolean;
   readonly process: ReturnType<typeof Bun.spawn>;
   readonly timeoutMs: number;
 }): Promise<void> {
   try {
-    if (options.immediate) {
-      signalProcessGroup(options.process, "SIGKILL");
-      await waitForBombadilLeaderExit(options.process, options.timeoutMs);
-      await waitForProcessGroupExit(options.process.pid, options.timeoutMs);
-      return;
-    }
-    await terminateProcessGroup(options.process, options.timeoutMs);
+    signalProcessGroup(options.process, "SIGKILL");
+    await waitForBombadilLeaderExit(options.process, options.timeoutMs);
+    await waitForProcessGroupExit(options.process.pid, options.timeoutMs);
   } catch (error) {
     throw new BombadilWriterSettlementError(
       `Bombadil process group ${String(options.process.pid)} did not settle safely`,
@@ -4590,9 +4572,6 @@ export async function runBombadilNativeProcess(
       ?? PROCESS_TERMINATION_GRACE_MS;
     try {
       await settleBombadilProcessGroup({
-        // Every terminal outcome is fail-closed: no writer receives a grace
-        // window in which it can keep growing or replacing artifact files.
-        immediate: true,
         process: process_,
         timeoutMs: terminationGraceMs,
       });
@@ -5004,12 +4983,20 @@ export async function runDirectBombadilFuzzMatrix(
       }
     } catch (error) {
       const boundedCampaigns = campaignsInput.slice(0, MAX_MATRIX_CAMPAIGNS);
-      const entries = boundedCampaigns.map((campaign, index): MatrixCampaignReceiptEntry => ({
-        campaignId: isBoundedArtifactIdentifier(campaign.id) ? campaign.id : null,
-        index,
-        receipt: null,
-        status: "rejected",
-      }));
+      const retainedCampaignIds = new Set<string>();
+      const entries = boundedCampaigns.map((campaign, index): MatrixCampaignReceiptEntry => {
+        const boundedCampaignId = isBoundedArtifactIdentifier(campaign.id) ? campaign.id : null;
+        const campaignId = boundedCampaignId !== null && !retainedCampaignIds.has(boundedCampaignId)
+          ? boundedCampaignId
+          : null;
+        if (campaignId !== null) retainedCampaignIds.add(campaignId);
+        return {
+          campaignId,
+          index,
+          receipt: null,
+          status: "rejected",
+        };
+      });
       return await publishFailureAndThrow(error, async () => {
         await publishMatrixUpload({
           abortSignal: matrixAbortController.signal,

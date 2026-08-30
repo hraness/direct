@@ -155,6 +155,57 @@ async function rejection(promise: Promise<unknown>): Promise<Error> {
   throw new Error("Expected the operation to reject.");
 }
 
+type ProcessKill = (
+  processId: number,
+  signal?: NodeJS.Signals | number,
+) => boolean;
+
+async function withProcessKillAdapter<Value>(
+  createAdapter: (kill: ProcessKill) => ProcessKill,
+  operation: () => Promise<Value>,
+): Promise<Value> {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "kill");
+  if (descriptor === undefined) throw new Error("process.kill descriptor is unavailable");
+  const originalKill = process.kill.bind(process);
+  const kill: ProcessKill = (processId, signal) => originalKill(processId, signal);
+  Object.defineProperty(process, "kill", {
+    ...descriptor,
+    value: createAdapter(kill),
+  });
+  try {
+    return await operation();
+  } finally {
+    Object.defineProperty(process, "kill", descriptor);
+  }
+}
+
+async function waitForMissingProcess(processId: number): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  for (;;) {
+    try {
+      process.kill(processId, 0);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ESRCH") return;
+      if (code !== "EPERM") throw error;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`Process ${String(processId)} survived its test cleanup`);
+    }
+    await Bun.sleep(10);
+  }
+}
+
+async function forceCleanupProcess(processId: number): Promise<void> {
+  try {
+    process.kill(processId, "SIGKILL");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+    throw error;
+  }
+  await waitForMissingProcess(processId);
+}
+
 describe("browser verification targets", () => {
   test("normalizes only credential-free HTTP server roots", () => {
     expect(normalizeRootHttpOrigin("https://example.test/")).toBe("https://example.test");
@@ -608,23 +659,123 @@ describe("server leases", () => {
     const source = [
       "const { spawn } = require('node:child_process');",
       "const fs = require('node:fs');",
-      "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+      "const child = spawn(process.execPath, ['-e', `process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 5000); setInterval(() => {}, 1000);`], { stdio: 'ignore' });",
+      "child.unref();",
       `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
-      "setInterval(() => {}, 1000);",
     ].join(" ");
     const server = spawnVerificationServer({
       command: [process.execPath, "-e", source],
       cwd: directory,
       detachedProcessGroup: true,
     });
-    for (let attempt = 0; attempt < 100 && !(await Bun.file(childPidPath).exists()); attempt += 1) {
-      await Bun.sleep(10);
+    let childPid: number | null = null;
+    let childMissing = false;
+    let stopped = false;
+    let processGroupId: number | null = null;
+    let processGroupKills = 0;
+    let processGroupProbes = 0;
+    try {
+      for (let attempt = 0; attempt < 100 && !(await Bun.file(childPidPath).exists()); attempt += 1) {
+        await Bun.sleep(10);
+      }
+      expect(await Bun.file(childPidPath).exists()).toBeTrue();
+      childPid = Number.parseInt(await Bun.file(childPidPath).text(), 10);
+      await server.exited;
+      await withProcessKillAdapter(
+        (kill) => (processId, signal) => {
+          if (processId < 0 && signal === "SIGKILL") {
+            processGroupId = -processId;
+            processGroupKills += 1;
+          }
+          if (
+            processGroupId !== null
+            && processId === -processGroupId
+            && signal === 0
+          ) {
+            processGroupProbes += 1;
+            if (processGroupProbes === 1) {
+              throw Object.assign(new Error("synthetic transient process-group probe"), {
+                code: "EPERM",
+              });
+            }
+          }
+          return kill(processId, signal);
+        },
+        async () => await stopVerificationServer(server, 500),
+      );
+      stopped = true;
+      expect(processGroupKills).toBe(1);
+      expect(processGroupProbes).toBeGreaterThanOrEqual(2);
+      expect(Number.isSafeInteger(childPid)).toBeTrue();
+      await waitForMissingProcess(childPid);
+      childMissing = true;
+    } finally {
+      if (!stopped) await stopVerificationServer(server, 500);
+      if (childPid !== null && !childMissing) await forceCleanupProcess(childPid);
     }
-    expect(await Bun.file(childPidPath).exists()).toBeTrue();
-    const childPid = Number.parseInt(await Bun.file(childPidPath).text(), 10);
-    await stopVerificationServer(server, 500);
-    expect(Number.isSafeInteger(childPid)).toBeTrue();
-    expect(() => process.kill(childPid, 0)).toThrow();
+  });
+
+  test("fails closed after persistent EPERM while stopping detached descendants", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-server-process-group-eperm-"));
+    temporaryDirectories.push(directory);
+    const childPidPath = join(directory, "child.pid");
+    const source = [
+      "const { spawn } = require('node:child_process');",
+      "const fs = require('node:fs');",
+      "const child = spawn(process.execPath, ['-e', `process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 5000); setInterval(() => {}, 1000);`], { stdio: 'ignore' });",
+      "child.unref();",
+      `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
+    ].join(" ");
+    const server = spawnVerificationServer({
+      command: [process.execPath, "-e", source],
+      cwd: directory,
+      detachedProcessGroup: true,
+    });
+    let childPid: number | null = null;
+    let childMissing = false;
+    try {
+      for (let attempt = 0; attempt < 100 && !(await Bun.file(childPidPath).exists()); attempt += 1) {
+        await Bun.sleep(10);
+      }
+      expect(await Bun.file(childPidPath).exists()).toBeTrue();
+      childPid = Number.parseInt(await Bun.file(childPidPath).text(), 10);
+      await server.exited;
+      let processGroupId: number | null = null;
+      let processGroupKills = 0;
+      let processGroupProbes = 0;
+      const failure = await withProcessKillAdapter(
+        (kill) => (processId, signal) => {
+          if (processId < 0 && signal === "SIGKILL") {
+            processGroupId = -processId;
+            processGroupKills += 1;
+          }
+          if (
+            processGroupId !== null
+            && processId === -processGroupId
+            && signal === 0
+          ) {
+            processGroupProbes += 1;
+            throw Object.assign(new Error("synthetic persistent process-group probe"), {
+              code: "EPERM",
+            });
+          }
+          return kill(processId, signal);
+        },
+        async () => await rejection(stopVerificationServer(server, 50)),
+      );
+      expect(failure.message).toContain("survived cleanup");
+      expect(processGroupKills).toBe(1);
+      expect(processGroupProbes).toBeGreaterThanOrEqual(2);
+      expect(Number.isSafeInteger(childPid)).toBeTrue();
+      await waitForMissingProcess(childPid);
+      childMissing = true;
+    } finally {
+      if (childPid === null) {
+        await stopVerificationServer(server, 500);
+      } else if (!childMissing) {
+        await forceCleanupProcess(childPid);
+      }
+    }
   });
 
   test("bounds one-shot verification commands and reports their exact outcome", async () => {

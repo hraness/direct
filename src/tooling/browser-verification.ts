@@ -687,6 +687,8 @@ function verificationProcessGroupExists(processId: number): boolean {
     return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    // EPERM leaves group absence unproven, so poll until ESRCH or timeout.
+    if ((error as NodeJS.ErrnoException).code === "EPERM") return true;
     throw error;
   }
 }

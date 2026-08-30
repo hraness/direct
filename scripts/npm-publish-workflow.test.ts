@@ -25,7 +25,26 @@ const publishingGuideUrl = new URL("../docs/publishing.md", import.meta.url);
 const agentGuideUrl = new URL("../AGENTS.md", import.meta.url);
 const npmRegistry = "https://registry.npmjs.org";
 const repository = fileURLToPath(new URL("../", import.meta.url));
-const firstPublicSourceCommit = "c6aa5a49c531b45216e3fb043b6e0ab8a392c13d";
+const historicalRecoverySources = [
+  {
+    commit: "c6aa5a49c531b45216e3fb043b6e0ab8a392c13d",
+    expectedFileCount: 56,
+    expectedUnpackedBytes: 697_651,
+    version: "0.7.5",
+  },
+  {
+    commit: "3f7c821ffaff1d28ccbde1c635d95f584c1af875",
+    version: "0.7.6",
+  },
+  {
+    commit: "8953550e298df061e9b9f4081aced158e497b906",
+    version: "0.7.7",
+  },
+  {
+    commit: "13e5fa5d4628706d113252420b57579090363ffc",
+    version: "0.7.8",
+  },
+] as const;
 
 function workflowStepScript(workflow: string, name: string): string {
   const stepMarker = `      - name: ${name}\n`;
@@ -792,73 +811,82 @@ describe("canonical npm package identity", () => {
     }
   });
 
-  test("current tools prepare and smoke the exact v0.7.5 source without tagged helpers", async () => {
-    const work = await mkdtemp(join(tmpdir(), "direct-release-recovery-test-"));
-    try {
-      const sourceArchive = join(work, "v0.7.5-source.tar");
-      const sourceTree = join(work, "source");
-      const packageOutput = join(work, "package");
-      await mkdir(sourceTree);
-      await run([
-        "git",
-        "cat-file",
-        "-e",
-        `${firstPublicSourceCommit}^{commit}`,
-      ], repository);
-      await run([
-        "git",
-        "archive",
-        "--format=tar",
-        `--output=${sourceArchive}`,
-        firstPublicSourceCommit,
-      ], repository);
-      await run(["tar", "-xf", sourceArchive, "-C", sourceTree], repository);
+  for (const release of historicalRecoverySources) test(
+    `current tools prepare and smoke exact v${release.version} source without tagged helpers`,
+    async () => {
+      const work = await mkdtemp(join(tmpdir(), "direct-release-recovery-test-"));
+      try {
+        const sourceArchive = join(work, `v${release.version}-source.tar`);
+        const sourceTree = join(work, "source");
+        const packageOutput = join(work, "package");
+        await mkdir(sourceTree);
+        await run([
+          "git",
+          "cat-file",
+          "-e",
+          `${release.commit}^{commit}`,
+        ], repository);
+        await run([
+          "git",
+          "archive",
+          "--format=tar",
+          `--output=${sourceArchive}`,
+          release.commit,
+        ], repository);
+        await run(["tar", "-xf", sourceArchive, "-C", sourceTree], repository);
 
-      const manifest = JSON.parse(await readFile(join(sourceTree, "package.json"), "utf8")) as {
-        readonly name?: unknown;
-        readonly scripts?: Readonly<Record<string, unknown>>;
-        readonly version?: unknown;
-      };
-      expect(manifest.name).toBe("@hraness/direct");
-      expect(manifest.version).toBe("0.7.5");
-      expect(manifest.scripts?.prepack).toBe("bun run check");
+        const manifest = JSON.parse(await readFile(join(sourceTree, "package.json"), "utf8")) as {
+          readonly name?: unknown;
+          readonly scripts?: Readonly<Record<string, unknown>>;
+          readonly version?: unknown;
+        };
+        expect(manifest.name).toBe("@hraness/direct");
+        expect(manifest.version).toBe(release.version);
+        expect(manifest.scripts?.prepack).toBe("bun run check");
 
-      await rm(join(sourceTree, "scripts"), { recursive: true });
-      expect(await readdir(sourceTree)).not.toContain("node_modules");
-      await run([
-        process.execPath,
-        "--no-env-file",
-        "--config=/dev/null",
-        "run",
-        fileURLToPath(packagePreparationUrl),
-        packageOutput,
-      ], sourceTree);
+        await rm(join(sourceTree, "scripts"), { recursive: true });
+        expect(await readdir(sourceTree)).not.toContain("node_modules");
+        await run([
+          process.execPath,
+          "--no-env-file",
+          "--config=/dev/null",
+          "run",
+          fileURLToPath(packagePreparationUrl),
+          packageOutput,
+        ], sourceTree);
 
-      const filename = "hraness-direct-0.7.5.tgz";
-      expect(new Set(await readdir(packageOutput))).toEqual(new Set([
-        filename,
-        "npm-pack.json",
-      ]));
-      const inventory = await inspectPackageArtifact(join(packageOutput, filename));
-      expect(inventory.fileCount).toBe(56);
-      expect(inventory.unpackedBytes).toBe(697_651);
+        const filename = `hraness-direct-${release.version}.tgz`;
+        expect(new Set(await readdir(packageOutput))).toEqual(new Set([
+          filename,
+          "npm-pack.json",
+        ]));
+        const inventory = await inspectPackageArtifact(join(packageOutput, filename));
+        if ("expectedFileCount" in release) {
+          expect(inventory.fileCount).toBe(release.expectedFileCount);
+          expect(inventory.unpackedBytes).toBe(release.expectedUnpackedBytes);
+        } else {
+          expect(inventory.fileCount).toBeGreaterThan(0);
+          expect(inventory.unpackedBytes).toBeGreaterThan(0);
+        }
 
-      await run([
-        process.execPath,
-        "--no-env-file",
-        "--config=/dev/null",
-        "run",
-        fileURLToPath(packageSmokeUrl),
-        "--archive",
-        join(packageOutput, filename),
-        "--pack-json",
-        join(packageOutput, "npm-pack.json"),
-      ], sourceTree);
-      const finalSourceEntries = await readdir(sourceTree);
-      expect(finalSourceEntries).not.toContain("scripts");
-      expect(finalSourceEntries).not.toContain("node_modules");
-    } finally {
-      await rm(work, { force: true, recursive: true });
-    }
-  }, 180_000);
+        await run([
+          process.execPath,
+          "--no-env-file",
+          "--config=/dev/null",
+          "run",
+          fileURLToPath(packageSmokeUrl),
+          "--archive",
+          join(packageOutput, filename),
+          "--pack-json",
+          join(packageOutput, "npm-pack.json"),
+        ], sourceTree);
+        const finalSourceEntries = await readdir(sourceTree);
+        expect(finalSourceEntries).not.toContain("scripts");
+        expect(finalSourceEntries).not.toContain("node_modules");
+      } finally {
+        await rm(work, { force: true, recursive: true });
+      }
+    },
+    180_000,
+  );
 });

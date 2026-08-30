@@ -994,6 +994,8 @@ function verificationProcessGroupExists(processId) {
   } catch (error) {
     if (error.code === "ESRCH")
       return false;
+    if (error.code === "EPERM")
+      return true;
     throw error;
   }
 }
@@ -3929,28 +3931,29 @@ function captureStream(stream, maximumLength = LOG_LIMIT) {
 function signalProcessGroup(process_, signal) {
   try {
     process2.kill(-process_.pid, signal);
-    return true;
+    return;
   } catch (error) {
     if (!isRecord2(error) || error.code !== "ESRCH")
       throw error;
     if (process_.exitCode === null)
       process_.kill(signal);
-    return false;
   }
 }
-function processGroupExists(processId) {
+function processGroupMayExist(processId) {
   try {
     process2.kill(-processId, 0);
     return true;
   } catch (error) {
     if (isRecord2(error) && error.code === "ESRCH")
       return false;
+    if (isRecord2(error) && error.code === "EPERM")
+      return true;
     throw error;
   }
 }
 async function waitForProcessGroupExit(processId, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
-  while (processGroupExists(processId)) {
+  while (processGroupMayExist(processId)) {
     if (Date.now() >= deadline) {
       throw new Error(`Bombadil process group ${String(processId)} survived cleanup`);
     }
@@ -3968,28 +3971,11 @@ async function waitForBombadilLeaderExit(process_, timeoutMs) {
     throw new Error(`Bombadil process ${String(process_.pid)} survived cleanup`);
   }
 }
-async function terminateProcessGroup(process_, graceMs) {
-  signalProcessGroup(process_, "SIGTERM");
-  await Promise.race([
-    process_.exited.then(() => {
-      return;
-    }),
-    Bun.sleep(graceMs)
-  ]);
-  if (processGroupExists(process_.pid))
-    signalProcessGroup(process_, "SIGKILL");
-  await waitForBombadilLeaderExit(process_, graceMs);
-  await waitForProcessGroupExit(process_.pid, graceMs);
-}
 async function settleBombadilProcessGroup(options) {
   try {
-    if (options.immediate) {
-      signalProcessGroup(options.process, "SIGKILL");
-      await waitForBombadilLeaderExit(options.process, options.timeoutMs);
-      await waitForProcessGroupExit(options.process.pid, options.timeoutMs);
-      return;
-    }
-    await terminateProcessGroup(options.process, options.timeoutMs);
+    signalProcessGroup(options.process, "SIGKILL");
+    await waitForBombadilLeaderExit(options.process, options.timeoutMs);
+    await waitForProcessGroupExit(options.process.pid, options.timeoutMs);
   } catch (error) {
     throw new BombadilWriterSettlementError(`Bombadil process group ${String(options.process.pid)} did not settle safely`, error);
   }
@@ -4063,7 +4049,6 @@ async function runBombadilNativeProcess(invocation) {
     const terminationGraceMs = invocation.terminationGraceMs ?? PROCESS_TERMINATION_GRACE_MS;
     try {
       await settleBombadilProcessGroup({
-        immediate: true,
         process: process_,
         timeoutMs: terminationGraceMs
       });
@@ -4389,12 +4374,19 @@ async function runDirectBombadilFuzzMatrix(campaignsInput, input = process2.argv
       }
     } catch (error) {
       const boundedCampaigns = campaignsInput.slice(0, MAX_MATRIX_CAMPAIGNS);
-      const entries2 = boundedCampaigns.map((campaign, index) => ({
-        campaignId: isBoundedArtifactIdentifier(campaign.id) ? campaign.id : null,
-        index,
-        receipt: null,
-        status: "rejected"
-      }));
+      const retainedCampaignIds = new Set;
+      const entries2 = boundedCampaigns.map((campaign, index) => {
+        const boundedCampaignId = isBoundedArtifactIdentifier(campaign.id) ? campaign.id : null;
+        const campaignId = boundedCampaignId !== null && !retainedCampaignIds.has(boundedCampaignId) ? boundedCampaignId : null;
+        if (campaignId !== null)
+          retainedCampaignIds.add(campaignId);
+        return {
+          campaignId,
+          index,
+          receipt: null,
+          status: "rejected"
+        };
+      });
       return await publishFailureAndThrow(error, async () => {
         await publishMatrixUpload({
           abortSignal: matrixAbortController.signal,

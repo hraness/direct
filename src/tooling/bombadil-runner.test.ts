@@ -389,6 +389,47 @@ async function rejection(promise: Promise<unknown>): Promise<Error> {
   throw new Error("Expected the operation to reject");
 }
 
+type ProcessKill = (
+  processId: number,
+  signal?: NodeJS.Signals | number,
+) => boolean;
+
+async function withProcessKillAdapter<Value>(
+  createAdapter: (kill: ProcessKill) => ProcessKill,
+  operation: () => Promise<Value>,
+): Promise<Value> {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "kill");
+  if (descriptor === undefined) throw new Error("process.kill descriptor is unavailable");
+  const originalKill = process.kill.bind(process);
+  const kill: ProcessKill = (processId, signal) => originalKill(processId, signal);
+  Object.defineProperty(process, "kill", {
+    ...descriptor,
+    value: createAdapter(kill),
+  });
+  try {
+    return await operation();
+  } finally {
+    Object.defineProperty(process, "kill", descriptor);
+  }
+}
+
+async function waitForMissingProcessGroup(processGroupId: number): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  for (;;) {
+    try {
+      process.kill(-processGroupId, 0);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ESRCH") return;
+      if (code !== "EPERM") throw error;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`Process group ${String(processGroupId)} survived its test cleanup`);
+    }
+    await Bun.sleep(10);
+  }
+}
+
 type ControllableSignal = Parameters<
   DirectBombadilRunnerDependencies["signalController"]["forward"]
 >[0];
@@ -979,18 +1020,23 @@ describe("Direct Bombadil campaign matrix", () => {
       { id: "same", config },
       { id: "same", config: { ...config, artifactName: "other" } },
     ], { arguments: [], artifactRun: duplicatePlan }));
-    const duplicateReceipt = JSON.parse(await readFile(join(
+    const duplicateReceipt = parseDirectBombadilMatrixReceipt(JSON.parse(await readFile(join(
       repositoryRoot,
       "artifacts",
       "direct-bombadil-upload",
       duplicatePlan.runId,
       "receipt.json",
-    ), "utf8")) as Record<string, unknown>;
-    expect(duplicateReceipt).toMatchObject({
+    ), "utf8")));
+    expect(duplicateReceipt.ok).toBeTrue();
+    if (!duplicateReceipt.ok) throw new Error("Expected a parser-valid rejected matrix receipt");
+    expect(duplicateReceipt.value).toMatchObject({
       schema: "direct.bombadil-matrix-receipt/v1",
       failureCode: "configuration-rejected",
       status: "failed",
-      campaigns: [{ status: "rejected" }, { status: "rejected" }],
+      campaigns: [
+        { campaignId: "same", index: 0, receipt: null, status: "rejected" },
+        { campaignId: null, index: 1, receipt: null, status: "rejected" },
+      ],
     });
 
     const runtime = dependencies();
@@ -2414,6 +2460,117 @@ describe("Direct Bombadil process lifecycle", () => {
     expect(result).toMatchObject({ exitCode: 0, termination: null });
     expect(result.stdout).toContain("normal leader output");
     expect(Date.now() - startedAt).toBeLessThan(3_500);
+  }, 10_000);
+
+  test("retries a transient EPERM process-group probe without signaling again", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-probe-eperm-"));
+    temporaryDirectories.push(directory);
+    const childSource = [
+      "process.on('SIGTERM', () => {});",
+      "setTimeout(() => process.exit(0), 5000);",
+      "setInterval(() => {}, 1000);",
+    ].join(" ");
+    const leaderSource = [
+      "const { spawn } = require('node:child_process');",
+      `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childSource)}], { stdio: ['ignore', 'inherit', 'inherit'] });`,
+      "child.unref();",
+      "console.log('normal leader output');",
+    ].join(" ");
+    let processGroupId: number | null = null;
+    let processGroupKills = 0;
+    let processGroupProbes = 0;
+    const result = await withProcessKillAdapter(
+      (kill) => (processId, signal) => {
+        if (processId < 0 && signal === "SIGKILL") {
+          processGroupId = -processId;
+          processGroupKills += 1;
+        }
+        if (
+          processGroupId !== null
+          && processId === -processGroupId
+          && signal === 0
+        ) {
+          processGroupProbes += 1;
+          if (processGroupProbes === 1) {
+            throw Object.assign(new Error("synthetic transient process-group probe"), {
+              code: "EPERM",
+            });
+          }
+        }
+        return kill(processId, signal);
+      },
+      async () => await runBombadilNativeProcess({
+        command: [process.execPath, "-e", leaderSource],
+        cwd: directory,
+        outputPath: directory,
+        targetUrl: "http://127.0.0.1:4919/",
+        terminationGraceMs: 100,
+        wallClockTimeoutMs: 5_000,
+      }),
+    );
+    expect(result).toMatchObject({ exitCode: 0, termination: null });
+    expect(result.stdout).toContain("normal leader output");
+    expect(processGroupKills).toBe(1);
+    expect(processGroupProbes).toBeGreaterThanOrEqual(2);
+  }, 10_000);
+
+  test("fails closed after a persistent EPERM process-group probe", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-probe-eperm-timeout-"));
+    temporaryDirectories.push(directory);
+    const processIdPath = join(directory, "process.pid");
+    const controller = new AbortController();
+    let processGroupId: number | null = null;
+    let processGroupKills = 0;
+    let processGroupProbes = 0;
+    const failure = await withProcessKillAdapter(
+      (kill) => (processId, signal) => {
+        if (processId < 0 && signal === "SIGKILL") {
+          processGroupId = -processId;
+          processGroupKills += 1;
+        }
+        if (
+          processGroupId !== null
+          && processId === -processGroupId
+          && signal === 0
+        ) {
+          processGroupProbes += 1;
+          throw Object.assign(new Error("synthetic persistent process-group probe"), {
+            code: "EPERM",
+          });
+        }
+        return kill(processId, signal);
+      },
+      async () => {
+        const running = runBombadilNativeProcess({
+          abortSignal: controller.signal,
+          command: [
+            process.execPath,
+            "-e",
+            `require("node:fs").writeFileSync(${JSON.stringify(processIdPath)}, String(process.pid)); setTimeout(() => process.exit(0), 5000); setInterval(() => {}, 1000);`,
+          ],
+          cwd: directory,
+          outputPath: directory,
+          targetUrl: "http://127.0.0.1:4919/",
+          terminationGraceMs: 50,
+          wallClockTimeoutMs: 5_000,
+        });
+        for (let attempt = 0; attempt < 100 && !(await Bun.file(processIdPath).exists()); attempt += 1) {
+          await Bun.sleep(10);
+        }
+        expect(await Bun.file(processIdPath).exists()).toBeTrue();
+        controller.abort();
+        return await rejection(running);
+      },
+    );
+    expect(failure.name).toBe("BombadilWriterSettlementError");
+    expect(failure.message).toContain("did not settle safely");
+    expect(processGroupKills).toBe(1);
+    expect(processGroupProbes).toBeGreaterThanOrEqual(2);
+    const settledProcessGroupId = processGroupId;
+    if (settledProcessGroupId === null) {
+      throw new Error("Expected an owned process-group signal");
+    }
+    await waitForMissingProcessGroup(settledProcessGroupId);
   }, 10_000);
 
   test("kills an uncooperative native child after the outer wall-clock limit", async () => {

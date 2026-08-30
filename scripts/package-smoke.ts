@@ -332,7 +332,7 @@ type BombadilFeatureProfile = "artifact-delivery" | "baseline" | "matrix";
 
 function selectBombadilFeatureProfile(version: string): BombadilFeatureProfile {
   if (Bun.semver.order(version, "0.7.9") >= 0) return "artifact-delivery";
-  if (Bun.semver.order(version, "0.7.6") >= 0) return "matrix";
+  if (Bun.semver.order(version, "0.7.7") >= 0) return "matrix";
   return "baseline";
 }
 

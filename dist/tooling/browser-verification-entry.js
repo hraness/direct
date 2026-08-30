@@ -1300,6 +1300,8 @@ function verificationProcessGroupExists(processId) {
   } catch (error) {
     if (error.code === "ESRCH")
       return false;
+    if (error.code === "EPERM")
+      return true;
     throw error;
   }
 }
