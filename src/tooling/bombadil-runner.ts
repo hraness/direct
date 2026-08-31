@@ -171,6 +171,7 @@ const PROCESS_TERMINATION_GRACE_MS = 5_000;
 const MIN_PROCESS_OUTPUT_DRAIN_MS = 500;
 const SERVER_OUTPUT_TIMEOUT_MS = 3_000;
 const ARTIFACT_MONITOR_INTERVAL_MS = 100;
+const MAX_LIVE_CHROME_RENAME_RETRIES = 4;
 const DEFAULT_ARTIFACT_MAX_ENTRIES = 4_096;
 const DEFAULT_ARTIFACT_MAX_FILES = 2_048;
 const DEFAULT_ARTIFACT_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
@@ -728,8 +729,14 @@ interface LiveChromeDownloadIdentity {
 }
 
 interface LiveChromeDownloadScanContext {
+  readonly currentAccountedFiles: Map<string, number>;
+  readonly currentDirectories: Set<string>;
+  readonly cleanBaselineEstablished: boolean;
+  readonly currentPartials: Set<string>;
+  readonly currentUnobservedCompletions: Set<string>;
   readonly next: Map<string, LiveChromeDownloadIdentity>;
   readonly previous: ReadonlyMap<string, LiveChromeDownloadIdentity>;
+  readonly previousHasPartial: boolean;
 }
 
 interface ArtifactUploadSessionBase {
@@ -775,7 +782,15 @@ class BombadilArtifactPolicyError extends Error {
 }
 
 class LiveChromeDownloadRenameRetry extends Error {
-  public constructor() {
+  public constructor(
+    public readonly completion: Readonly<{
+      device: bigint;
+      inode: bigint;
+      runId: string;
+      size: number;
+      unobserved: boolean;
+    }>,
+  ) {
     super("Chrome download renamed during live artifact inspection");
     this.name = "LiveChromeDownloadRenameRetry";
   }
@@ -1806,6 +1821,44 @@ function sameLiveChromeDownloadIdentity(
   return left.device === right.device && left.inode === right.inode;
 }
 
+function requireMatchingLiveChromeDownloadIdentity(
+  existing: Readonly<{ readonly device: bigint; readonly inode: bigint }> | undefined,
+  completion: Readonly<{ readonly device: bigint; readonly inode: bigint }>,
+  relativePath: string,
+): void {
+  if (existing === undefined || sameLiveChromeDownloadIdentity(existing, completion)) return;
+  throw new BombadilArtifactPolicyError(
+    `Bombadil Chrome download completion ${relativePath} changed inode identity`,
+  );
+}
+
+/** @internal Exercise scan-atomic completion identity reconciliation. */
+export function requireMatchingLiveChromeDownloadIdentityForTest(options: {
+  readonly completion: Readonly<{ readonly device: bigint; readonly inode: bigint }>;
+  readonly existing?: Readonly<{ readonly device: bigint; readonly inode: bigint }>;
+  readonly relativePath: string;
+}): void {
+  requireMatchingLiveChromeDownloadIdentity(
+    options.existing,
+    options.completion,
+    options.relativePath,
+  );
+}
+
+function mayAdmitUnobservedChromeDownloadCompletion(
+  context: LiveChromeDownloadScanContext,
+  runId: string,
+): boolean {
+  if (
+    !context.cleanBaselineEstablished
+    || context.previousHasPartial
+  ) {
+    return false;
+  }
+  context.currentUnobservedCompletions.add(runId);
+  return true;
+}
+
 function sameBigIntFileMetadata(
   left: Readonly<{ dev: bigint; ino: bigint; size: bigint; ctimeNs: bigint; mtimeNs: bigint }>,
   right: Readonly<{ dev: bigint; ino: bigint; size: bigint; ctimeNs: bigint; mtimeNs: bigint }>,
@@ -2130,20 +2183,29 @@ async function scanBombadilArtifactTree(options: {
                 `Bombadil artifact ${completionRelativePath} exceeds the per-file byte quota`,
               );
             }
-            if (previous === undefined) {
+            if (
+              previous === undefined
+              && !mayAdmitUnobservedChromeDownloadCompletion(
+                options.liveChromeDownloadScan,
+                partialRunId,
+              )
+            ) {
               throw new BombadilArtifactPolicyError(
                 `Bombadil Chrome download completion ${completionRelativePath} lacks live partial provenance`,
               );
             }
-            if (previous.phase !== "partial") {
+            if (previous !== undefined && previous.phase !== "partial") {
               throw new BombadilArtifactPolicyError(
                 `Bombadil Chrome download ${completionRelativePath} reversed its live lifecycle`,
               );
             }
-            if (!sameLiveChromeDownloadIdentity(previous, {
-              device: completionMetadata.dev,
-              inode: completionMetadata.ino,
-            })) {
+            if (
+              previous !== undefined
+              && !sameLiveChromeDownloadIdentity(previous, {
+                device: completionMetadata.dev,
+                inode: completionMetadata.ino,
+              })
+            ) {
               throw new BombadilArtifactPolicyError(
                 `Bombadil Chrome download completion ${completionRelativePath} changed inode identity`,
               );
@@ -2152,7 +2214,13 @@ async function scanBombadilArtifactTree(options: {
             // this incoherent scan after proving the exact sibling rename;
             // the next whole scan applies all aggregate quotas and advances
             // the monitor-owned lineage.
-            throw new LiveChromeDownloadRenameRetry();
+            throw new LiveChromeDownloadRenameRetry({
+              device: completionMetadata.dev,
+              inode: completionMetadata.ino,
+              runId: partialRunId,
+              size: completionSize,
+              unobserved: previous === undefined,
+            });
           }
           if (metadata.isSymbolicLink()) {
             throw new BombadilArtifactPolicyError(
@@ -2178,6 +2246,7 @@ async function scanBombadilArtifactTree(options: {
               );
             }
             directories.push(relativePath);
+            options.liveChromeDownloadScan?.currentDirectories.add(relativePath);
             pending.push({ absolutePath, relativePath });
             continue;
           }
@@ -2210,6 +2279,9 @@ async function scanBombadilArtifactTree(options: {
                 );
               }
             }
+            options.liveChromeDownloadScan?.currentPartials.add(
+              liveChromeDownloadPartial,
+            );
             liveRunId = liveChromeDownloadPartial;
           } else if (
             options.liveChromeDownloadScan !== undefined
@@ -2218,12 +2290,21 @@ async function scanBombadilArtifactTree(options: {
             const previous = options.liveChromeDownloadScan.previous.get(
               liveChromeDownloadCompletion,
             );
-            if (previous === undefined) {
+            if (
+              previous === undefined
+              && !mayAdmitUnobservedChromeDownloadCompletion(
+                options.liveChromeDownloadScan,
+                liveChromeDownloadCompletion,
+              )
+            ) {
               throw new BombadilArtifactPolicyError(
                 `Bombadil Chrome download completion ${relativePath} lacks live partial provenance`,
               );
             }
-            if (!sameLiveChromeDownloadIdentity(previous, liveIdentity)) {
+            if (
+              previous !== undefined
+              && !sameLiveChromeDownloadIdentity(previous, liveIdentity)
+            ) {
               throw new BombadilArtifactPolicyError(
                 `Bombadil Chrome download completion ${relativePath} changed inode identity`,
               );
@@ -2251,6 +2332,12 @@ async function scanBombadilArtifactTree(options: {
           if (!Number.isSafeInteger(totalBytes) || totalBytes > options.policy.maxTotalBytes) {
             throw new BombadilArtifactPolicyError(
               "Bombadil aggregate artifact byte quota was exceeded",
+            );
+          }
+          if (options.liveChromeDownloadScan !== undefined) {
+            options.liveChromeDownloadScan.currentAccountedFiles.set(
+              relativePath,
+              fileSize,
             );
           }
           files.push(options.hashFiles
@@ -2301,6 +2388,15 @@ async function scanBombadilArtifactTree(options: {
           );
     }
   }
+  if (
+    options.liveChromeDownloadScan !== undefined
+    && options.liveChromeDownloadScan.currentPartials.size > 0
+    && options.liveChromeDownloadScan.currentUnobservedCompletions.size > 0
+  ) {
+    throw new BombadilArtifactPolicyError(
+      "Bombadil Chrome download completion lacks live partial provenance across the current scan",
+    );
+  }
   let finalRootMetadata: BigIntStats;
   try {
     finalRootMetadata = await lstat(options.root, { bigint: true });
@@ -2336,6 +2432,11 @@ async function scanBombadilArtifactTree(options: {
 }
 
 async function scanLiveBombadilArtifactTree(options: {
+  readonly abortSignal?: AbortSignal;
+  readonly afterLiveChromeDownloadRenameRetry?: (
+    absolutePath: string,
+  ) => Promise<void> | void;
+  readonly cleanBaselineEstablished: boolean;
   readonly afterEntryInspect?: (absolutePath: string) => Promise<void> | void;
   readonly beforeDirectoryOpen?: (absolutePath: string) => Promise<void> | void;
   readonly beforeEntryInspect?: (absolutePath: string) => Promise<void> | void;
@@ -2346,32 +2447,186 @@ async function scanLiveBombadilArtifactTree(options: {
   readonly policy: ValidatedArtifactPolicy;
   readonly previous: ReadonlyMap<string, LiveChromeDownloadIdentity>;
 }): Promise<ReadonlyMap<string, LiveChromeDownloadIdentity>> {
-  const next = new Map<string, LiveChromeDownloadIdentity>(options.previous);
-  await scanBombadilArtifactTree({
-    ...(options.afterEntryInspect === undefined
-      ? {}
-      : { afterEntryInspect: options.afterEntryInspect }),
-    allowTransientEntryAbsence: true,
-    allowLiveChromeDownloadTransients: true,
-    ...(options.beforeDirectoryOpen === undefined
-      ? {}
-      : { beforeDirectoryOpen: options.beforeDirectoryOpen }),
-    ...(options.beforeEntryInspect === undefined
-      ? {}
-      : { beforeEntryInspect: options.beforeEntryInspect }),
-    ...(options.beforeLiveChromeDownloadCompletionProbe === undefined
-      ? {}
-      : {
-          beforeLiveChromeDownloadCompletionProbe:
-            options.beforeLiveChromeDownloadCompletionProbe,
-        }),
-    hashFiles: false,
-    liveChromeDownloadScan: { next, previous: options.previous },
-    policy: options.policy,
-    root: options.outputPath,
-    rootMayBeAbsent: true,
-  });
-  return next;
+  const carriedCompletions = new Map<string, Readonly<{
+    device: bigint;
+    inode: bigint;
+    size: number;
+    unobserved: boolean;
+  }>>();
+  const carriedDirectories = new Set<string>();
+  const carriedFiles = new Map<string, number>();
+  let previous = options.previous;
+  for (let retryCount = 0; retryCount < MAX_LIVE_CHROME_RENAME_RETRIES; retryCount += 1) {
+    if (bombadilAbortRequested(options.abortSignal)) return previous;
+    const currentPartials = new Set<string>();
+    const currentUnobservedCompletions = new Set<string>();
+    const currentAccountedFiles = new Map<string, number>();
+    const currentDirectories = new Set<string>();
+    const next = new Map<string, LiveChromeDownloadIdentity>(previous);
+    let inventory: ArtifactInventory;
+    try {
+      inventory = await scanBombadilArtifactTree({
+        ...(options.afterEntryInspect === undefined
+          ? {}
+          : { afterEntryInspect: options.afterEntryInspect }),
+        allowTransientEntryAbsence: true,
+        allowLiveChromeDownloadTransients: true,
+        ...(options.beforeDirectoryOpen === undefined
+          ? {}
+          : { beforeDirectoryOpen: options.beforeDirectoryOpen }),
+        ...(options.beforeEntryInspect === undefined
+          ? {}
+          : { beforeEntryInspect: options.beforeEntryInspect }),
+        ...(options.beforeLiveChromeDownloadCompletionProbe === undefined
+          ? {}
+          : {
+              beforeLiveChromeDownloadCompletionProbe:
+                options.beforeLiveChromeDownloadCompletionProbe,
+            }),
+        hashFiles: false,
+        liveChromeDownloadScan: {
+          currentAccountedFiles,
+          currentDirectories,
+          cleanBaselineEstablished: options.cleanBaselineEstablished,
+          currentPartials,
+          currentUnobservedCompletions,
+          next,
+          previous,
+          previousHasPartial: [...previous.values()]
+            .some((identity) => identity.phase === "partial"),
+        },
+        policy: options.policy,
+        root: options.outputPath,
+        rootMayBeAbsent: true,
+      });
+    } catch (error) {
+      if (!(error instanceof LiveChromeDownloadRenameRetry)) throw error;
+      const observedOtherUnprovenCompletion = [...currentUnobservedCompletions]
+        .some((runId) => runId !== error.completion.runId);
+      if (
+        (error.completion.unobserved && currentPartials.size > 0)
+        || observedOtherUnprovenCompletion
+      ) {
+        throw new BombadilArtifactPolicyError(
+          "Bombadil Chrome download completion lacks live partial provenance across the current scan",
+        );
+      }
+      for (const directory of currentDirectories) carriedDirectories.add(directory);
+      for (const [relativePath, size] of currentAccountedFiles) {
+        carriedFiles.set(
+          relativePath,
+          Math.max(carriedFiles.get(relativePath) ?? 0, size),
+        );
+      }
+      const retained = carriedCompletions.get(error.completion.runId);
+      const currentIdentity = next.get(error.completion.runId);
+      requireMatchingLiveChromeDownloadIdentity(
+        currentIdentity,
+        error.completion,
+        `downloads/${error.completion.runId}`,
+      );
+      requireMatchingLiveChromeDownloadIdentity(
+        retained,
+        error.completion,
+        `downloads/${error.completion.runId}`,
+      );
+      if (
+        retained === undefined
+        && carriedCompletions.size >= options.policy.maxFiles
+      ) {
+        throw new BombadilArtifactPolicyError(
+          "Bombadil live download provenance quota was exceeded",
+        );
+      }
+      carriedCompletions.set(error.completion.runId, {
+        device: error.completion.device,
+        inode: error.completion.inode,
+        size: Math.max(retained?.size ?? 0, error.completion.size),
+        unobserved: retained?.unobserved === true || error.completion.unobserved,
+      });
+      const completionRelativePath = `downloads/${error.completion.runId}`;
+      carriedFiles.set(
+        completionRelativePath,
+        Math.max(carriedFiles.get(completionRelativePath) ?? 0, error.completion.size),
+      );
+      const carriedTotalBytes = [...carriedFiles.values()]
+        .reduce((total, size) => total + size, 0);
+      if (carriedFiles.size > options.policy.maxFiles) {
+        throw new BombadilArtifactPolicyError("Bombadil artifact file quota was exceeded");
+      }
+      if (carriedFiles.size + carriedDirectories.size > options.policy.maxEntries) {
+        throw new BombadilArtifactPolicyError("Bombadil artifact entry quota was exceeded");
+      }
+      if (carriedTotalBytes > options.policy.maxTotalBytes) {
+        throw new BombadilArtifactPolicyError(
+          "Bombadil aggregate artifact byte quota was exceeded",
+        );
+      }
+      const retryPrevious = new Map(previous);
+      if (
+        !retryPrevious.has(error.completion.runId)
+        && retryPrevious.size >= options.policy.maxFiles
+      ) {
+        throw new BombadilArtifactPolicyError(
+          "Bombadil live download provenance quota was exceeded",
+        );
+      }
+      retryPrevious.set(error.completion.runId, {
+        device: error.completion.device,
+        inode: error.completion.inode,
+        phase: "complete",
+      });
+      previous = retryPrevious;
+      await options.afterLiveChromeDownloadRenameRetry?.(
+        join(options.outputPath, "downloads", error.completion.runId),
+      );
+      if (bombadilAbortRequested(options.abortSignal)) return previous;
+      continue;
+    }
+    if (
+      currentPartials.size > 0
+      && [...carriedCompletions.values()].some((completion) => completion.unobserved)
+    ) {
+      throw new BombadilArtifactPolicyError(
+        "Bombadil Chrome download completion lacks live partial provenance across the current scan",
+      );
+    }
+    let absentCarriedFileCount = 0;
+    let absentCarriedEntryCount = 0;
+    let absentCarriedTotalBytes = 0;
+    const inventoryFilesByPath = new Map(
+      inventory.files.map((file) => [file.relativePath, file.size] as const),
+    );
+    const inventoryDirectories = new Set(inventory.directories);
+    for (const [relativePath, carriedSize] of carriedFiles) {
+      const retainedSize = inventoryFilesByPath.get(relativePath);
+      if (retainedSize === undefined) {
+        absentCarriedFileCount += 1;
+        absentCarriedEntryCount += 1;
+        absentCarriedTotalBytes += carriedSize;
+      } else {
+        absentCarriedTotalBytes += Math.max(0, carriedSize - retainedSize);
+      }
+    }
+    for (const directory of carriedDirectories) {
+      if (!inventoryDirectories.has(directory)) absentCarriedEntryCount += 1;
+    }
+    if (inventory.fileCount + absentCarriedFileCount > options.policy.maxFiles) {
+      throw new BombadilArtifactPolicyError("Bombadil artifact file quota was exceeded");
+    }
+    if (inventory.entryCount + absentCarriedEntryCount > options.policy.maxEntries) {
+      throw new BombadilArtifactPolicyError("Bombadil artifact entry quota was exceeded");
+    }
+    if (inventory.totalBytes + absentCarriedTotalBytes > options.policy.maxTotalBytes) {
+      throw new BombadilArtifactPolicyError(
+        "Bombadil aggregate artifact byte quota was exceeded",
+      );
+    }
+    return next;
+  }
+  throw new BombadilArtifactPolicyError(
+    "Bombadil Chrome download rename activity did not settle safely",
+  );
 }
 
 /** @internal Exercise transient versus authoritative artifact scans in package tests. */
@@ -2392,9 +2647,14 @@ export async function inspectBombadilArtifactTreeForTest(options: {
 
 /** @internal Exercise successive live-monitor scans without exposing provenance. */
 export async function monitorBombadilArtifactTreeForTest(options: {
+  readonly abortSignal?: AbortSignal;
+  readonly cleanBaselineEstablished?: boolean;
   readonly policy: DirectBombadilArtifactPolicy;
   readonly root: string;
   readonly scans: readonly {
+    readonly afterLiveChromeDownloadRenameRetry?: (
+      absolutePath: string,
+    ) => Promise<void> | void;
     readonly afterEntryInspect?: (absolutePath: string) => Promise<void> | void;
     readonly beforeDirectoryOpen?: (absolutePath: string) => Promise<void> | void;
     readonly beforeEntryInspect?: (absolutePath: string) => Promise<void> | void;
@@ -2406,10 +2666,33 @@ export async function monitorBombadilArtifactTreeForTest(options: {
 }): Promise<void> {
   const policy = validateArtifactPolicy(options.policy);
   let provenance: ReadonlyMap<string, LiveChromeDownloadIdentity> = new Map();
+  if (options.cleanBaselineEstablished === true) {
+    const baseline = await scanBombadilArtifactTree({
+      hashFiles: false,
+      policy,
+      root: options.root,
+      rootMayBeAbsent: true,
+    });
+    if (baseline.entryCount !== 0) {
+      throw new BombadilArtifactPolicyError(
+        "Bombadil output must be absent or empty before the live artifact epoch",
+      );
+    }
+  }
   for (const scan of options.scans) {
+    if (options.abortSignal?.aborted === true) break;
     await scan.beforeScan?.();
     try {
       provenance = await scanLiveBombadilArtifactTree({
+        ...(options.abortSignal === undefined
+          ? {}
+          : { abortSignal: options.abortSignal }),
+        ...(scan.afterLiveChromeDownloadRenameRetry === undefined
+          ? {}
+          : {
+              afterLiveChromeDownloadRenameRetry:
+                scan.afterLiveChromeDownloadRenameRetry,
+            }),
         ...(scan.afterEntryInspect === undefined
           ? {}
           : { afterEntryInspect: scan.afterEntryInspect }),
@@ -2428,6 +2711,7 @@ export async function monitorBombadilArtifactTreeForTest(options: {
         outputPath: options.root,
         policy,
         previous: provenance,
+        cleanBaselineEstablished: options.cleanBaselineEstablished === true,
       });
     } catch (error) {
       if (
@@ -4789,6 +5073,32 @@ async function settleBombadilProcessGroup(options: {
   }
 }
 
+async function establishCleanBombadilArtifactBaseline(options: {
+  readonly beforeInspect?: () => Promise<void> | void;
+  readonly outputPath: string;
+  readonly policy: ValidatedArtifactPolicy;
+}): Promise<void> {
+  let baseline: ArtifactInventory;
+  try {
+    await options.beforeInspect?.();
+    baseline = await scanBombadilArtifactTree({
+      hashFiles: false,
+      policy: options.policy,
+      root: options.outputPath,
+      rootMayBeAbsent: true,
+    });
+  } catch (error) {
+    throw new BombadilArtifactPolicyError(
+      `Bombadil output must be absent or empty before the live artifact epoch: ${renderUnknown(error)}`,
+    );
+  }
+  if (baseline.entryCount !== 0) {
+    throw new BombadilArtifactPolicyError(
+      "Bombadil output must be absent or empty before the live artifact epoch",
+    );
+  }
+}
+
 async function monitorBombadilArtifactTree(options: {
   readonly abortSignal: AbortSignal;
   readonly outputPath: string;
@@ -4798,6 +5108,8 @@ async function monitorBombadilArtifactTree(options: {
   while (!options.abortSignal.aborted) {
     try {
       provenance = await scanLiveBombadilArtifactTree({
+        abortSignal: options.abortSignal,
+        cleanBaselineEstablished: true,
         outputPath: options.outputPath,
         policy: options.policy,
         previous: provenance,
@@ -4819,10 +5131,39 @@ async function monitorBombadilArtifactTree(options: {
   }
 }
 
-export async function runBombadilNativeProcess(
+function abortedBombadilProcessResult(): BombadilProcessResult {
+  return {
+    exitCode: 137,
+    stderr: "",
+    stdout: "",
+    termination: "aborted",
+  };
+}
+
+function bombadilAbortRequested(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
+async function runBombadilNativeProcessInternal(
   invocation: DirectBombadilInvocation,
+  hooks: Readonly<{
+    beforeArtifactBaselineInspect?: () => Promise<void> | void;
+  }> = {},
 ): Promise<BombadilProcessResult> {
   const artifactPolicy = validateArtifactPolicy(invocation.artifactPolicy);
+  if (bombadilAbortRequested(invocation.abortSignal)) {
+    return abortedBombadilProcessResult();
+  }
+  await establishCleanBombadilArtifactBaseline({
+    ...(hooks.beforeArtifactBaselineInspect === undefined
+      ? {}
+      : { beforeInspect: hooks.beforeArtifactBaselineInspect }),
+    outputPath: invocation.outputPath,
+    policy: artifactPolicy,
+  });
+  if (bombadilAbortRequested(invocation.abortSignal)) {
+    return abortedBombadilProcessResult();
+  }
   const childEnvironment: Record<string, string | undefined> = Object.fromEntries(
     Object.entries({
       ...process.env,
@@ -4942,6 +5283,22 @@ export async function runBombadilNativeProcess(
       invocation.abortSignal?.removeEventListener("abort", abortListener);
     }
   }
+}
+
+export async function runBombadilNativeProcess(
+  invocation: DirectBombadilInvocation,
+): Promise<BombadilProcessResult> {
+  return await runBombadilNativeProcessInternal(invocation);
+}
+
+/** @internal Exercise cancellation while the pre-spawn artifact baseline is pending. */
+export async function runBombadilNativeProcessForTest(
+  invocation: DirectBombadilInvocation,
+  hooks: Readonly<{
+    beforeArtifactBaselineInspect: () => Promise<void> | void;
+  }>,
+): Promise<BombadilProcessResult> {
+  return await runBombadilNativeProcessInternal(invocation, hooks);
 }
 
 const processEvents: EventEmitter = process;

@@ -1325,6 +1325,7 @@ var PROCESS_TERMINATION_GRACE_MS = 5000;
 var MIN_PROCESS_OUTPUT_DRAIN_MS = 500;
 var SERVER_OUTPUT_TIMEOUT_MS = 3000;
 var ARTIFACT_MONITOR_INTERVAL_MS = 100;
+var MAX_LIVE_CHROME_RENAME_RETRIES = 4;
 var DEFAULT_ARTIFACT_MAX_ENTRIES = 4096;
 var DEFAULT_ARTIFACT_MAX_FILES = 2048;
 var DEFAULT_ARTIFACT_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
@@ -1465,8 +1466,10 @@ class BombadilArtifactPolicyError extends Error {
 }
 
 class LiveChromeDownloadRenameRetry extends Error {
-  constructor() {
+  completion;
+  constructor(completion) {
     super("Chrome download renamed during live artifact inspection");
+    this.completion = completion;
     this.name = "LiveChromeDownloadRenameRetry";
   }
 }
@@ -2125,6 +2128,18 @@ function parseLiveChromeDownloadCompletion(relativePath) {
 function sameLiveChromeDownloadIdentity(left, right) {
   return left.device === right.device && left.inode === right.inode;
 }
+function requireMatchingLiveChromeDownloadIdentity(existing, completion, relativePath) {
+  if (existing === undefined || sameLiveChromeDownloadIdentity(existing, completion))
+    return;
+  throw new BombadilArtifactPolicyError(`Bombadil Chrome download completion ${relativePath} changed inode identity`);
+}
+function mayAdmitUnobservedChromeDownloadCompletion(context, runId) {
+  if (!context.cleanBaselineEstablished || context.previousHasPartial) {
+    return false;
+  }
+  context.currentUnobservedCompletions.add(runId);
+  return true;
+}
 function sameBigIntFileMetadata(left, right) {
   return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.ctimeNs === right.ctimeNs && left.mtimeNs === right.mtimeNs;
 }
@@ -2338,19 +2353,25 @@ async function scanBombadilArtifactTree(options) {
             if (!Number.isSafeInteger(completionSize) || completionSize > options.policy.maxFileBytes) {
               throw new BombadilArtifactPolicyError(`Bombadil artifact ${completionRelativePath} exceeds the per-file byte quota`);
             }
-            if (previous === undefined) {
+            if (previous === undefined && !mayAdmitUnobservedChromeDownloadCompletion(options.liveChromeDownloadScan, partialRunId)) {
               throw new BombadilArtifactPolicyError(`Bombadil Chrome download completion ${completionRelativePath} lacks live partial provenance`);
             }
-            if (previous.phase !== "partial") {
+            if (previous !== undefined && previous.phase !== "partial") {
               throw new BombadilArtifactPolicyError(`Bombadil Chrome download ${completionRelativePath} reversed its live lifecycle`);
             }
-            if (!sameLiveChromeDownloadIdentity(previous, {
+            if (previous !== undefined && !sameLiveChromeDownloadIdentity(previous, {
               device: completionMetadata.dev,
               inode: completionMetadata.ino
             })) {
               throw new BombadilArtifactPolicyError(`Bombadil Chrome download completion ${completionRelativePath} changed inode identity`);
             }
-            throw new LiveChromeDownloadRenameRetry;
+            throw new LiveChromeDownloadRenameRetry({
+              device: completionMetadata.dev,
+              inode: completionMetadata.ino,
+              runId: partialRunId,
+              size: completionSize,
+              unobserved: previous === undefined
+            });
           }
           if (metadata.isSymbolicLink()) {
             throw new BombadilArtifactPolicyError(`Bombadil emitted a symbolic link at ${relativePath}`);
@@ -2362,6 +2383,7 @@ async function scanBombadilArtifactTree(options) {
               throw new BombadilArtifactPolicyError(`Bombadil emitted a directory at Chrome download path ${relativePath}`);
             }
             directories.push(relativePath);
+            options.liveChromeDownloadScan?.currentDirectories.add(relativePath);
             pending.push({ absolutePath, relativePath });
             continue;
           }
@@ -2383,13 +2405,14 @@ async function scanBombadilArtifactTree(options) {
                 throw new BombadilArtifactPolicyError(`Bombadil Chrome download partial ${relativePath} changed inode identity`);
               }
             }
+            options.liveChromeDownloadScan?.currentPartials.add(liveChromeDownloadPartial);
             liveRunId = liveChromeDownloadPartial;
           } else if (options.liveChromeDownloadScan !== undefined && liveChromeDownloadCompletion !== null) {
             const previous = options.liveChromeDownloadScan.previous.get(liveChromeDownloadCompletion);
-            if (previous === undefined) {
+            if (previous === undefined && !mayAdmitUnobservedChromeDownloadCompletion(options.liveChromeDownloadScan, liveChromeDownloadCompletion)) {
               throw new BombadilArtifactPolicyError(`Bombadil Chrome download completion ${relativePath} lacks live partial provenance`);
             }
-            if (!sameLiveChromeDownloadIdentity(previous, liveIdentity)) {
+            if (previous !== undefined && !sameLiveChromeDownloadIdentity(previous, liveIdentity)) {
               throw new BombadilArtifactPolicyError(`Bombadil Chrome download completion ${relativePath} changed inode identity`);
             }
             liveRunId = liveChromeDownloadCompletion;
@@ -2407,6 +2430,9 @@ async function scanBombadilArtifactTree(options) {
           totalBytes += fileSize;
           if (!Number.isSafeInteger(totalBytes) || totalBytes > options.policy.maxTotalBytes) {
             throw new BombadilArtifactPolicyError("Bombadil aggregate artifact byte quota was exceeded");
+          }
+          if (options.liveChromeDownloadScan !== undefined) {
+            options.liveChromeDownloadScan.currentAccountedFiles.set(relativePath, fileSize);
           }
           files.push(options.hashFiles ? await hashBoundRegularFile({
             expected: metadata,
@@ -2445,6 +2471,9 @@ async function scanBombadilArtifactTree(options) {
       throw error instanceof BombadilArtifactPolicyError ? error : new BombadilArtifactPolicyError(`Bombadil artifact directory could not be inspected safely: ${renderUnknown(error)}`);
     }
   }
+  if (options.liveChromeDownloadScan !== undefined && options.liveChromeDownloadScan.currentPartials.size > 0 && options.liveChromeDownloadScan.currentUnobservedCompletions.size > 0) {
+    throw new BombadilArtifactPolicyError("Bombadil Chrome download completion lacks live partial provenance across the current scan");
+  }
   let finalRootMetadata;
   try {
     finalRootMetadata = await lstat(options.root, { bigint: true });
@@ -2472,23 +2501,130 @@ async function scanBombadilArtifactTree(options) {
   };
 }
 async function scanLiveBombadilArtifactTree(options) {
-  const next = new Map(options.previous);
-  await scanBombadilArtifactTree({
-    ...options.afterEntryInspect === undefined ? {} : { afterEntryInspect: options.afterEntryInspect },
-    allowTransientEntryAbsence: true,
-    allowLiveChromeDownloadTransients: true,
-    ...options.beforeDirectoryOpen === undefined ? {} : { beforeDirectoryOpen: options.beforeDirectoryOpen },
-    ...options.beforeEntryInspect === undefined ? {} : { beforeEntryInspect: options.beforeEntryInspect },
-    ...options.beforeLiveChromeDownloadCompletionProbe === undefined ? {} : {
-      beforeLiveChromeDownloadCompletionProbe: options.beforeLiveChromeDownloadCompletionProbe
-    },
-    hashFiles: false,
-    liveChromeDownloadScan: { next, previous: options.previous },
-    policy: options.policy,
-    root: options.outputPath,
-    rootMayBeAbsent: true
-  });
-  return next;
+  const carriedCompletions = new Map;
+  const carriedDirectories = new Set;
+  const carriedFiles = new Map;
+  let previous = options.previous;
+  for (let retryCount = 0;retryCount < MAX_LIVE_CHROME_RENAME_RETRIES; retryCount += 1) {
+    if (bombadilAbortRequested(options.abortSignal))
+      return previous;
+    const currentPartials = new Set;
+    const currentUnobservedCompletions = new Set;
+    const currentAccountedFiles = new Map;
+    const currentDirectories = new Set;
+    const next = new Map(previous);
+    let inventory;
+    try {
+      inventory = await scanBombadilArtifactTree({
+        ...options.afterEntryInspect === undefined ? {} : { afterEntryInspect: options.afterEntryInspect },
+        allowTransientEntryAbsence: true,
+        allowLiveChromeDownloadTransients: true,
+        ...options.beforeDirectoryOpen === undefined ? {} : { beforeDirectoryOpen: options.beforeDirectoryOpen },
+        ...options.beforeEntryInspect === undefined ? {} : { beforeEntryInspect: options.beforeEntryInspect },
+        ...options.beforeLiveChromeDownloadCompletionProbe === undefined ? {} : {
+          beforeLiveChromeDownloadCompletionProbe: options.beforeLiveChromeDownloadCompletionProbe
+        },
+        hashFiles: false,
+        liveChromeDownloadScan: {
+          currentAccountedFiles,
+          currentDirectories,
+          cleanBaselineEstablished: options.cleanBaselineEstablished,
+          currentPartials,
+          currentUnobservedCompletions,
+          next,
+          previous,
+          previousHasPartial: [...previous.values()].some((identity) => identity.phase === "partial")
+        },
+        policy: options.policy,
+        root: options.outputPath,
+        rootMayBeAbsent: true
+      });
+    } catch (error) {
+      if (!(error instanceof LiveChromeDownloadRenameRetry))
+        throw error;
+      const observedOtherUnprovenCompletion = [...currentUnobservedCompletions].some((runId) => runId !== error.completion.runId);
+      if (error.completion.unobserved && currentPartials.size > 0 || observedOtherUnprovenCompletion) {
+        throw new BombadilArtifactPolicyError("Bombadil Chrome download completion lacks live partial provenance across the current scan");
+      }
+      for (const directory of currentDirectories)
+        carriedDirectories.add(directory);
+      for (const [relativePath, size] of currentAccountedFiles) {
+        carriedFiles.set(relativePath, Math.max(carriedFiles.get(relativePath) ?? 0, size));
+      }
+      const retained = carriedCompletions.get(error.completion.runId);
+      const currentIdentity = next.get(error.completion.runId);
+      requireMatchingLiveChromeDownloadIdentity(currentIdentity, error.completion, `downloads/${error.completion.runId}`);
+      requireMatchingLiveChromeDownloadIdentity(retained, error.completion, `downloads/${error.completion.runId}`);
+      if (retained === undefined && carriedCompletions.size >= options.policy.maxFiles) {
+        throw new BombadilArtifactPolicyError("Bombadil live download provenance quota was exceeded");
+      }
+      carriedCompletions.set(error.completion.runId, {
+        device: error.completion.device,
+        inode: error.completion.inode,
+        size: Math.max(retained?.size ?? 0, error.completion.size),
+        unobserved: retained?.unobserved === true || error.completion.unobserved
+      });
+      const completionRelativePath = `downloads/${error.completion.runId}`;
+      carriedFiles.set(completionRelativePath, Math.max(carriedFiles.get(completionRelativePath) ?? 0, error.completion.size));
+      const carriedTotalBytes = [...carriedFiles.values()].reduce((total, size) => total + size, 0);
+      if (carriedFiles.size > options.policy.maxFiles) {
+        throw new BombadilArtifactPolicyError("Bombadil artifact file quota was exceeded");
+      }
+      if (carriedFiles.size + carriedDirectories.size > options.policy.maxEntries) {
+        throw new BombadilArtifactPolicyError("Bombadil artifact entry quota was exceeded");
+      }
+      if (carriedTotalBytes > options.policy.maxTotalBytes) {
+        throw new BombadilArtifactPolicyError("Bombadil aggregate artifact byte quota was exceeded");
+      }
+      const retryPrevious = new Map(previous);
+      if (!retryPrevious.has(error.completion.runId) && retryPrevious.size >= options.policy.maxFiles) {
+        throw new BombadilArtifactPolicyError("Bombadil live download provenance quota was exceeded");
+      }
+      retryPrevious.set(error.completion.runId, {
+        device: error.completion.device,
+        inode: error.completion.inode,
+        phase: "complete"
+      });
+      previous = retryPrevious;
+      await options.afterLiveChromeDownloadRenameRetry?.(join2(options.outputPath, "downloads", error.completion.runId));
+      if (bombadilAbortRequested(options.abortSignal))
+        return previous;
+      continue;
+    }
+    if (currentPartials.size > 0 && [...carriedCompletions.values()].some((completion) => completion.unobserved)) {
+      throw new BombadilArtifactPolicyError("Bombadil Chrome download completion lacks live partial provenance across the current scan");
+    }
+    let absentCarriedFileCount = 0;
+    let absentCarriedEntryCount = 0;
+    let absentCarriedTotalBytes = 0;
+    const inventoryFilesByPath = new Map(inventory.files.map((file) => [file.relativePath, file.size]));
+    const inventoryDirectories = new Set(inventory.directories);
+    for (const [relativePath, carriedSize] of carriedFiles) {
+      const retainedSize = inventoryFilesByPath.get(relativePath);
+      if (retainedSize === undefined) {
+        absentCarriedFileCount += 1;
+        absentCarriedEntryCount += 1;
+        absentCarriedTotalBytes += carriedSize;
+      } else {
+        absentCarriedTotalBytes += Math.max(0, carriedSize - retainedSize);
+      }
+    }
+    for (const directory of carriedDirectories) {
+      if (!inventoryDirectories.has(directory))
+        absentCarriedEntryCount += 1;
+    }
+    if (inventory.fileCount + absentCarriedFileCount > options.policy.maxFiles) {
+      throw new BombadilArtifactPolicyError("Bombadil artifact file quota was exceeded");
+    }
+    if (inventory.entryCount + absentCarriedEntryCount > options.policy.maxEntries) {
+      throw new BombadilArtifactPolicyError("Bombadil artifact entry quota was exceeded");
+    }
+    if (inventory.totalBytes + absentCarriedTotalBytes > options.policy.maxTotalBytes) {
+      throw new BombadilArtifactPolicyError("Bombadil aggregate artifact byte quota was exceeded");
+    }
+    return next;
+  }
+  throw new BombadilArtifactPolicyError("Bombadil Chrome download rename activity did not settle safely");
 }
 async function ensureSafeChildDirectories(root, parts) {
   await requireSafeDirectory(root, "Bombadil upload staging root");
@@ -4122,11 +4258,30 @@ async function settleBombadilProcessGroup(options) {
     throw new BombadilWriterSettlementError(`Bombadil process group ${String(options.process.pid)} did not settle safely`, error);
   }
 }
+async function establishCleanBombadilArtifactBaseline(options) {
+  let baseline;
+  try {
+    await options.beforeInspect?.();
+    baseline = await scanBombadilArtifactTree({
+      hashFiles: false,
+      policy: options.policy,
+      root: options.outputPath,
+      rootMayBeAbsent: true
+    });
+  } catch (error) {
+    throw new BombadilArtifactPolicyError(`Bombadil output must be absent or empty before the live artifact epoch: ${renderUnknown(error)}`);
+  }
+  if (baseline.entryCount !== 0) {
+    throw new BombadilArtifactPolicyError("Bombadil output must be absent or empty before the live artifact epoch");
+  }
+}
 async function monitorBombadilArtifactTree(options) {
   let provenance = new Map;
   while (!options.abortSignal.aborted) {
     try {
       provenance = await scanLiveBombadilArtifactTree({
+        abortSignal: options.abortSignal,
+        cleanBaselineEstablished: true,
         outputPath: options.outputPath,
         policy: options.policy,
         previous: provenance
@@ -4139,8 +4294,30 @@ async function monitorBombadilArtifactTree(options) {
     await Bun.sleep(ARTIFACT_MONITOR_INTERVAL_MS);
   }
 }
-async function runBombadilNativeProcess(invocation) {
+function abortedBombadilProcessResult() {
+  return {
+    exitCode: 137,
+    stderr: "",
+    stdout: "",
+    termination: "aborted"
+  };
+}
+function bombadilAbortRequested(signal) {
+  return signal?.aborted === true;
+}
+async function runBombadilNativeProcessInternal(invocation, hooks = {}) {
   const artifactPolicy = validateArtifactPolicy(invocation.artifactPolicy);
+  if (bombadilAbortRequested(invocation.abortSignal)) {
+    return abortedBombadilProcessResult();
+  }
+  await establishCleanBombadilArtifactBaseline({
+    ...hooks.beforeArtifactBaselineInspect === undefined ? {} : { beforeInspect: hooks.beforeArtifactBaselineInspect },
+    outputPath: invocation.outputPath,
+    policy: artifactPolicy
+  });
+  if (bombadilAbortRequested(invocation.abortSignal)) {
+    return abortedBombadilProcessResult();
+  }
   const childEnvironment = Object.fromEntries(Object.entries({
     ...process2.env,
     NO_COLOR: "1"
@@ -4243,6 +4420,9 @@ async function runBombadilNativeProcess(invocation) {
       invocation.abortSignal?.removeEventListener("abort", abortListener);
     }
   }
+}
+async function runBombadilNativeProcess(invocation) {
+  return await runBombadilNativeProcessInternal(invocation);
 }
 var processEvents = process2;
 var defaultDependencies = {
