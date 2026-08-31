@@ -2696,9 +2696,12 @@ describe("Direct Bombadil process lifecycle", () => {
     expect(renamedPartialPath).not.toBeNull();
     expect(completionPath).not.toBeNull();
     const originalMetadata = partialMetadata.get(renamedPartialPath!);
+    if (originalMetadata === undefined) {
+      throw new Error("Renamed partial was not observed before completion");
+    }
     const completedMetadata = await stat(completionPath!, { bigint: true });
-    expect(completedMetadata.dev).toBe(originalMetadata?.dev);
-    expect(completedMetadata.ino).toBe(originalMetadata?.ino);
+    expect(completedMetadata.dev).toBe(originalMetadata.dev);
+    expect(completedMetadata.ino).toBe(originalMetadata.ino);
     const remainingPartials = await Promise.all(partialPaths.map(async (partialPath) =>
       partialPath === renamedPartialPath
         ? false
