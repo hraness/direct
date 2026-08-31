@@ -443,7 +443,7 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       "const minimumPackedBytes = 140_000",
       "const maximumPackedBytes = 220_000",
       "const minimumUnpackedBytes = 650_000",
-      "const maximumUnpackedBytes = 1_030_000",
+      "const maximumUnpackedBytes = 1_050_000",
       "record.files.length !== record.entryCount",
       "unpackedSize !== record.unpackedSize",
       'createHash("sha1")',

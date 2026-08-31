@@ -2652,6 +2652,61 @@ describe("Direct Bombadil process lifecycle", () => {
     }))).message).toContain("lacks live partial provenance");
   });
 
+  test("admits a proven concurrent Chrome rename while another partial remains", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-concurrent-rename-"));
+    temporaryDirectories.push(directory);
+    const downloads = join(directory, "downloads");
+    await mkdir(downloads);
+    const partialPaths = [
+      join(downloads, `${CHROME_TRANSIENT_TEST_ID}.crdownload`),
+      join(downloads, `${CHROME_TRANSIENT_OTHER_TEST_ID}.crdownload`),
+    ] as const;
+    for (const partialPath of partialPaths) await writeFile(partialPath, "partial\n");
+    const partialMetadata = new Map(await Promise.all(partialPaths.map(async (partialPath) => [
+      partialPath,
+      await stat(partialPath, { bigint: true }),
+    ] as const)));
+    let partialInspections = 0;
+    let renamedPartialPath: string | null = null;
+    let completionPath: string | null = null;
+
+    await monitorBombadilArtifactTreeForTest({
+      policy: {
+        maxDepth: 4,
+        maxEntries: 8,
+        maxFileBytes: 1_024,
+        maxFiles: 4,
+        maxPathBytes: 256,
+        maxTotalBytes: 2_048,
+      },
+      root: directory,
+      scans: [{}, {
+        beforeEntryInspect: async (path) => {
+          if (!path.endsWith(".crdownload")) return;
+          partialInspections += 1;
+          if (partialInspections !== 2) return;
+          renamedPartialPath = path;
+          completionPath = path.slice(0, -".crdownload".length);
+          await rename(path, completionPath);
+        },
+      }, {}],
+    });
+
+    expect(partialInspections).toBeGreaterThanOrEqual(2);
+    expect(renamedPartialPath).not.toBeNull();
+    expect(completionPath).not.toBeNull();
+    const originalMetadata = partialMetadata.get(renamedPartialPath!);
+    const completedMetadata = await stat(completionPath!, { bigint: true });
+    expect(completedMetadata.dev).toBe(originalMetadata?.dev);
+    expect(completedMetadata.ino).toBe(originalMetadata?.ino);
+    const remainingPartials = await Promise.all(partialPaths.map(async (partialPath) =>
+      partialPath === renamedPartialPath
+        ? false
+        : (await stat(partialPath)).isFile()
+    ));
+    expect(remainingPartials).toContain(true);
+  });
+
   test("carries raced Chrome completions through immediate retry quotas", async () => {
     const cases = [
       {
