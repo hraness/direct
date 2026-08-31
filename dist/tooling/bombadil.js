@@ -2543,7 +2543,7 @@ async function scanLiveBombadilArtifactTree(options) {
       if (!(error instanceof LiveChromeDownloadRenameRetry))
         throw error;
       const observedOtherUnprovenCompletion = [...currentUnobservedCompletions].some((runId) => runId !== error.completion.runId);
-      if (currentPartials.size > 0 || observedOtherUnprovenCompletion) {
+      if (error.completion.unobserved && currentPartials.size > 0 || observedOtherUnprovenCompletion) {
         throw new BombadilArtifactPolicyError("Bombadil Chrome download completion lacks live partial provenance across the current scan");
       }
       for (const directory of currentDirectories)
