@@ -10,8 +10,8 @@ definition with `parseDefinitionCoverageSnapshot` so a valid but stale catalog
 cannot be mistaken for the catalog under review.
 
 The repository carries one `$direct` Agent Skill under `skills/direct`.
-Install it with `npx skills add hraness/direct#v0.7.14` or
-`bunx skills add hraness/direct#v0.7.14`, or copy that directory into the runner's
+Install it with `npx skills add hraness/direct#v0.7.15` or
+`bunx skills add hraness/direct#v0.7.15`, or copy that directory into the runner's
 discovery location. Invoke `$direct` for the workflow below. The skill is
 independent from library package installation and structures the audit; it
 does not turn deterministic evidence into proof of a substituted live system.

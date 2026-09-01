@@ -62,8 +62,8 @@ cookie, one-time password, recovery code, or write token to GitHub.
    `v<package.json version>`.
 
    ```sh
-   git tag v0.7.14
-   git push origin refs/tags/v0.7.14
+   git tag v0.7.15
+   git push origin refs/tags/v0.7.15
    ```
 
 3. Wait for **Release**. The workflow runs these boundaries in order:
@@ -123,7 +123,7 @@ Merge the fix to `main`, then dispatch **Release** from current `main` with
 the exact existing stable tag:
 
 ```sh
-gh workflow run release.yml --ref main -f tag=v0.7.14
+gh workflow run release.yml --ref main -f tag=v0.7.15
 ```
 
 The recovery path skips npm publication. It accepts only the newest stable
