@@ -51,6 +51,7 @@
     "noUnusedParameters": true,
     "useUnknownInCatchVariables": true,
     "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
