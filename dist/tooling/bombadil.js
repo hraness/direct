@@ -1469,8 +1469,8 @@ class LiveChromeDownloadRenameRetry extends Error {
   completion;
   constructor(completion) {
     super("Chrome download renamed during live artifact inspection");
-    this.completion = completion;
     this.name = "LiveChromeDownloadRenameRetry";
+    this.completion = completion;
   }
 }
 

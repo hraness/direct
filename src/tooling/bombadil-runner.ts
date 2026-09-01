@@ -813,17 +813,18 @@ class BombadilArtifactPolicyError extends Error {
 }
 
 class LiveChromeDownloadRenameRetry extends Error {
-  public constructor(
-    public readonly completion: Readonly<{
-      device: bigint;
-      inode: bigint;
-      runId: string;
-      size: number;
-      unobserved: boolean;
-    }>,
-  ) {
+  public readonly completion: Readonly<{
+    device: bigint;
+    inode: bigint;
+    runId: string;
+    size: number;
+    unobserved: boolean;
+  }>;
+
+  public constructor(completion: LiveChromeDownloadRenameRetry["completion"]) {
     super("Chrome download renamed during live artifact inspection");
     this.name = "LiveChromeDownloadRenameRetry";
+    this.completion = completion;
   }
 }
 
