@@ -2556,6 +2556,14 @@ async function scanBombadilArtifactTree(options: {
   }
   if (options.liveChromeDownloadScan !== undefined) {
     const liveChromeDownloadScan = options.liveChromeDownloadScan;
+    if (
+      liveChromeDownloadScan.currentPartials.size > 0
+      && liveChromeDownloadScan.currentUnobservedCompletions.size > 0
+    ) {
+      throw new BombadilArtifactPolicyError(
+        "Bombadil Chrome download completion lacks live partial provenance across the current scan",
+      );
+    }
     for (const [runId, observation] of liveChromeDownloadScan.currentCompletionObservations) {
       if (liveChromeDownloadScan.currentPartials.has(runId)) {
         throw new BombadilArtifactPolicyError(
@@ -2585,15 +2593,6 @@ async function scanBombadilArtifactTree(options: {
         );
       }
     }
-  }
-  if (
-    options.liveChromeDownloadScan !== undefined
-    && options.liveChromeDownloadScan.currentPartials.size > 0
-    && options.liveChromeDownloadScan.currentUnobservedCompletions.size > 0
-  ) {
-    throw new BombadilArtifactPolicyError(
-      "Bombadil Chrome download completion lacks live partial provenance across the current scan",
-    );
   }
   let finalRootMetadata: BigIntStats;
   try {

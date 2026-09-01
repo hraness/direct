@@ -2750,7 +2750,9 @@ describe("Direct Bombadil process lifecycle", () => {
       `${CHROME_TRANSIENT_OTHER_TEST_ID}.crdownload`,
     );
     const fastCompletion = join(downloads, CHROME_TRANSIENT_OTHER_TEST_ID);
-    let fastPartialIdentity: Readonly<{ dev: bigint; ino: bigint }> | null = null;
+    const fastPartialIdentity: {
+      value: Readonly<{ dev: bigint; ino: bigint }> | null;
+    } = { value: null };
 
     await monitorBombadilArtifactTreeForTest({
       cleanBaselineEstablished: true,
@@ -2772,18 +2774,19 @@ describe("Direct Bombadil process lifecycle", () => {
         beforeScan: async () => {
           await writeFile(fastPartial, "fast\n");
           const metadata = await stat(fastPartial, { bigint: true });
-          fastPartialIdentity = { dev: metadata.dev, ino: metadata.ino };
+          fastPartialIdentity.value = { dev: metadata.dev, ino: metadata.ino };
           await rename(fastPartial, fastCompletion);
         },
       }, {}],
     });
 
-    if (fastPartialIdentity === null) {
+    const capturedFastPartialIdentity = fastPartialIdentity.value;
+    if (capturedFastPartialIdentity === null) {
       throw new Error("Fast Chrome partial metadata was not captured");
     }
     const completionMetadata = await stat(fastCompletion, { bigint: true });
-    expect(completionMetadata.dev).toBe(fastPartialIdentity.dev);
-    expect(completionMetadata.ino).toBe(fastPartialIdentity.ino);
+    expect(completionMetadata.dev).toBe(capturedFastPartialIdentity.dev);
+    expect(completionMetadata.ino).toBe(capturedFastPartialIdentity.ino);
     expect((await stat(persistentPartial)).isFile()).toBeTrue();
   });
 
