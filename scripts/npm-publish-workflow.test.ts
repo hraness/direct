@@ -729,10 +729,13 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
     }
   });
 
-  test("provisions the exact recovery-history and npm toolchain in CI", async () => {
+  test("provisions the exact isolated head and npm toolchain in CI", async () => {
     const workflow = await readFile(ciWorkflowUrl, "utf8");
     for (const required of [
-      "fetch-depth: 0",
+      "fetch-depth: 1",
+      "fetch-tags: false",
+      "persist-credentials: false",
+      "ref: ${{ github.sha }}",
       "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38",
       'node-version: "24"',
       "package-manager-cache: false",
@@ -742,6 +745,7 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
     ] as const) {
       expect(workflow).toContain(required);
     }
+    expect(workflow).not.toContain("fetch-depth: 0");
   });
 
   test("pins public publication to the canonical npm registry", async () => {
