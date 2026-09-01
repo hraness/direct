@@ -33,15 +33,19 @@ real interface and feature state
   active scenario, coverage catalog, and deterministic activity probe. A quiet
   probe says declared work settled; product-owned assertions must still decide
   whether the result is correct.
+- **Keep the proof attached to its limits.** Each coverage entry says whether a
+  claim used fixtures, mixed evidence, or the real system. The browser sample
+  binds the scenario, product route, coverage catalog, and current probe before
+  a verifier reports a result.
 
 ## Install
 
 Pin Direct as a development dependency:
 
 ```sh
-bun add --dev @hraness/direct@0.7.15
+bun add --dev @hraness/direct@0.7.16
 # or
-npm install --save-dev @hraness/direct@0.7.15
+npm install --save-dev @hraness/direct@0.7.16
 ```
 
 Keep Direct in `devDependencies`. A production entry must not import Direct,
@@ -54,7 +58,7 @@ composition. It requires Git and Bun 1.3.14, then downloads the source and its
 development dependencies:
 
 ```sh
-git clone --branch v0.7.15 --depth 1 https://github.com/hraness/direct.git
+git clone --branch v0.7.16 --depth 1 https://github.com/hraness/direct.git
 cd direct
 bun install --frozen-lockfile --ignore-scripts
 bun run example:direct
@@ -67,14 +71,70 @@ inspection. The example reserves that exact local address and exits instead of
 silently choosing another port when it is occupied. Stop the development server
 when the review is complete.
 
+## Inspect one complete browser trace
+
+Read the active scenario and its current probe from the page in one synchronous
+evaluation. A browser driver can run this expression after it opens the URL
+above:
+
+```js
+(() => {
+  const bridge = window.__direct;
+  const probe = bridge.snapshot();
+  const claim = bridge.manifest.coverage.entries.find(
+    (entry) => entry.key === "todos.completion",
+  );
+  return {
+    schema: bridge.schema,
+    scenario: bridge.manifest.active.scenario,
+    route: bridge.manifest.active.route,
+    coverage: claim?.mode,
+    pending: probe.pending,
+    violations: probe.violations,
+    isQuiescent: probe.isQuiescent,
+  };
+})()
+```
+
+The released Todo composition returns this initial sample:
+
+```json
+{
+  "schema": "direct.browser-bridge/v2",
+  "scenario": "todos.populated",
+  "route": "/",
+  "coverage": "fixture",
+  "pending": { "todoOperations": 0 },
+  "violations": {
+    "activityFailures": 0,
+    "blockedNetworkRequests": 0
+  },
+  "isQuiescent": true
+}
+```
+
+The driver can now complete “Write the public guide,” wait for a second stable
+probe, and assert that the real Todo interface changed. The `fixture` mode says
+exactly what that evidence covers: the interface and product port ran, while
+browser local-storage behavior did not. The example keeps that live-adapter
+claim separate as `direct` evidence.
+
+## Choose an interface
+
+| Interface | Use it for | Boundary |
+| --- | --- | --- |
+| `$direct` Agent Skill | Install Direct, design a product-owned port, add scenarios, and audit evidence | Guides repository work; it does not install the package or change a project by itself |
+| TypeScript package | Define worlds, open sessions, install the browser contract, and parse evidence | Development-only; production graphs must exclude Direct |
+| Browser driver | Navigate, interact, inspect semantics, and capture visual evidence | Direct does not provide one or claim that fixture worlds tested replaced systems |
+
 ## Install the Agent Skill
 
 Install Direct's single bundled skill from the public repository:
 
 ```sh
-npx skills add hraness/direct#v0.7.15
+npx skills add hraness/direct#v0.7.16
 # or
-bunx skills add hraness/direct#v0.7.15
+bunx skills add hraness/direct#v0.7.16
 ```
 
 The skill is invoked as `$direct`. It routes installation, adoption, and
@@ -88,7 +148,7 @@ Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
 Use $direct to install hraness/direct from
-the npm registry at the exact 0.7.15 version. Follow the repository README, add
+the npm registry at the exact 0.7.16 version. Follow the repository README, add
 `@hraness/direct` to devDependencies only, and verify that the production
 dependency graph excludes Direct. Do not add a fixture composition until I
 ask.
@@ -104,7 +164,7 @@ Pin the public npm package to an exact immutable version:
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "0.7.15"
+    "@hraness/direct": "0.7.16"
   }
 }
 ```
@@ -126,8 +186,8 @@ quiescence, coverage claims, cleanup, and emitted production boundaries. The
 package smoke test keeps that future packaged copy byte-identical to the
 repository skill.
 
-Prefer `npx skills add hraness/direct#v0.7.15` or
-`bunx skills add hraness/direct#v0.7.15` for runner discovery. You can also copy
+Prefer `npx skills add hraness/direct#v0.7.16` or
+`bunx skills add hraness/direct#v0.7.16` for runner discovery. You can also copy
 or link that one skill directory into a runner's configured location, then
 invoke `$direct`. Package installation leaves the skill inert: it does not run
 a `postinstall` hook or edit repository or user configuration.
@@ -484,6 +544,25 @@ await expect(page.getByRole("checkbox", {
 ```
 
 Here, `waitForQuiescence` is product-owned verifier code around Direct's snapshot, not a Direct browser driver. A settled snapshot proves only that the work Direct knows about has stopped changing. It does not prove that the screen is correct. The verifier must still reject relevant console, runtime, and unhandled-request errors, then make product-specific assertions or visual checks.
+
+### One trace connects the URL to the claim
+
+The Todo example exposes each part of the check as an inspectable object rather
+than a hidden setup script:
+
+| Stage | Observable evidence |
+| --- | --- |
+| Select | `?__direct_scenario=todos.populated` names the validated world. |
+| Bind | The manifest reports `todos.populated`, product route `/`, and the `todos.completion` coverage entry. |
+| Join | The probe reports zero `todoOperations`, zero declared violations, and a stable quiescent revision. |
+| Act | The browser driver checks the “Write the public guide” control in the real Todo interface. |
+| Verify | A second stable probe and a checked control show that the interface changed through the product-owned port. |
+| Limit | The claim remains `fixture` evidence. Local-storage parsing, quota behavior, and persistence stay assigned to a separate `direct` check. |
+
+That trace is available through the TypeScript package and the driver-neutral
+browser bridge. The `$direct` Agent Skill helps a coding agent add and audit the
+same composition. A browser driver supplies the interaction and visual or
+semantic assertion; Direct supplies no competing driver interface.
 
 ### Choose the smallest tool that covers the risk
 
