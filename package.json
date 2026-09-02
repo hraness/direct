@@ -1,6 +1,6 @@
 {
   "name": "@hraness/direct",
-  "version": "0.7.17",
+  "version": "0.7.18",
   "description": "A TypeScript harness for deterministic frontend testing and development with repeatable scenarios, local fixtures, and browser verification for coding agents.",
   "license": "MIT",
   "type": "module",
@@ -98,6 +98,7 @@
     "src/testing/scripted-transport.ts",
     "src/testing/session.ts",
     "src/tooling/browser-verification-entry.ts",
+    "src/tooling/browser-layout-contract.ts",
     "src/tooling/browser-verification.ts",
     "src/tooling/bombadil-internal.d.ts",
     "src/tooling/bombadil-campaign.ts",

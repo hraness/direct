@@ -562,6 +562,10 @@ const supportsBombadilBoaNamedSnapshots = Bun.semver.order(
   packageManifest.version,
   "0.7.10",
 ) >= 0;
+const supportsNamedLayoutContracts = Bun.semver.order(
+  packageManifest.version,
+  "0.7.18",
+) >= 0;
 const work = await mkdtemp(join(tmpdir(), "hraness-package-smoke-"));
 try {
   const packageInput = parsePackageInput(process.argv.slice(2), repository);
@@ -709,6 +713,13 @@ try {
       normalizeRootHttpOrigin,
       readDirectBrowserContract,
     } from "@hraness/direct/tooling/browser-verification";
+    ${supportsNamedLayoutContracts ? `import {
+      DIRECT_NAMED_LAYOUT_CONTRACT_SCHEMA,
+      DIRECT_NAMED_LAYOUT_SAMPLE_SCHEMA,
+      parseDirectNamedLayoutContract,
+      parseDirectNamedLayoutSample,
+      validateDirectNamedLayout,
+    } from "@hraness/direct/tooling/browser-verification";` : ""}
     ${bombadilRuntimeImports(bombadilFeatureProfile)}
     import { findForbiddenMarkers } from "@hraness/direct/tooling/bundle-boundary";
 
@@ -725,6 +736,28 @@ try {
     if (typeof readDirectBrowserContract !== "function") {
       throw new Error("the package-bound Direct browser reader is missing");
     }
+    ${supportsNamedLayoutContracts ? `const layoutSample = parseDirectNamedLayoutSample({
+      schema: DIRECT_NAMED_LAYOUT_SAMPLE_SCHEMA,
+      viewport: { width: 100, height: 100 },
+      boxes: [{ name: "control", x: 10, y: 10, width: 44, height: 44 }],
+    });
+    const layoutContract = parseDirectNamedLayoutContract({
+      schema: DIRECT_NAMED_LAYOUT_CONTRACT_SCHEMA,
+      rules: [{
+        id: "control.minimum",
+        kind: "minimum-size",
+        box: "control",
+        minimumWidth: 44,
+        minimumHeight: 44,
+      }],
+    });
+    if (
+      !layoutSample.ok
+      || !layoutContract.ok
+      || !validateDirectNamedLayout(layoutContract.value, [layoutSample.value]).ok
+    ) {
+      throw new Error("the package-bound named layout contract is invalid");
+    }` : ""}
     if (typeof runDirectBombadilFuzz !== "function") {
       throw new Error("Bombadil host tooling runner is missing");
     }

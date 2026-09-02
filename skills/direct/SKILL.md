@@ -37,6 +37,13 @@ explicit activation instead of falling back to another scenario. Use logical
 time and activity scopes for deterministic work, and join a stable quiet probe
 before making semantic assertions.
 
+For a design or layout audit, pair a macro screenshot critique with micro
+geometry gates from `@hraness/direct/tooling/browser-verification`. Let the
+product name the measured boxes, no-overlap pairs, containment, alignment,
+clipping, size, and stability rules. Never substitute automatic all-pairs
+collision scanning for reviewed product invariants, and never treat a passing
+rectangle gate as proof of visual hierarchy or quality.
+
 State proof limits precisely. Fixture evidence can prove the real interface
 and product logic through deterministic ports; it cannot prove a substituted
 adapter, service, operating system, browser host, or device.

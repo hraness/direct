@@ -1542,6 +1542,457 @@ async function writeJsonAtomically(path, value) {
     throw error;
   }
 }
+// src/tooling/browser-layout-contract.ts
+var DIRECT_NAMED_LAYOUT_SAMPLE_SCHEMA = "direct.named-layout-sample/v1";
+var DIRECT_NAMED_LAYOUT_CONTRACT_SCHEMA = "direct.named-layout-contract/v1";
+var MAX_LAYOUT_BOXES = 128;
+var MAX_LAYOUT_RULES = 256;
+var MAX_LAYOUT_COORDINATE = 1e7;
+var MAX_LAYOUT_TOLERANCE = 1e4;
+var MAX_LAYOUT_NAME_LENGTH = 128;
+var LAYOUT_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_.:/-]*$/u;
+var RESERVED_LAYOUT_NAMES = new Set([
+  "__proto__",
+  "constructor",
+  "prototype"
+]);
+var SAMPLE_KEYS = new Set(["boxes", "schema", "viewport"]);
+var VIEWPORT_KEYS = new Set(["height", "width"]);
+var BOX_KEYS = new Set(["height", "name", "width", "x", "y"]);
+var CONTRACT_KEYS = new Set(["rules", "schema"]);
+var INSIDE_RULE_KEYS = new Set([
+  "id",
+  "inner",
+  "kind",
+  "outer",
+  "tolerance"
+]);
+var PAIR_RULE_KEYS = new Set([
+  "first",
+  "id",
+  "kind",
+  "second",
+  "tolerance"
+]);
+var BOX_TOLERANCE_RULE_KEYS = new Set([
+  "box",
+  "id",
+  "kind",
+  "tolerance"
+]);
+var MINIMUM_SIZE_RULE_KEYS = new Set([
+  "box",
+  "id",
+  "kind",
+  "minimumHeight",
+  "minimumWidth"
+]);
+
+class NamedLayoutInputError extends Error {
+}
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function requireExactRecord(value, expected, label) {
+  if (!isRecord2(value)) {
+    throw new NamedLayoutInputError(`${label} must be an object`);
+  }
+  const keys = Object.keys(value);
+  if (keys.length !== expected.size || keys.some((key) => !expected.has(key)) || [...expected].some((key) => !Object.hasOwn(value, key))) {
+    throw new NamedLayoutInputError(`${label} must contain exactly: ${[...expected].sort().join(", ")}`);
+  }
+  return value;
+}
+function requireLayoutName(value, label) {
+  if (typeof value !== "string" || value.length > MAX_LAYOUT_NAME_LENGTH || !LAYOUT_NAME_PATTERN.test(value) || RESERVED_LAYOUT_NAMES.has(value)) {
+    throw new NamedLayoutInputError(`${label} must be a safe, unreserved 1-${String(MAX_LAYOUT_NAME_LENGTH)} character identifier`);
+  }
+  return value;
+}
+function requireBoundedNumber(options) {
+  if (typeof options.value !== "number" || !Number.isFinite(options.value) || options.value < options.minimum || options.value > options.maximum) {
+    throw new NamedLayoutInputError(`${options.label} must be a finite number between ${String(options.minimum)} and ${String(options.maximum)}`);
+  }
+  return options.value;
+}
+function requireCoordinate(value, label) {
+  return requireBoundedNumber({
+    label,
+    maximum: MAX_LAYOUT_COORDINATE,
+    minimum: -MAX_LAYOUT_COORDINATE,
+    value
+  });
+}
+function requireSize(value, label, positive) {
+  const size = requireBoundedNumber({
+    label,
+    maximum: MAX_LAYOUT_COORDINATE,
+    minimum: 0,
+    value
+  });
+  if (positive && size === 0) {
+    throw new NamedLayoutInputError(`${label} must be greater than zero`);
+  }
+  return size;
+}
+function requireTolerance(value, label) {
+  return requireBoundedNumber({
+    label,
+    maximum: MAX_LAYOUT_TOLERANCE,
+    minimum: 0,
+    value
+  });
+}
+function parseLayoutBox(input, index) {
+  const label = `Direct named layout box ${String(index)}`;
+  const record = requireExactRecord(input, BOX_KEYS, label);
+  return Object.freeze({
+    height: requireSize(record.height, `${label} height`, true),
+    name: requireLayoutName(record.name, `${label} name`),
+    width: requireSize(record.width, `${label} width`, true),
+    x: requireCoordinate(record.x, `${label} x`),
+    y: requireCoordinate(record.y, `${label} y`)
+  });
+}
+function parseLayoutSampleUnchecked(input) {
+  const record = requireExactRecord(input, SAMPLE_KEYS, "Direct named layout sample");
+  if (record.schema !== DIRECT_NAMED_LAYOUT_SAMPLE_SCHEMA) {
+    throw new NamedLayoutInputError(`Direct named layout sample schema must be ${DIRECT_NAMED_LAYOUT_SAMPLE_SCHEMA}`);
+  }
+  const viewportRecord = requireExactRecord(record.viewport, VIEWPORT_KEYS, "Direct named layout viewport");
+  if (!Array.isArray(record.boxes)) {
+    throw new NamedLayoutInputError("Direct named layout boxes must be an array");
+  }
+  if (record.boxes.length === 0 || record.boxes.length > MAX_LAYOUT_BOXES) {
+    throw new NamedLayoutInputError(`Direct named layout samples require 1-${String(MAX_LAYOUT_BOXES)} boxes`);
+  }
+  const boxes = [];
+  for (let index = 0;index < record.boxes.length; index += 1) {
+    boxes.push(parseLayoutBox(record.boxes[index], index));
+  }
+  const names = new Set;
+  for (const box of boxes) {
+    if (names.has(box.name)) {
+      throw new NamedLayoutInputError(`Direct named layout box name is duplicated: ${box.name}`);
+    }
+    names.add(box.name);
+  }
+  return Object.freeze({
+    boxes: Object.freeze(boxes),
+    schema: DIRECT_NAMED_LAYOUT_SAMPLE_SCHEMA,
+    viewport: Object.freeze({
+      height: requireSize(viewportRecord.height, "Direct named layout viewport height", true),
+      width: requireSize(viewportRecord.width, "Direct named layout viewport width", true)
+    })
+  });
+}
+function parsePairRule(record, kind, id) {
+  requireExactRecord(record, PAIR_RULE_KEYS, `Direct named layout ${kind} rule`);
+  const first = requireLayoutName(record.first, `Direct named layout rule ${id} first box`);
+  const second = requireLayoutName(record.second, `Direct named layout rule ${id} second box`);
+  if (first === second) {
+    throw new NamedLayoutInputError(`Direct named layout rule ${id} must name two different boxes`);
+  }
+  return Object.freeze({
+    first,
+    id,
+    kind,
+    second,
+    tolerance: requireTolerance(record.tolerance, `Direct named layout rule ${id} tolerance`)
+  });
+}
+function parseBoxToleranceRule(record, kind, id) {
+  requireExactRecord(record, BOX_TOLERANCE_RULE_KEYS, `Direct named layout ${kind} rule`);
+  return Object.freeze({
+    box: requireLayoutName(record.box, `Direct named layout rule ${id} box`),
+    id,
+    kind,
+    tolerance: requireTolerance(record.tolerance, `Direct named layout rule ${id} tolerance`)
+  });
+}
+function parseLayoutRule(input, index) {
+  const label = `Direct named layout rule ${String(index)}`;
+  if (!isRecord2(input)) {
+    throw new NamedLayoutInputError(`${label} must be an object`);
+  }
+  const id = requireLayoutName(input.id, `${label} id`);
+  switch (input.kind) {
+    case "inside": {
+      const record = requireExactRecord(input, INSIDE_RULE_KEYS, `${label} inside`);
+      const inner = requireLayoutName(record.inner, `${label} inner box`);
+      const outer = requireLayoutName(record.outer, `${label} outer box`);
+      if (inner === outer) {
+        throw new NamedLayoutInputError(`${label} must name different inner and outer boxes`);
+      }
+      return Object.freeze({
+        id,
+        inner,
+        kind: "inside",
+        outer,
+        tolerance: requireTolerance(record.tolerance, `${label} tolerance`)
+      });
+    }
+    case "no-overlap":
+    case "center-x":
+    case "center-y":
+      return parsePairRule(input, input.kind, id);
+    case "not-clipped":
+    case "stable":
+      return parseBoxToleranceRule(input, input.kind, id);
+    case "minimum-size": {
+      const record = requireExactRecord(input, MINIMUM_SIZE_RULE_KEYS, `${label} minimum-size`);
+      const minimumHeight = requireSize(record.minimumHeight, `${label} minimumHeight`, false);
+      const minimumWidth = requireSize(record.minimumWidth, `${label} minimumWidth`, false);
+      if (minimumHeight === 0 && minimumWidth === 0) {
+        throw new NamedLayoutInputError(`${label} must require a positive width or height`);
+      }
+      return Object.freeze({
+        box: requireLayoutName(record.box, `${label} box`),
+        id,
+        kind: "minimum-size",
+        minimumHeight,
+        minimumWidth
+      });
+    }
+    default:
+      throw new NamedLayoutInputError(`${label} kind must be inside, no-overlap, center-x, center-y, not-clipped, minimum-size, or stable`);
+  }
+}
+function parseLayoutContractUnchecked(input) {
+  const record = requireExactRecord(input, CONTRACT_KEYS, "Direct named layout contract");
+  if (record.schema !== DIRECT_NAMED_LAYOUT_CONTRACT_SCHEMA) {
+    throw new NamedLayoutInputError(`Direct named layout contract schema must be ${DIRECT_NAMED_LAYOUT_CONTRACT_SCHEMA}`);
+  }
+  if (!Array.isArray(record.rules)) {
+    throw new NamedLayoutInputError("Direct named layout rules must be an array");
+  }
+  if (record.rules.length === 0 || record.rules.length > MAX_LAYOUT_RULES) {
+    throw new NamedLayoutInputError(`Direct named layout contracts require 1-${String(MAX_LAYOUT_RULES)} rules`);
+  }
+  const rules = [];
+  for (let index = 0;index < record.rules.length; index += 1) {
+    rules.push(parseLayoutRule(record.rules[index], index));
+  }
+  const ids = new Set;
+  for (const rule of rules) {
+    if (ids.has(rule.id)) {
+      throw new NamedLayoutInputError(`Direct named layout rule id is duplicated: ${rule.id}`);
+    }
+    ids.add(rule.id);
+  }
+  return Object.freeze({
+    rules: Object.freeze(rules),
+    schema: DIRECT_NAMED_LAYOUT_CONTRACT_SCHEMA
+  });
+}
+function parseError(code, error) {
+  return Object.freeze({
+    code,
+    message: error instanceof NamedLayoutInputError ? error.message : `Direct named layout ${code === "invalid-sample" ? "sample" : "contract"} could not be read`
+  });
+}
+function parseDirectNamedLayoutSample(input) {
+  try {
+    return Object.freeze({ ok: true, value: parseLayoutSampleUnchecked(input) });
+  } catch (error) {
+    return Object.freeze({
+      error: parseError("invalid-sample", error),
+      ok: false
+    });
+  }
+}
+function parseDirectNamedLayoutContract(input) {
+  try {
+    return Object.freeze({ ok: true, value: parseLayoutContractUnchecked(input) });
+  } catch (error) {
+    return Object.freeze({
+      error: parseError("invalid-contract", error),
+      ok: false
+    });
+  }
+}
+function boxMap(sample) {
+  return new Map(sample.boxes.map((box) => [box.name, box]));
+}
+function right(box) {
+  return box.x + box.width;
+}
+function bottom(box) {
+  return box.y + box.height;
+}
+function violation(options) {
+  return Object.freeze(options);
+}
+function missingBoxViolation(rule, sample, names) {
+  return violation({
+    code: "missing-box",
+    message: `Rule ${rule.id} references missing box${names.length === 1 ? "" : "es"}: ${names.join(", ")}`,
+    ruleId: rule.id,
+    ruleKind: rule.kind,
+    sample
+  });
+}
+function pairBoxes(rule, boxes) {
+  const first = boxes.get(rule.first);
+  const second = boxes.get(rule.second);
+  return first === undefined || second === undefined ? null : [first, second];
+}
+function validateStaticRule(rule, sampleName, sample, boxes) {
+  switch (rule.kind) {
+    case "inside": {
+      const inner = boxes.get(rule.inner);
+      const outer = boxes.get(rule.outer);
+      if (inner === undefined || outer === undefined) {
+        return missingBoxViolation(rule, sampleName, [inner === undefined ? rule.inner : null, outer === undefined ? rule.outer : null].filter((name) => name !== null));
+      }
+      if (inner.x < outer.x - rule.tolerance || inner.y < outer.y - rule.tolerance || right(inner) > right(outer) + rule.tolerance || bottom(inner) > bottom(outer) + rule.tolerance) {
+        return violation({
+          code: "outside",
+          message: `Box ${rule.inner} is not inside ${rule.outer} within ${String(rule.tolerance)} CSS pixels`,
+          ruleId: rule.id,
+          ruleKind: rule.kind,
+          sample: sampleName
+        });
+      }
+      return null;
+    }
+    case "no-overlap": {
+      const pair = pairBoxes(rule, boxes);
+      if (pair === null) {
+        return missingBoxViolation(rule, sampleName, [rule.first, rule.second].filter((name) => !boxes.has(name)));
+      }
+      const [first, second] = pair;
+      const overlapWidth = Math.min(right(first), right(second)) - Math.max(first.x, second.x);
+      const overlapHeight = Math.min(bottom(first), bottom(second)) - Math.max(first.y, second.y);
+      if (overlapWidth > rule.tolerance && overlapHeight > rule.tolerance) {
+        return violation({
+          code: "overlap",
+          message: `Boxes ${rule.first} and ${rule.second} overlap beyond ${String(rule.tolerance)} CSS pixels`,
+          ruleId: rule.id,
+          ruleKind: rule.kind,
+          sample: sampleName
+        });
+      }
+      return null;
+    }
+    case "center-x":
+    case "center-y": {
+      const pair = pairBoxes(rule, boxes);
+      if (pair === null) {
+        return missingBoxViolation(rule, sampleName, [rule.first, rule.second].filter((name) => !boxes.has(name)));
+      }
+      const [first, second] = pair;
+      const firstCenter = rule.kind === "center-x" ? first.x + first.width / 2 : first.y + first.height / 2;
+      const secondCenter = rule.kind === "center-x" ? second.x + second.width / 2 : second.y + second.height / 2;
+      if (Math.abs(firstCenter - secondCenter) > rule.tolerance) {
+        return violation({
+          code: "misaligned",
+          message: `Boxes ${rule.first} and ${rule.second} are not ${rule.kind} aligned within ${String(rule.tolerance)} CSS pixels`,
+          ruleId: rule.id,
+          ruleKind: rule.kind,
+          sample: sampleName
+        });
+      }
+      return null;
+    }
+    case "not-clipped": {
+      const box = boxes.get(rule.box);
+      if (box === undefined) {
+        return missingBoxViolation(rule, sampleName, [rule.box]);
+      }
+      if (box.x < -rule.tolerance || box.y < -rule.tolerance || right(box) > sample.viewport.width + rule.tolerance || bottom(box) > sample.viewport.height + rule.tolerance) {
+        return violation({
+          code: "clipped",
+          message: `Box ${rule.box} extends outside the viewport beyond ${String(rule.tolerance)} CSS pixels`,
+          ruleId: rule.id,
+          ruleKind: rule.kind,
+          sample: sampleName
+        });
+      }
+      return null;
+    }
+    case "minimum-size": {
+      const box = boxes.get(rule.box);
+      if (box === undefined) {
+        return missingBoxViolation(rule, sampleName, [rule.box]);
+      }
+      if (box.width < rule.minimumWidth || box.height < rule.minimumHeight) {
+        return violation({
+          code: "too-small",
+          message: `Box ${rule.box} is smaller than ${String(rule.minimumWidth)} by ${String(rule.minimumHeight)} CSS pixels`,
+          ruleId: rule.id,
+          ruleKind: rule.kind,
+          sample: sampleName
+        });
+      }
+      return null;
+    }
+  }
+}
+function validateStabilityRule(rule, firstSample, secondSample, first, second) {
+  if (secondSample === undefined || second === null) {
+    return violation({
+      code: "second-sample-required",
+      message: `Rule ${rule.id} requires two layout samples`,
+      ruleId: rule.id,
+      ruleKind: rule.kind,
+      sample: "pair"
+    });
+  }
+  if (firstSample.viewport.width !== secondSample.viewport.width || firstSample.viewport.height !== secondSample.viewport.height) {
+    return violation({
+      code: "viewport-changed",
+      message: `Rule ${rule.id} requires two samples at the same viewport`,
+      ruleId: rule.id,
+      ruleKind: rule.kind,
+      sample: "pair"
+    });
+  }
+  const firstBox = first.get(rule.box);
+  const secondBox = second.get(rule.box);
+  if (firstBox === undefined || secondBox === undefined) {
+    return missingBoxViolation(rule, "pair", [firstBox === undefined ? `first:${rule.box}` : null, secondBox === undefined ? `second:${rule.box}` : null].filter((name) => name !== null));
+  }
+  if (Math.abs(firstBox.x - secondBox.x) > rule.tolerance || Math.abs(firstBox.y - secondBox.y) > rule.tolerance || Math.abs(firstBox.width - secondBox.width) > rule.tolerance || Math.abs(firstBox.height - secondBox.height) > rule.tolerance) {
+    return violation({
+      code: "unstable",
+      message: `Box ${rule.box} changed between samples beyond ${String(rule.tolerance)} CSS pixels`,
+      ruleId: rule.id,
+      ruleKind: rule.kind,
+      sample: "pair"
+    });
+  }
+  return null;
+}
+function validateDirectNamedLayout(contract, samples) {
+  if (!Array.isArray(samples) || samples.length !== 1 && samples.length !== 2) {
+    throw new RangeError("Direct named layout validation requires exactly one or two parsed samples");
+  }
+  const violations = [];
+  const firstBoxes = boxMap(samples[0]);
+  const secondSample = samples[1];
+  const secondBoxes = secondSample === undefined ? null : boxMap(secondSample);
+  for (const rule of contract.rules) {
+    if (rule.kind === "stable") {
+      const found = validateStabilityRule(rule, samples[0], secondSample, firstBoxes, secondBoxes);
+      if (found !== null)
+        violations.push(found);
+      continue;
+    }
+    const firstViolation = validateStaticRule(rule, "first", samples[0], firstBoxes);
+    if (firstViolation !== null)
+      violations.push(firstViolation);
+    if (secondSample !== undefined && secondBoxes !== null) {
+      const secondViolation = validateStaticRule(rule, "second", secondSample, secondBoxes);
+      if (secondViolation !== null)
+        violations.push(secondViolation);
+    }
+  }
+  return Object.freeze({
+    ok: violations.length === 0,
+    violations: Object.freeze(violations)
+  });
+}
 
 // src/tooling/browser-verification-entry.ts
 var readDirectBrowserContract = createDirectBrowserContractReader({
@@ -1551,6 +2002,7 @@ var readDirectBrowserContract = createDirectBrowserContractReader({
 });
 export {
   writeJsonAtomically,
+  validateDirectNamedLayout,
   tail,
   stopVerificationServer,
   spawnVerificationServer,
@@ -1560,6 +2012,8 @@ export {
   renderUnknown,
   renderAgentBrowserCommand,
   readDirectBrowserContract,
+  parseDirectNamedLayoutSample,
+  parseDirectNamedLayoutContract,
   parseBaseUrlArguments,
   parseAgentBrowserEnvelope,
   parseAgentBrowserBatchEnvelope,
@@ -1574,5 +2028,7 @@ export {
   bindDirectBrowserContractEvidence,
   agentBrowserProcessTimeoutMs,
   agentBrowserCloseProcessTimeoutMs,
-  acquireVerificationServer
+  acquireVerificationServer,
+  DIRECT_NAMED_LAYOUT_SAMPLE_SCHEMA,
+  DIRECT_NAMED_LAYOUT_CONTRACT_SCHEMA
 };

@@ -32,6 +32,19 @@ artifacts when they fit the repository. They invoke the consumer's local
 agent-browser installation; they do not bundle a driver, coordinate parallel
 work, supervise cleanup, or own product commands and evidence.
 
+For a visual or layout critique, separate macro review from micro gates. Review
+screenshots at the product's selected routes and viewports for hierarchy,
+grouping, density, reading order, and responsive composition. Then measure a
+small set of product-named boxes and use the same tooling subpath's strict
+named layout sample and contract parsers. Add only reviewed rules for `inside`,
+named `no-overlap` pairs, `center-x`, `center-y`, `not-clipped`,
+`minimum-size`, and two-sample `stable` checks. Collect both stability samples
+in the same browser context and viewport around the product's bounded
+render-settle boundary. Do not compare every pair automatically. A geometry
+gate catches declared spatial regressions; it does not judge typography,
+contrast, rhythm, prominence, or overall design quality. Keep those conclusions
+in the screenshot critique.
+
 When a product already has a Bombadil campaign, prefer the shared
 `@hraness/direct/tooling/bombadil-campaign` factories and
 `@hraness/direct/tooling/bombadil` host runner instead of copying Direct

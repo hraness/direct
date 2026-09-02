@@ -77,7 +77,16 @@ describe("public package exports", () => {
     ]);
     expect(typeof browserVerification.createAgentBrowser).toBe("function");
     expect(typeof browserVerification.createDirectBrowserContractReader).toBe("function");
+    expect(browserVerification.DIRECT_NAMED_LAYOUT_SAMPLE_SCHEMA).toBe(
+      "direct.named-layout-sample/v1",
+    );
+    expect(browserVerification.DIRECT_NAMED_LAYOUT_CONTRACT_SCHEMA).toBe(
+      "direct.named-layout-contract/v1",
+    );
+    expect(typeof browserVerification.parseDirectNamedLayoutSample).toBe("function");
+    expect(typeof browserVerification.parseDirectNamedLayoutContract).toBe("function");
     expect(typeof browserVerification.readDirectBrowserContract).toBe("function");
+    expect(typeof browserVerification.validateDirectNamedLayout).toBe("function");
     expect(typeof bombadil.runDirectBombadilFuzz).toBe("function");
     expect(typeof bombadil.attestDirectBombadilTrace).toBe("function");
     expect(typeof bombadil.parseDirectBombadilArtifactReceipt).toBe("function");
@@ -90,9 +99,12 @@ describe("public package exports", () => {
     expect(typeof bundleBoundary.checkBundleBoundary).toBe("function");
     expect(typeof bundleBoundary.findForbiddenMarkers).toBe("function");
     expect("createAgentBrowser" in root).toBeFalse();
+    expect("validateDirectNamedLayout" in root).toBeFalse();
     expect("checkBundleBoundary" in root).toBeFalse();
     expect("createAgentBrowser" in web).toBeFalse();
+    expect("validateDirectNamedLayout" in web).toBeFalse();
     expect("checkBundleBoundary" in testing).toBeFalse();
+    expect("validateDirectNamedLayout" in testing).toBeFalse();
     type PublicRunnerArity = Parameters<typeof bombadil.runDirectBombadilFuzz>["length"];
     const supportedRunnerArities: readonly PublicRunnerArity[] = [1, 2];
     const supportedRunOptions: DirectBombadilFuzzRunInput = {
