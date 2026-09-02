@@ -9,8 +9,10 @@ import {
   readFile,
   realpath,
   rename as rename2,
+  rmdir,
   rm as rm2,
-  stat
+  stat,
+  unlink
 } from "fs/promises";
 import { extname, isAbsolute, join as join2, relative, resolve } from "path";
 import process2 from "process";
@@ -1194,6 +1196,23 @@ async function writeJsonAtomically(path, value) {
 
 // src/tooling/bombadil-runner.ts
 var EXPECTED_BOMBADIL_VERSION = "0.7.2";
+var BOMBADIL_TOOLCHAIN_BUILD_CONTRACTS = new Set([
+  "cargo-release-browser-only",
+  "nix-default-aarch64-darwin"
+]);
+var BOMBADIL_TOOLCHAIN_CONFIG_KEYS = [
+  "buildContract",
+  "executablePath",
+  "sha256",
+  "sourceRevision",
+  "version"
+];
+var BOMBADIL_TOOLCHAIN_ENVIRONMENT_NAMES = [
+  "DIRECT_BOMBADIL_BUILD_CONTRACT",
+  "DIRECT_BOMBADIL_EXECUTABLE_PATH",
+  "DIRECT_BOMBADIL_EXECUTABLE_SHA256",
+  "DIRECT_BOMBADIL_SOURCE_REVISION"
+];
 var DEFAULT_TIME_LIMIT_SECONDS = 20;
 var MIN_TIME_LIMIT_SECONDS = 12;
 var MAX_TIME_LIMIT_SECONDS = 300;
@@ -1296,6 +1315,7 @@ var MATRIX_SUMMARY_CAMPAIGNS_KEYS = new Set([
   "total"
 ]);
 var SHA256_PATTERN = /^[0-9a-f]{64}$/u;
+var GIT_REVISION_PATTERN = /^[0-9a-f]{40}$/u;
 var ARTIFACT_EVIDENCE_JSON_LIMITS = Object.freeze({
   maxDepth: 8,
   maxNodes: 2048,
@@ -1306,6 +1326,10 @@ var ARTIFACT_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 var MAX_ARTIFACT_IDENTIFIER_LENGTH = 80;
 var MAX_MATRIX_CAMPAIGNS = 32;
 var ARTIFACT_COORDINATION_ENVIRONMENT = "DIRECT_BOMBADIL_RUN_ID";
+var BOMBADIL_PRIVATE_ENVIRONMENT_NAMES = new Set([
+  ARTIFACT_COORDINATION_ENVIRONMENT,
+  ...BOMBADIL_TOOLCHAIN_ENVIRONMENT_NAMES
+]);
 var ENVIRONMENT_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 var QUERY_PARAMETER_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_.-]*$/u;
 var PROTOTYPE_PROPERTY_NAMES = new Set(["__proto__", "constructor", "prototype"]);
@@ -1323,6 +1347,9 @@ var RANDOM_RUN_OVERHEAD_MS = 30000;
 var REPLAY_WALL_CLOCK_TIMEOUT_MS = MAX_TIME_LIMIT_SECONDS * 1000 + RANDOM_RUN_OVERHEAD_MS;
 var PROCESS_TERMINATION_GRACE_MS = 5000;
 var MIN_PROCESS_OUTPUT_DRAIN_MS = 500;
+var BOMBADIL_VERSION_PROBE_TIMEOUT_MS = 5000;
+var BOMBADIL_VERSION_OUTPUT_LIMIT = 1024;
+var MAX_BOMBADIL_EXECUTABLE_BYTES = 64 * 1024 * 1024;
 var SERVER_OUTPUT_TIMEOUT_MS = 3000;
 var ARTIFACT_MONITOR_INTERVAL_MS = 100;
 var MAX_LIVE_CHROME_RENAME_RETRIES = 4;
@@ -1456,6 +1483,7 @@ var DIRECT_OBSERVATION_KEYS = new Set([
   "violations",
   "violationsValid"
 ]);
+var BOMBADIL_EXECUTABLE_ATTESTATION = Symbol("bombadilExecutableAttestation");
 var PROCESS_INTERRUPT_SIGNALS = ["SIGINT", "SIGTERM"];
 
 class BombadilArtifactPolicyError extends Error {
@@ -1487,6 +1515,12 @@ class BombadilPersistenceError extends AggregateError {
     this.name = "BombadilPersistenceError";
   }
 }
+function retainPrivateBombadilSnapshotAfterWriterSettlementFailure(failure) {
+  return new BombadilWriterSettlementError("Bombadil writers were not proven absent; the private executable snapshot was retained as protected persistence evidence", new AggregateError([
+    failure,
+    new BombadilPersistenceError("Bombadil private executable snapshot removal was suppressed", [new Error("native process and writer settlement was not proven")])
+  ], "Bombadil writer settlement and private snapshot persistence evidence", { cause: failure }));
+}
 function readOptionValue(arguments_, index, option) {
   const value = arguments_[index + 1];
   if (value === undefined || value.startsWith("-")) {
@@ -1517,6 +1551,53 @@ function bombadilNativeBinary(repositoryRoot) {
     throw new Error(`Bombadil 0.7.2 does not support ${process2.platform}-${process2.arch}`);
   }
   return join2(repositoryRoot, "node_modules", "@antithesishq", "bombadil", "binaries", binary);
+}
+function validateBombadilToolchainConfig(value, repositoryRoot) {
+  if (value === undefined)
+    return null;
+  if (!isRecord2(value)) {
+    throw new Error("bombadilToolchain must be an exact object");
+  }
+  const keys = Object.keys(value).sort(compareCodeUnits);
+  if (JSON.stringify(keys) !== JSON.stringify(BOMBADIL_TOOLCHAIN_CONFIG_KEYS)) {
+    throw new Error(`bombadilToolchain must contain exactly ${BOMBADIL_TOOLCHAIN_CONFIG_KEYS.join(", ")}`);
+  }
+  const executablePath = Reflect.get(value, "executablePath");
+  const sha256 = Reflect.get(value, "sha256");
+  const sourceRevision = Reflect.get(value, "sourceRevision");
+  const version = Reflect.get(value, "version");
+  const buildContract = Reflect.get(value, "buildContract");
+  if (typeof executablePath !== "string" || !isAbsolute(executablePath) || resolve(executablePath) !== executablePath || !isWithin(repositoryRoot, executablePath)) {
+    throw new Error("bombadilToolchain.executablePath must be an absolute normalized path inside repositoryRoot");
+  }
+  if (typeof sha256 !== "string" || !SHA256_PATTERN.test(sha256)) {
+    throw new Error("bombadilToolchain.sha256 must be exactly 64 lowercase hexadecimal characters");
+  }
+  if (typeof sourceRevision !== "string" || !GIT_REVISION_PATTERN.test(sourceRevision)) {
+    throw new Error("bombadilToolchain.sourceRevision must be exactly 40 lowercase hexadecimal characters");
+  }
+  if (version !== EXPECTED_BOMBADIL_VERSION) {
+    throw new Error(`bombadilToolchain.version must be exactly ${EXPECTED_BOMBADIL_VERSION}`);
+  }
+  if (typeof buildContract !== "string" || !BOMBADIL_TOOLCHAIN_BUILD_CONTRACTS.has(buildContract)) {
+    throw new Error("bombadilToolchain.buildContract is unsupported");
+  }
+  return Object.freeze({
+    buildContract,
+    executablePath,
+    sha256,
+    sourceRevision,
+    version: EXPECTED_BOMBADIL_VERSION
+  });
+}
+function bombadilToolchainIdentity(toolchain) {
+  return toolchain === null ? "npm-package" : JSON.stringify({
+    buildContract: toolchain.buildContract,
+    executablePath: toolchain.executablePath,
+    sha256: toolchain.sha256,
+    sourceRevision: toolchain.sourceRevision,
+    version: toolchain.version
+  });
 }
 function requireLocalRootHttpOrigin(value) {
   const baseUrl = normalizeRootHttpOrigin(value);
@@ -4230,6 +4311,7 @@ function validateDirectBombadilFuzzConfig(config, baseUrlOverride) {
   const viewport = validateViewport(config.viewport);
   const explorationPolicy = validateExplorationPolicy(config.explorationPolicy);
   const artifactPolicy = validateArtifactPolicy(config.artifactPolicy);
+  const bombadilToolchain = validateBombadilToolchainConfig(config.bombadilToolchain, repositoryRoot);
   const startupTimeoutMs = config.server.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
   if (!Number.isSafeInteger(startupTimeoutMs) || startupTimeoutMs < 1000 || startupTimeoutMs > MAX_STARTUP_TIMEOUT_MS) {
     throw new Error(`server.startupTimeoutMs must be an integer between 1000 and ${String(MAX_STARTUP_TIMEOUT_MS)}`);
@@ -4243,7 +4325,8 @@ function validateDirectBombadilFuzzConfig(config, baseUrlOverride) {
     specificationPath,
     baseUrl,
     artifactRoot: join2(repositoryRoot, "artifacts", "direct-bombadil", config.artifactName),
-    bombadilExecutable: bombadilNativeBinary(repositoryRoot),
+    bombadilExecutable: bombadilToolchain?.executablePath ?? bombadilNativeBinary(repositoryRoot),
+    bombadilToolchain,
     entryPath,
     explorationPolicy,
     port,
@@ -4303,6 +4386,31 @@ function createDirectBombadilInvocation(options) {
     wallClockTimeoutMs: options.replayPath === null ? options.timeLimitSeconds * 1000 + RANDOM_RUN_OVERHEAD_MS : REPLAY_WALL_CLOCK_TIMEOUT_MS
   };
 }
+function bombadilChildEnvironment() {
+  return Object.fromEntries(Object.entries({
+    ...process2.env,
+    NO_COLOR: "1"
+  }).filter(([name]) => !BOMBADIL_PRIVATE_ENVIRONMENT_NAMES.has(name)));
+}
+async function readBoundedProcessStream(stream, maximumBytes, label) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder;
+  let bytes = 0;
+  let output = "";
+  for (;; ) {
+    const chunk = await reader.read();
+    if (chunk.done)
+      return `${output}${decoder.decode()}`;
+    bytes += chunk.value.byteLength;
+    if (bytes > maximumBytes) {
+      reader.cancel().catch(() => {
+        return;
+      });
+      throw new Error(`${label} exceeded ${String(maximumBytes)} bytes`);
+    }
+    output += decoder.decode(chunk.value, { stream: true });
+  }
+}
 function captureStream(stream, maximumLength = LOG_LIMIT) {
   let stopCapture;
   const stopped = new Promise((resolveStopped) => {
@@ -4332,15 +4440,23 @@ function captureStream(stream, maximumLength = LOG_LIMIT) {
   })();
   return { result, stop: stopCapture };
 }
-function signalProcessGroup(process_, signal) {
-  try {
-    process2.kill(-process_.pid, signal);
-    return;
-  } catch (error) {
-    if (!isRecord2(error) || error.code !== "ESRCH")
-      throw error;
-    if (process_.exitCode === null)
-      process_.kill(signal);
+async function signalProcessGroup(process_, signal, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  for (;; ) {
+    try {
+      process2.kill(-process_.pid, signal);
+      return;
+    } catch (error) {
+      if (isRecord2(error) && error.code === "ESRCH") {
+        if (process_.exitCode === null)
+          process_.kill(signal);
+        return;
+      }
+      if (!isRecord2(error) || error.code !== "EPERM" || Date.now() >= deadline) {
+        throw error;
+      }
+      await Bun.sleep(Math.min(10, Math.max(1, deadline - Date.now())));
+    }
   }
 }
 function processGroupMayExist(processId) {
@@ -4377,11 +4493,64 @@ async function waitForBombadilLeaderExit(process_, timeoutMs) {
 }
 async function settleBombadilProcessGroup(options) {
   try {
-    signalProcessGroup(options.process, "SIGKILL");
+    await signalProcessGroup(options.process, "SIGKILL", options.timeoutMs);
     await waitForBombadilLeaderExit(options.process, options.timeoutMs);
     await waitForProcessGroupExit(options.process.pid, options.timeoutMs);
   } catch (error) {
     throw new BombadilWriterSettlementError(`Bombadil process group ${String(options.process.pid)} did not settle safely`, error);
+  }
+}
+async function readExactBombadilExecutableVersion(executablePath, repositoryRoot, expectedAttestation, options = {}) {
+  const maximumOutputBytes = options.maximumOutputBytes ?? BOMBADIL_VERSION_OUTPUT_LIMIT;
+  const timeoutMs = options.timeoutMs ?? BOMBADIL_VERSION_PROBE_TIMEOUT_MS;
+  const probeAttestation = await attestBombadilExecutable(executablePath);
+  assertSameBombadilExecutableAttestation(expectedAttestation, probeAttestation);
+  const process_ = Bun.spawn([executablePath, "--version"], {
+    cwd: repositoryRoot,
+    detached: true,
+    env: bombadilChildEnvironment(),
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe"
+  });
+  const output = Promise.all([
+    readBoundedProcessStream(process_.stdout, maximumOutputBytes, "Bombadil --version stdout"),
+    readBoundedProcessStream(process_.stderr, maximumOutputBytes, "Bombadil --version stderr")
+  ]);
+  let timeout;
+  try {
+    const timeoutPromise = new Promise((resolveTimeout) => {
+      timeout = setTimeout(() => resolveTimeout({ kind: "timeout" }), timeoutMs);
+    });
+    const outcome = await Promise.race([
+      Promise.all([process_.exited, output]).then(([exitCode, streams]) => ({
+        exitCode,
+        kind: "exited",
+        stderr: streams[1],
+        stdout: streams[0]
+      })),
+      timeoutPromise
+    ]);
+    if (outcome.kind === "timeout") {
+      throw new Error(`Bombadil --version exceeded its ${String(timeoutMs)}ms wall-clock limit`);
+    }
+    if (outcome.exitCode !== 0) {
+      throw new Error(`Bombadil --version exited with status ${String(outcome.exitCode)}`);
+    }
+    if (outcome.stderr !== "") {
+      throw new Error("Bombadil --version wrote unexpected stderr");
+    }
+    if (!/^bombadil 0\.7\.2(?:\r?\n)?$/u.test(outcome.stdout)) {
+      throw new Error(`Bombadil executable must report exactly bombadil ${EXPECTED_BOMBADIL_VERSION}`);
+    }
+    return EXPECTED_BOMBADIL_VERSION;
+  } finally {
+    if (timeout !== undefined)
+      clearTimeout(timeout);
+    await settleBombadilProcessGroup({
+      process: process_,
+      timeoutMs: PROCESS_TERMINATION_GRACE_MS
+    });
   }
 }
 async function establishCleanBombadilArtifactBaseline(options) {
@@ -4443,6 +4612,7 @@ async function runBombadilNativeProcessInternal(invocation, hooks = {}) {
   if (bombadilAbortRequested(invocation.abortSignal)) {
     return abortedBombadilProcessResult();
   }
+  const expectedExecutableAttestation = invocation[BOMBADIL_EXECUTABLE_ATTESTATION] ?? await attestBombadilExecutable(invocation.command[0] ?? "");
   await establishCleanBombadilArtifactBaseline({
     ...hooks.beforeArtifactBaselineInspect === undefined ? {} : { beforeInspect: hooks.beforeArtifactBaselineInspect },
     outputPath: invocation.outputPath,
@@ -4451,10 +4621,15 @@ async function runBombadilNativeProcessInternal(invocation, hooks = {}) {
   if (bombadilAbortRequested(invocation.abortSignal)) {
     return abortedBombadilProcessResult();
   }
-  const childEnvironment = Object.fromEntries(Object.entries({
-    ...process2.env,
-    NO_COLOR: "1"
-  }).filter(([name]) => name !== ARTIFACT_COORDINATION_ENVIRONMENT));
+  const childEnvironment = bombadilChildEnvironment();
+  const spawnAttestation = await attestBombadilExecutable(invocation.command[0] ?? "");
+  assertSameBombadilExecutableAttestation(expectedExecutableAttestation, spawnAttestation);
+  if (hooks.afterFinalExecutableAttestation !== undefined) {
+    await hooks.afterFinalExecutableAttestation();
+  }
+  if (bombadilAbortRequested(invocation.abortSignal)) {
+    return abortedBombadilProcessResult();
+  }
   const process_ = Bun.spawn([...invocation.command], {
     cwd: invocation.cwd,
     detached: true,
@@ -4563,6 +4738,7 @@ var defaultDependencies = {
   createAbortController: () => new AbortController,
   createRunId: randomUUID2,
   now: () => new Date,
+  readBombadilVersion: readExactBombadilVersion,
   runBombadil: runBombadilNativeProcess,
   signalController: {
     forward: (signal) => process2.kill(process2.pid, signal),
@@ -4604,6 +4780,317 @@ async function requireRegularFile(path, label) {
   }
   if (!metadata.isFile())
     throw new Error(`${label} must be a regular file`);
+}
+async function resolveBombadilExecutablePath(candidate, repositoryRoot) {
+  if (!isAbsolute(candidate) || resolve(candidate) !== candidate || !isWithin(repositoryRoot, candidate)) {
+    throw new Error("The root Bombadil executable must be an absolute normalized path inside repositoryRoot");
+  }
+  let metadata;
+  try {
+    metadata = await lstat(candidate);
+  } catch {
+    throw new Error("The root Bombadil executable does not exist at its configured path");
+  }
+  if (metadata.isSymbolicLink() || !metadata.isFile()) {
+    throw new Error("The root Bombadil executable must be a regular nonsymlink file");
+  }
+  if ((metadata.mode & 73) === 0) {
+    throw new Error("The root Bombadil executable must have an executable mode bit");
+  }
+  const resolved = await resolveExistingRealPath(candidate, "The root Bombadil executable");
+  if (resolved !== candidate || !isWithin(repositoryRoot, resolved)) {
+    throw new Error("The root Bombadil executable must not traverse a symlink or escape repositoryRoot");
+  }
+  return resolved;
+}
+function sameBombadilExecutableIdentity(first, second) {
+  return first.dev === second.dev && first.ino === second.ino && first.nlink === second.nlink && first.mode === second.mode && first.size === second.size && first.mtimeNs === second.mtimeNs && first.ctimeNs === second.ctimeNs;
+}
+async function attestBombadilExecutable(path, options = {}) {
+  let lexical;
+  try {
+    lexical = await lstat(path, { bigint: true });
+  } catch {
+    throw new Error("The root Bombadil executable does not exist at its configured path");
+  }
+  if (lexical.isSymbolicLink() || !lexical.isFile()) {
+    throw new Error("The root Bombadil executable must be a regular nonsymlink file");
+  }
+  if ((lexical.mode & 0o111n) === 0n) {
+    throw new Error("The root Bombadil executable must have an executable mode bit");
+  }
+  if (lexical.size > BigInt(MAX_BOMBADIL_EXECUTABLE_BYTES)) {
+    throw new Error(`The root Bombadil executable exceeds the ${String(MAX_BOMBADIL_EXECUTABLE_BYTES)}-byte attestation limit`);
+  }
+  const handle = await open(path, fileSystemConstants.O_RDONLY | fileSystemConstants.O_NOFOLLOW);
+  let snapshotHandle = null;
+  try {
+    if (options.snapshotPath !== undefined) {
+      snapshotHandle = await open(options.snapshotPath, fileSystemConstants.O_WRONLY | fileSystemConstants.O_CREAT | fileSystemConstants.O_EXCL | fileSystemConstants.O_NOFOLLOW, 384);
+    }
+    const before = await handle.stat({ bigint: true });
+    if (!before.isFile() || !sameBombadilExecutableIdentity(lexical, before)) {
+      throw new Error("The root Bombadil executable changed during attestation");
+    }
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    let position = 0;
+    const size = Number(before.size);
+    while (position < size) {
+      const length = Math.min(buffer.byteLength, size - position);
+      const { bytesRead } = await handle.read(buffer, 0, length, position);
+      if (bytesRead <= 0) {
+        throw new Error("The root Bombadil executable changed during attestation");
+      }
+      const bytes = buffer.subarray(0, bytesRead);
+      hash.update(bytes);
+      if (snapshotHandle !== null) {
+        let written = 0;
+        while (written < bytesRead) {
+          const result = await snapshotHandle.write(bytes, written, bytesRead - written, position + written);
+          if (result.bytesWritten <= 0) {
+            throw new Error("The private Bombadil executable snapshot write made no progress");
+          }
+          written += result.bytesWritten;
+        }
+      }
+      position += bytesRead;
+    }
+    if (snapshotHandle !== null) {
+      await snapshotHandle.chmod(320);
+      await snapshotHandle.sync();
+    }
+    const after = await handle.stat({ bigint: true });
+    if (!sameBombadilExecutableIdentity(before, after)) {
+      throw new Error("The root Bombadil executable changed during attestation");
+    }
+    const finalLexical = await lstat(path, { bigint: true });
+    if (!sameBombadilExecutableIdentity(after, finalLexical)) {
+      throw new Error("The root Bombadil executable changed during attestation");
+    }
+    return Object.freeze({
+      device: after.dev,
+      inode: after.ino,
+      linkCount: after.nlink,
+      mode: after.mode,
+      sha256: hash.digest("hex"),
+      size
+    });
+  } finally {
+    try {
+      await snapshotHandle?.close();
+    } finally {
+      await handle.close();
+    }
+  }
+}
+async function removePrivateBombadilExecutableSnapshot(snapshot) {
+  if (snapshot.attestation.linkCount !== 1n) {
+    throw new Error("The private Bombadil executable snapshot file identity is not exclusive");
+  }
+  const directory = await openPrivateBombadilSnapshotDirectory(snapshot);
+  let madeWritable = false;
+  let directoryRemoved = false;
+  try {
+    await requireSamePrivateBombadilSnapshotExecutable(snapshot);
+    await directory.chmod(448);
+    madeWritable = true;
+    await requireSameOpenPrivateBombadilSnapshotDirectory(directory, snapshot, 0o700n);
+    await requireSamePrivateBombadilSnapshotExecutable(snapshot);
+    await requireSameOpenPrivateBombadilSnapshotDirectory(directory, snapshot, 0o700n);
+    await requireSameLexicalPrivateBombadilSnapshotExecutable(snapshot);
+    await unlink(snapshot.executablePath);
+    await requireMissingPrivateBombadilSnapshotPath(snapshot.executablePath, "executable");
+    await requireSameOpenPrivateBombadilSnapshotDirectory(directory, snapshot, 0o700n);
+    await rmdir(snapshot.directoryPath);
+    directoryRemoved = true;
+    await requireMissingPrivateBombadilSnapshotPath(snapshot.directoryPath, "directory");
+  } catch (error) {
+    if (madeWritable && !directoryRemoved) {
+      try {
+        const descriptor = await directory.stat({ bigint: true });
+        if (descriptor.isDirectory() && descriptor.dev === snapshot.directoryIdentity.device && descriptor.ino === snapshot.directoryIdentity.inode) {
+          await directory.chmod(Number(snapshot.directoryIdentity.mode & 0o777n));
+        }
+      } catch (resealError) {
+        throw new AggregateError([error, resealError], "Bombadil snapshot cleanup failed and its exact directory could not be resealed", { cause: error });
+      }
+    }
+    throw error;
+  } finally {
+    await directory.close();
+  }
+}
+function sameBombadilSnapshotDirectoryIdentity(metadata, identity, permissions = identity.mode & 0o777n) {
+  const expectedMode = identity.mode & ~0o777n | permissions;
+  return metadata.isDirectory() && !metadata.isSymbolicLink() && metadata.dev === identity.device && metadata.ino === identity.inode && metadata.mode === expectedMode;
+}
+async function readPrivateBombadilSnapshotDirectoryIdentity(path) {
+  const metadata = await lstat(path, { bigint: true });
+  if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+    throw new Error("The private Bombadil executable snapshot path is not a nonsymlink directory");
+  }
+  return Object.freeze({
+    device: metadata.dev,
+    inode: metadata.ino,
+    mode: metadata.mode
+  });
+}
+async function openPrivateBombadilSnapshotDirectory(snapshot) {
+  const lexical = await lstat(snapshot.directoryPath, { bigint: true });
+  if (!sameBombadilSnapshotDirectoryIdentity(lexical, snapshot.directoryIdentity)) {
+    throw new Error("The private Bombadil executable snapshot directory identity changed");
+  }
+  const directory = await open(snapshot.directoryPath, fileSystemConstants.O_RDONLY | fileSystemConstants.O_DIRECTORY | fileSystemConstants.O_NOFOLLOW);
+  try {
+    const descriptor = await directory.stat({ bigint: true });
+    if (!sameBombadilSnapshotDirectoryIdentity(descriptor, snapshot.directoryIdentity)) {
+      throw new Error("The private Bombadil executable snapshot directory identity changed");
+    }
+    return directory;
+  } catch (error) {
+    await directory.close();
+    throw error;
+  }
+}
+async function requireSameOpenPrivateBombadilSnapshotDirectory(directory, snapshot, permissions) {
+  const descriptor = await directory.stat({ bigint: true });
+  const lexical = await lstat(snapshot.directoryPath, { bigint: true });
+  if (!sameBombadilSnapshotDirectoryIdentity(descriptor, snapshot.directoryIdentity, permissions) || !sameBombadilSnapshotDirectoryIdentity(lexical, snapshot.directoryIdentity, permissions)) {
+    throw new Error("The private Bombadil executable snapshot directory identity changed");
+  }
+}
+async function requireSamePrivateBombadilSnapshotExecutable(snapshot) {
+  const attestation = await attestBombadilExecutable(snapshot.executablePath);
+  if (attestation.device !== snapshot.attestation.device || attestation.inode !== snapshot.attestation.inode || attestation.linkCount !== snapshot.attestation.linkCount || attestation.mode !== snapshot.attestation.mode || attestation.size !== snapshot.attestation.size || attestation.sha256 !== snapshot.attestation.sha256) {
+    throw new Error("The private Bombadil executable snapshot file identity changed");
+  }
+}
+async function requireSameLexicalPrivateBombadilSnapshotExecutable(snapshot) {
+  const metadata = await lstat(snapshot.executablePath, { bigint: true });
+  if (metadata.isSymbolicLink() || !metadata.isFile() || metadata.dev !== snapshot.attestation.device || metadata.ino !== snapshot.attestation.inode || metadata.nlink !== snapshot.attestation.linkCount || metadata.mode !== snapshot.attestation.mode || metadata.size !== BigInt(snapshot.attestation.size)) {
+    throw new Error("The private Bombadil executable snapshot file identity changed");
+  }
+}
+async function requireMissingPrivateBombadilSnapshotPath(path, label) {
+  try {
+    await lstat(path);
+  } catch (error) {
+    if (isRecord2(error) && error.code === "ENOENT")
+      return;
+    throw error;
+  }
+  throw new Error(`The private Bombadil executable snapshot ${label} survived cleanup`);
+}
+async function sealPartialPrivateBombadilSnapshotForRetention(snapshot) {
+  const directory = await openPrivateBombadilSnapshotDirectory(snapshot);
+  try {
+    await directory.chmod(320);
+    await requireSameOpenPrivateBombadilSnapshotDirectory(directory, snapshot, 0o500n);
+  } finally {
+    await directory.close();
+  }
+}
+async function materializePrivateBombadilExecutableSnapshot(options) {
+  await createExclusiveDirectory(options.directoryPath, "Private Bombadil executable snapshot directory");
+  const executablePath = join2(options.directoryPath, "bombadil");
+  let initialDirectoryIdentity = null;
+  let cleanupSnapshot = null;
+  try {
+    initialDirectoryIdentity = await readPrivateBombadilSnapshotDirectoryIdentity(options.directoryPath);
+    const sourceAttestation = await attestBombadilExecutable(options.sourcePath, {
+      snapshotPath: executablePath
+    });
+    const attestation = await attestBombadilExecutable(executablePath);
+    cleanupSnapshot = Object.freeze({
+      attestation,
+      directoryIdentity: initialDirectoryIdentity,
+      directoryPath: options.directoryPath,
+      executablePath,
+      sourceAttestation
+    });
+    if (sourceAttestation.sha256 !== attestation.sha256 || sourceAttestation.size !== attestation.size) {
+      throw new Error("The private Bombadil executable snapshot does not match reviewed bytes");
+    }
+    if (sourceAttestation.device === attestation.device && sourceAttestation.inode === attestation.inode) {
+      throw new Error("The private Bombadil executable snapshot must own a distinct file identity");
+    }
+    if ((attestation.mode & 0o777n) !== 0o500n) {
+      throw new Error("The private Bombadil executable snapshot must be owner-read-execute only");
+    }
+    if (attestation.linkCount !== 1n) {
+      throw new Error("The private Bombadil executable snapshot must have exactly one hard link");
+    }
+    const directory = await openPrivateBombadilSnapshotDirectory(cleanupSnapshot);
+    let directoryIdentity;
+    try {
+      await directory.chmod(320);
+      const descriptor = await directory.stat({ bigint: true });
+      const lexical = await lstat(options.directoryPath, { bigint: true });
+      if (!sameBombadilSnapshotDirectoryIdentity(descriptor, initialDirectoryIdentity, 0o500n) || !sameBombadilSnapshotDirectoryIdentity(lexical, initialDirectoryIdentity, 0o500n)) {
+        throw new Error("The private Bombadil executable snapshot directory is not sealed");
+      }
+      directoryIdentity = Object.freeze({
+        device: descriptor.dev,
+        inode: descriptor.ino,
+        mode: descriptor.mode
+      });
+    } finally {
+      await directory.close();
+    }
+    return Object.freeze({
+      attestation,
+      directoryIdentity,
+      directoryPath: options.directoryPath,
+      executablePath,
+      sourceAttestation
+    });
+  } catch (error) {
+    if (cleanupSnapshot !== null) {
+      try {
+        await removePrivateBombadilExecutableSnapshot(cleanupSnapshot);
+      } catch (cleanupError) {
+        throw new BombadilPersistenceError("Bombadil executable snapshot materialization and cleanup both failed", [error, cleanupError]);
+      }
+    } else if (initialDirectoryIdentity !== null) {
+      try {
+        await sealPartialPrivateBombadilSnapshotForRetention({
+          directoryIdentity: initialDirectoryIdentity,
+          directoryPath: options.directoryPath
+        });
+      } catch (retentionError) {
+        throw new BombadilPersistenceError("Bombadil snapshot materialization failed and its exact partial evidence could not be sealed", [error, retentionError]);
+      }
+      throw new BombadilPersistenceError("Bombadil snapshot materialization failed; its exact partial snapshot was retained as protected persistence evidence", [error]);
+    }
+    throw error;
+  }
+}
+function validateBombadilExecutableAttestation(attestation, toolchain, observedVersion) {
+  assertBombadilExecutableAttestationMatchesToolchain(attestation, toolchain);
+  return Object.freeze(toolchain === null ? {
+    buildContract: null,
+    kind: "npm-package",
+    sha256: attestation.sha256,
+    sourceRevision: null,
+    version: observedVersion
+  } : {
+    buildContract: toolchain.buildContract,
+    kind: "reviewed-override",
+    sha256: attestation.sha256,
+    sourceRevision: toolchain.sourceRevision,
+    version: observedVersion
+  });
+}
+function assertBombadilExecutableAttestationMatchesToolchain(attestation, toolchain) {
+  if (toolchain !== null && attestation.sha256 !== toolchain.sha256) {
+    throw new Error("The root Bombadil executable SHA-256 does not match bombadilToolchain.sha256");
+  }
+}
+function assertSameBombadilExecutableAttestation(before, after) {
+  if (before.device !== after.device || before.inode !== after.inode || before.linkCount !== after.linkCount || before.mode !== after.mode || before.size !== after.size || before.sha256 !== after.sha256) {
+    throw new Error("The root Bombadil executable changed before native process startup");
+  }
 }
 async function requireDirectory(path, label) {
   let metadata;
@@ -4661,19 +5148,20 @@ async function resolveDirectBombadilRealPaths(config, replayPath) {
   if (resolvedReplayPath !== null && !resolvedReplayPath.endsWith(".jsonl")) {
     throw new Error("--replay must resolve to a .jsonl trace inside repositoryRoot");
   }
+  const bombadilExecutable = config.bombadilToolchain === null ? bombadilNativeBinary(repositoryRoot) : await resolveBombadilExecutablePath(config.bombadilToolchain.executablePath, repositoryRoot);
   return {
     config: {
       ...config,
       repositoryRoot,
       specificationPath,
       artifactRoot: join2(repositoryRoot, "artifacts", "direct-bombadil", config.artifactName),
-      bombadilExecutable: bombadilNativeBinary(repositoryRoot),
+      bombadilExecutable,
       server: { ...config.server, cwd: serverCwd }
     },
     replayPath: resolvedReplayPath
   };
 }
-async function readExactBombadilVersion(repositoryRoot) {
+async function readExactBombadilVersion(repositoryRoot, toolchain, executablePath, expectedExecutableAttestation) {
   const packagePath = join2(repositoryRoot, "node_modules", "@antithesishq", "bombadil", "package.json");
   let input;
   try {
@@ -4683,6 +5171,9 @@ async function readExactBombadilVersion(repositoryRoot) {
   }
   if (typeof input !== "object" || input === null || Array.isArray(input) || Reflect.get(input, "version") !== EXPECTED_BOMBADIL_VERSION) {
     throw new Error(`The root Bombadil package must be exactly ${EXPECTED_BOMBADIL_VERSION}`);
+  }
+  if (toolchain !== null) {
+    return await readExactBombadilExecutableVersion(executablePath, repositoryRoot, expectedExecutableAttestation);
   }
   return EXPECTED_BOMBADIL_VERSION;
 }
@@ -4805,6 +5296,10 @@ async function runDirectBombadilFuzzMatrix(campaignsInput, input = process2.argv
         throw new Error("Bombadil matrices support public-summary uploads only");
       }
       campaigns = validateCampaignMatrix(campaignsInput);
+      const toolchainIdentities = new Set(campaigns.map((campaign) => bombadilToolchainIdentity(validateBombadilToolchainConfig(campaign.config.bombadilToolchain, resolve(campaign.config.repositoryRoot)))));
+      if (toolchainIdentities.size !== 1) {
+        throw new Error("Every Bombadil matrix campaign must use the same toolchain identity");
+      }
       parsed = parseMatrixCampaignArgument(normalizedOptions.arguments);
       selected = parsed.campaignId === null ? campaigns : campaigns.filter((campaign) => campaign.id === parsed.campaignId);
       if (selected.length === 0) {
@@ -5116,6 +5611,11 @@ async function runDirectBombadilFuzzInternal(config, input = process2.argv.slice
     };
     const serverCommand = validated.server.command.map((argument) => argument === "{port}" ? validated.port : argument);
     let bombadilVersion = null;
+    let bombadilExecutableAttestation = null;
+    let bombadilRuntimeExecutableAttestation = null;
+    let bombadilRuntimeExecutable = validated.bombadilExecutable;
+    let bombadilExecutableSnapshot = null;
+    let bombadilToolchainEvidence = null;
     let lease = null;
     let processResult = null;
     let attestation = null;
@@ -5131,8 +5631,21 @@ async function runDirectBombadilFuzzInternal(config, input = process2.argv.slice
     let writersSettled = true;
     {
       try {
-        await requireRegularFile(validated.bombadilExecutable, "The root Bombadil executable");
-        bombadilVersion = await readExactBombadilVersion(validated.repositoryRoot);
+        if (validated.bombadilToolchain === null) {
+          bombadilExecutableAttestation = await attestBombadilExecutable(validated.bombadilExecutable);
+          bombadilRuntimeExecutableAttestation = bombadilExecutableAttestation;
+        } else {
+          bombadilExecutableSnapshot = await materializePrivateBombadilExecutableSnapshot({
+            directoryPath: join2(artifactRun.runDirectory, ".bombadil-toolchain"),
+            sourcePath: validated.bombadilExecutable
+          });
+          bombadilExecutableAttestation = bombadilExecutableSnapshot.sourceAttestation;
+          bombadilRuntimeExecutableAttestation = bombadilExecutableSnapshot.attestation;
+          bombadilRuntimeExecutable = bombadilExecutableSnapshot.executablePath;
+        }
+        assertBombadilExecutableAttestationMatchesToolchain(bombadilExecutableAttestation, validated.bombadilToolchain);
+        bombadilVersion = await dependencies.readBombadilVersion(validated.repositoryRoot, validated.bombadilToolchain, bombadilRuntimeExecutable, bombadilRuntimeExecutableAttestation);
+        bombadilToolchainEvidence = validateBombadilExecutableAttestation(bombadilExecutableAttestation, validated.bombadilToolchain, bombadilVersion);
         throwIfBombadilRunAborted(abortController.signal);
         try {
           lease = await dependencies.acquireServer({
@@ -5149,7 +5662,7 @@ async function runDirectBombadilFuzzInternal(config, input = process2.argv.slice
                 cwd: validated.server.cwd,
                 detachedProcessGroup: true,
                 ...validated.server.env === undefined ? {} : { env: validated.server.env },
-                omitEnvironment: [ARTIFACT_COORDINATION_ENVIRONMENT]
+                omitEnvironment: [...BOMBADIL_PRIVATE_ENVIRONMENT_NAMES]
               });
               terminateAbortedOwnedServer(abortController.signal, ownedServer);
               return ownedServer;
@@ -5168,7 +5681,18 @@ async function runDirectBombadilFuzzInternal(config, input = process2.argv.slice
         }
         let processFailure = null;
         try {
-          processResult = await dependencies.runBombadil(abortableInvocation);
+          const spawnAttestation = await attestBombadilExecutable(bombadilRuntimeExecutable);
+          if (bombadilExecutableAttestation === null || bombadilRuntimeExecutableAttestation === null) {
+            throw new Error("The root Bombadil executable was not attested before server startup");
+          }
+          assertSameBombadilExecutableAttestation(bombadilRuntimeExecutableAttestation, spawnAttestation);
+          bombadilToolchainEvidence = validateBombadilExecutableAttestation(bombadilExecutableAttestation, validated.bombadilToolchain, bombadilVersion);
+          const attestedInvocation = {
+            ...abortableInvocation,
+            command: [bombadilRuntimeExecutable, ...abortableInvocation.command.slice(1)],
+            [BOMBADIL_EXECUTABLE_ATTESTATION]: spawnAttestation
+          };
+          processResult = await dependencies.runBombadil(attestedInvocation);
         } catch (error) {
           processFailure = error;
         }
@@ -5208,6 +5732,17 @@ async function runDirectBombadilFuzzInternal(config, input = process2.argv.slice
           serverOutputFailure = error;
           failure ??= error;
         }
+      }
+      if (bombadilExecutableSnapshot !== null && writersSettled) {
+        try {
+          await removePrivateBombadilExecutableSnapshot(bombadilExecutableSnapshot);
+          bombadilExecutableSnapshot = null;
+        } catch (error) {
+          const persistence = new BombadilPersistenceError("Bombadil private executable snapshot could not be removed", [error]);
+          failure = failure === null ? persistence : combinePersistenceFailure(failure, persistence, "Bombadil private executable snapshot could not be removed");
+        }
+      } else if (bombadilExecutableSnapshot !== null) {
+        failure = retainPrivateBombadilSnapshotAfterWriterSettlementFailure(failure ?? new Error("writer settlement unavailable"));
       }
       if (writersSettled) {
         try {
@@ -5327,6 +5862,7 @@ async function runDirectBombadilFuzzInternal(config, input = process2.argv.slice
       bombadil: {
         version: bombadilVersion,
         executable: validated.bombadilExecutable,
+        toolchain: bombadilToolchainEvidence,
         exitCode: processResult?.exitCode ?? null,
         termination: processResult?.termination ?? null,
         outputPath,

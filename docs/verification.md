@@ -10,8 +10,8 @@ definition with `parseDefinitionCoverageSnapshot` so a valid but stale catalog
 cannot be mistaken for the catalog under review.
 
 The repository carries one `$direct` Agent Skill under `skills/direct`.
-Install it with `npx skills add hraness/direct#v0.7.18` or
-`bunx skills add hraness/direct#v0.7.18`, or copy that directory into the runner's
+Install it with `npx skills add hraness/direct#v0.7.19` or
+`bunx skills add hraness/direct#v0.7.19`, or copy that directory into the runner's
 discovery location. Invoke `$direct` for the workflow below. The skill is
 independent from library package installation and structures the audit; it
 does not turn deterministic evidence into proof of a substituted live system.
@@ -491,6 +491,48 @@ await runDirectBombadilFuzz(config, runId === undefined
       },
     });
 ```
+
+The package-owned native executable is the default. To exercise a reviewed
+native fix before a new Bombadil package exists, place the executable in an
+ignored, reproducible directory inside the consumer repository and bind its
+complete identity explicitly:
+
+```ts
+const config = {
+  // The remaining campaign fields stay unchanged.
+  bombadilToolchain: {
+    buildContract: "cargo-release-browser-only",
+    executablePath: resolve(
+      repositoryRoot,
+      "artifacts/direct-bombadil-toolchain/<full-source-revision>/bombadil",
+    ),
+    sha256: "<64 lowercase hexadecimal characters>",
+    sourceRevision: "<40 lowercase hexadecimal characters>",
+    version: "0.7.2",
+  },
+} as const;
+```
+
+`buildContract` accepts `cargo-release-browser-only` for Bombadil's reviewed
+release-browser Cargo build or `nix-default-aarch64-darwin` for its reviewed
+Apple-silicon Nix default build. This field records reviewed build provenance;
+it does not make a native executable compatible with a different host. The
+executable path must be absolute, normalized, repository-confined, regular,
+non-symlinked, executable, and no larger than 64 MiB. Direct opens and hashes
+that file while binding
+its lexical and descriptor identities, copies the verified open-file bytes into
+a task-owned private read/execute-only snapshot, and attests the snapshot's
+distinct identity, digest, size, and mode. Both the bounded version probe and
+native campaign execute that sealed snapshot, so a later replacement of the
+configured source path cannot change the executed bytes. The snapshot is
+removed after the owned process boundary settles and is never public evidence.
+Every campaign in one matrix must use the same package default or the same
+five-field override. The exact Bombadil npm package remains required because
+the browser specification imports its TypeScript surface. Toolchain-related
+environment variables are removed from the server and native child
+environments. Raw local run evidence records the version, digest, source
+revision, and build contract; sanitized public receipts do not carry the local
+path or override identity.
 
 `baseUrl` must be an HTTP root origin on `127.0.0.1` or `localhost` with an
 explicit port. `entryPath` locates the Direct page while `expectedRoute`

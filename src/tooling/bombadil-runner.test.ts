@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { defineDirect } from "@hraness/direct";
 import { createDirectSession } from "@hraness/direct/testing";
 import { getEventListeners } from "node:events";
+import { createHash } from "node:crypto";
 import {
   chmod,
   link,
@@ -14,6 +15,7 @@ import {
   rm,
   stat,
   symlink,
+  truncate,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -30,6 +32,7 @@ import {
   parseDirectBombadilMatrixReceipt,
   parseDirectBombadilMatrixSummary,
   parseDirectBombadilSanitizedRunSummary,
+  readExactBombadilExecutableVersionForTest,
   requireMatchingLiveChromeDownloadIdentityForTest,
   resolveDirectBombadilUploadLeaf,
   runBombadilNativeProcess,
@@ -108,6 +111,7 @@ async function fixture(): Promise<{
   await mkdir(join(packageRoot, "binaries"), { recursive: true });
   await writeFile(specificationPath, "export const specification = true;\n");
   await writeFile(binaryPath, "fixture native executable\n");
+  await chmod(binaryPath, 0o755);
   await writeFile(join(packageRoot, "package.json"), JSON.stringify({ version: "0.7.2" }));
 
   return {
@@ -478,7 +482,10 @@ function controllableSignals(): {
 }
 
 function dependencies(options: {
+  readonly afterAcquire?: () => Promise<void> | void;
   readonly afterTrace?: (invocation: DirectBombadilInvocation) => Promise<void>;
+  readonly expectedBombadilExecutable?: string;
+  readonly expectedBombadilExecutableSha256?: string;
   readonly exitCode?: number;
   readonly failAcquire?: boolean;
   readonly noTrace?: boolean;
@@ -492,10 +499,12 @@ function dependencies(options: {
   readonly calls: string[];
   readonly overrides: Partial<DirectBombadilRunnerDependencies>;
   readonly serverCommands: string[][];
+  readonly serverOmittedEnvironment: string[][];
 } {
   const calls: string[] = [];
   const signals = controllableSignals();
   const serverCommands: string[][] = [];
+  const serverOmittedEnvironment: string[][] = [];
   const server = fakeServer(
     calls,
     options.neverServerOutput === true
@@ -509,27 +518,44 @@ function dependencies(options: {
   return {
     calls,
     serverCommands,
+    serverOmittedEnvironment,
     overrides: {
       now: () => dates.shift() ?? new Date("2026-08-26T12:00:01.250Z"),
+      readBombadilVersion: async () => "0.7.2",
       spawnServer: (serverOptions) => {
         calls.push("spawn-server");
         serverCommands.push([...serverOptions.command]);
+        serverOmittedEnvironment.push([...(serverOptions.omitEnvironment ?? [])]);
         return server;
       },
-      acquireServer: (acquireOptions): Promise<ServerLease> => {
+      acquireServer: async (acquireOptions): Promise<ServerLease> => {
         calls.push("acquire-server");
         const started = acquireOptions.startServer();
         if (options.failAcquire === true) {
-          return Promise.reject(new Error("listener ownership unknown"));
+          throw new Error("listener ownership unknown");
         }
-        return Promise.resolve({ source: "started", server: started });
+        await options.afterAcquire?.();
+        return { source: "started", server: started };
       },
       runBombadil: (invocation) => {
         calls.push("run-bombadil");
-        expect(invocation.command[0]).toEndWith(
-          `node_modules/@antithesishq/bombadil/binaries/${nativeBinaryName()}`,
-        );
+        if (options.expectedBombadilExecutable === undefined) {
+          expect(invocation.command[0]).toEndWith(
+            `node_modules/@antithesishq/bombadil/binaries/${nativeBinaryName()}`,
+          );
+        } else {
+          expect(invocation.command[0]).not.toBe(options.expectedBombadilExecutable);
+          expect(invocation.command[0]).toEndWith("/.bombadil-toolchain/bombadil");
+        }
         return (async () => {
+          if (options.expectedBombadilExecutableSha256 !== undefined) {
+            const runtimeExecutable = invocation.command[0];
+            if (runtimeExecutable === undefined) throw new Error("Expected Bombadil executable argv");
+            expect(createHash("sha256").update(await readFile(runtimeExecutable)).digest("hex"))
+              .toBe(options.expectedBombadilExecutableSha256);
+            expect((await stat(runtimeExecutable)).mode & 0o777).toBe(0o500);
+            expect((await stat(dirname(runtimeExecutable))).mode & 0o777).toBe(0o500);
+          }
           if (options.noTrace === true) {
             await mkdir(invocation.outputPath, { recursive: true });
           } else {
@@ -649,6 +675,79 @@ describe("Direct Bombadil configuration and invocation", () => {
     expect(validated.bombadilExecutable).toEndWith(
       `node_modules/@antithesishq/bombadil/binaries/${nativeBinaryName()}`,
     );
+  });
+
+  test("accepts one exact repository-confined reviewed native toolchain", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const executablePath = join(repositoryRoot, "artifacts", "toolchain", "bombadil");
+    const bytes = Buffer.from("reviewed native executable\n", "utf8");
+    await mkdir(dirname(executablePath), { recursive: true });
+    await writeFile(executablePath, bytes);
+    await chmod(executablePath, 0o755);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const bombadilToolchain = {
+      buildContract: "cargo-release-browser-only",
+      executablePath,
+      sha256,
+      sourceRevision: "2c86560a94788e529da4edb49cfdebb0dfa55bbd",
+      version: "0.7.2",
+    } as const;
+    const validated = validateDirectBombadilFuzzConfig({
+      ...config,
+      bombadilToolchain,
+    });
+    expect(validated.bombadilExecutable).toBe(executablePath);
+    expect(validated.bombadilToolchain).toEqual(bombadilToolchain);
+    expect(Object.isFrozen(validated.bombadilToolchain)).toBeTrue();
+  });
+
+  test("rejects partial, foreign, malformed, and escaping native toolchain identities", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const executablePath = join(repositoryRoot, "artifacts", "toolchain", "bombadil");
+    const valid = {
+      buildContract: "nix-default-aarch64-darwin",
+      executablePath,
+      sha256: "a".repeat(64),
+      sourceRevision: "b".repeat(40),
+      version: "0.7.2",
+    } as const;
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
+      bombadilToolchain: { ...valid, sha256: "A".repeat(64) },
+    })).toThrow("64 lowercase hexadecimal");
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
+      bombadilToolchain: { ...valid, sourceRevision: "short" },
+    })).toThrow("40 lowercase hexadecimal");
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
+      bombadilToolchain: { ...valid, executablePath: join(repositoryRoot, "..", "bombadil") },
+    })).toThrow("inside repositoryRoot");
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
+      bombadilToolchain: { ...valid, version: "0.7.3" as "0.7.2" },
+    })).toThrow("exactly 0.7.2");
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
+      bombadilToolchain: {
+        ...valid,
+        buildContract: "unreviewed" as "cargo-release-browser-only",
+      },
+    })).toThrow("buildContract is unsupported");
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
+      bombadilToolchain: { ...valid, extra: "unreviewed" } as never,
+    })).toThrow("must contain exactly");
+    const partial = {
+      buildContract: valid.buildContract,
+      executablePath: valid.executablePath,
+      sourceRevision: valid.sourceRevision,
+      version: valid.version,
+    };
+    expect(() => validateDirectBombadilFuzzConfig({
+      ...config,
+      bombadilToolchain: partial as never,
+    })).toThrow("must contain exactly");
   });
 
   test("orders query and policy artifacts by explicit code units", async () => {
@@ -1002,6 +1101,37 @@ describe("Direct Bombadil campaign matrix", () => {
         },
       ],
     });
+  });
+
+  test("rejects mixed default and reviewed toolchain identities before any campaign runs", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const executablePath = join(repositoryRoot, "reviewed-bombadil");
+    const bytes = Buffer.from("reviewed matrix executable\n", "utf8");
+    await writeFile(executablePath, bytes);
+    await chmod(executablePath, 0o755);
+    const runtime = dependencies({ expectedBombadilExecutable: executablePath });
+    const error = await rejection(runDirectBombadilFuzzMatrix([{
+      id: "package-default",
+      config,
+    }, {
+      id: "reviewed-override",
+      config: {
+        ...config,
+        artifactName: "fixture-override",
+        bombadilToolchain: {
+          buildContract: "cargo-release-browser-only",
+          executablePath,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          sourceRevision: "2c86560a94788e529da4edb49cfdebb0dfa55bbd",
+          version: "0.7.2",
+        },
+      },
+    }], {
+      arguments: ["--campaign=package-default"],
+      artifactRun: artifactRunPlan(repositoryRoot, 41),
+    }, runtime.overrides));
+    expect(error.message).toContain("same toolchain identity");
+    expect(runtime.calls).toEqual([]);
   });
 
   test("rejects ambiguous replay, duplicate IDs, and unknown selection", async () => {
@@ -2295,6 +2425,322 @@ describe("Direct Bombadil exploration summary", () => {
 });
 
 describe("Direct Bombadil process lifecycle", () => {
+  test("accepts only an exact bounded reviewed executable version and settles descendants", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-version-"));
+    temporaryDirectories.push(directory);
+    const executablePath = join(directory, "bombadil");
+    const processGroupPath = join(directory, "process-group");
+    await writeFile(executablePath, [
+      "#!/bin/sh",
+      `[ -z "$DIRECT_BOMBADIL_RUN_ID" ] || exit 91`,
+      `[ -z "$DIRECT_BOMBADIL_EXECUTABLE_PATH" ] || exit 92`,
+      `printf '%s' "$$" > ${JSON.stringify(processGroupPath)}`,
+      "(trap '' TERM; while :; do sleep 1; done) >/dev/null 2>&1 &",
+      "printf 'bombadil 0.7.2\\n'",
+    ].join("\n"));
+    await chmod(executablePath, 0o755);
+    const previousRunId = process.env.DIRECT_BOMBADIL_RUN_ID;
+    const previousExecutablePath = process.env.DIRECT_BOMBADIL_EXECUTABLE_PATH;
+    process.env.DIRECT_BOMBADIL_RUN_ID = "private-run-id";
+    process.env.DIRECT_BOMBADIL_EXECUTABLE_PATH = "private-executable";
+    try {
+      expect(await readExactBombadilExecutableVersionForTest(
+        executablePath,
+        directory,
+      )).toBe("0.7.2");
+    } finally {
+      if (previousRunId === undefined) Reflect.deleteProperty(process.env, "DIRECT_BOMBADIL_RUN_ID");
+      else process.env.DIRECT_BOMBADIL_RUN_ID = previousRunId;
+      if (previousExecutablePath === undefined) {
+        Reflect.deleteProperty(process.env, "DIRECT_BOMBADIL_EXECUTABLE_PATH");
+      } else {
+        process.env.DIRECT_BOMBADIL_EXECUTABLE_PATH = previousExecutablePath;
+      }
+    }
+    await waitForMissingProcessGroup(Number(await readFile(processGroupPath, "utf8")));
+  });
+
+  test("runs the version probe from reviewed snapshot bytes after source replacement", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-version-attestation-"));
+    temporaryDirectories.push(directory);
+    const executablePath = join(directory, "bombadil");
+    const replacementPath = join(directory, "replacement");
+    const sentinelPath = join(directory, "probed");
+    const reviewedBytes = [
+      "#!/bin/sh",
+      `printf reviewed > ${JSON.stringify(sentinelPath)}`,
+      "printf 'bombadil 0.7.2\\n'",
+      "",
+    ].join("\n");
+    const replacementBytes = [
+      "#!/bin/sh",
+      `printf unreviewed > ${JSON.stringify(sentinelPath)}`,
+      "printf 'bombadil 0.7.3\\n'",
+      "",
+    ].join("\n");
+    await writeFile(executablePath, reviewedBytes);
+    await writeFile(replacementPath, replacementBytes);
+    await chmod(executablePath, 0o755);
+    await chmod(replacementPath, 0o755);
+    let snapshotPath: string | null = null;
+    expect(await readExactBombadilExecutableVersionForTest(
+      executablePath,
+      directory,
+      {
+        afterPrivateSnapshotMaterialized: async (path) => {
+          snapshotPath = path;
+          await rename(replacementPath, executablePath);
+        },
+      },
+    )).toBe("0.7.2");
+    expect(await readFile(sentinelPath, "utf8")).toBe("reviewed");
+    expect(await readFile(executablePath, "utf8")).toBe(replacementBytes);
+    if (snapshotPath === null) throw new Error("Expected a private version snapshot path");
+    expect(await Bun.file(snapshotPath).exists()).toBeFalse();
+  });
+
+  test("refuses snapshot cleanup after its directory path is replaced", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-snapshot-directory-swap-"));
+    temporaryDirectories.push(directory);
+    const executablePath = join(directory, "bombadil");
+    const retainedDirectory = join(directory, "retained-snapshot");
+    const replacementSentinel = join(directory, "replacement-sentinel");
+    await writeFile(executablePath, "#!/bin/sh\nprintf 'bombadil 0.7.2\\n'\n");
+    await chmod(executablePath, 0o755);
+    let replacementDirectory: string | null = null;
+    const error = await rejection(readExactBombadilExecutableVersionForTest(
+      executablePath,
+      directory,
+      {
+        afterPrivateSnapshotMaterialized: async (snapshotPath) => {
+          replacementDirectory = dirname(snapshotPath);
+          await rename(replacementDirectory, retainedDirectory);
+          await mkdir(replacementDirectory, { mode: 0o700 });
+          await writeFile(join(replacementDirectory, "sentinel"), "unrelated replacement\n");
+          await chmod(replacementDirectory, 0o711);
+          await writeFile(replacementSentinel, "replacement installed\n");
+        },
+      },
+    ));
+    expect(error.message).toContain("snapshot directory identity changed");
+    if (replacementDirectory === null) throw new Error("Expected a replacement directory path");
+    expect(await readFile(join(replacementDirectory, "sentinel"), "utf8"))
+      .toBe("unrelated replacement\n");
+    expect((await stat(replacementDirectory)).mode & 0o777).toBe(0o711);
+    expect(await Bun.file(join(retainedDirectory, "bombadil")).exists()).toBeTrue();
+    expect((await stat(retainedDirectory)).mode & 0o777).toBe(0o500);
+    expect(await readFile(replacementSentinel, "utf8")).toBe("replacement installed\n");
+    await chmod(retainedDirectory, 0o700);
+  });
+
+  test("refuses snapshot cleanup after its executable path is replaced", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-snapshot-file-swap-"));
+    temporaryDirectories.push(directory);
+    const executablePath = join(directory, "bombadil");
+    const replacementPath = join(directory, "replacement");
+    const executableBytes = "#!/bin/sh\nprintf 'bombadil 0.7.2\\n'\n";
+    await writeFile(executablePath, executableBytes);
+    await writeFile(replacementPath, executableBytes);
+    await chmod(executablePath, 0o755);
+    await chmod(replacementPath, 0o500);
+    let retainedSnapshotPath: string | null = null;
+    let snapshotPath: string | null = null;
+    let unrelatedSentinel: string | null = null;
+    const error = await rejection(readExactBombadilExecutableVersionForTest(
+      executablePath,
+      directory,
+      {
+        afterPrivateSnapshotMaterialized: async (path) => {
+          snapshotPath = path;
+          const snapshotDirectory = dirname(path);
+          retainedSnapshotPath = join(snapshotDirectory, "reviewed-bombadil");
+          unrelatedSentinel = join(snapshotDirectory, "unrelated-sentinel");
+          await chmod(snapshotDirectory, 0o700);
+          await rename(path, retainedSnapshotPath);
+          await rename(replacementPath, path);
+          await writeFile(unrelatedSentinel, "preserve me\n");
+          await chmod(unrelatedSentinel, 0o400);
+          await chmod(snapshotDirectory, 0o500);
+        },
+      },
+    ));
+    expect(error.message).toContain("snapshot file identity changed");
+    if (snapshotPath === null || retainedSnapshotPath === null || unrelatedSentinel === null) {
+      throw new Error("Expected retained snapshot evidence paths");
+    }
+    expect(await readFile(snapshotPath, "utf8")).toBe(executableBytes);
+    expect(await readFile(retainedSnapshotPath, "utf8")).toBe(executableBytes);
+    expect((await stat(snapshotPath)).ino).not.toBe((await stat(retainedSnapshotPath)).ino);
+    expect(await readFile(unrelatedSentinel, "utf8")).toBe("preserve me\n");
+    expect((await stat(dirname(snapshotPath))).mode & 0o777).toBe(0o500);
+    await chmod(dirname(snapshotPath), 0o700);
+  });
+
+  test("refuses snapshot cleanup when its executable gains another hard link", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-snapshot-hard-link-"));
+    temporaryDirectories.push(directory);
+    const executablePath = join(directory, "bombadil");
+    const retainedLink = join(directory, "retained-private-bytes");
+    const executableBytes = "#!/bin/sh\nprintf 'bombadil 0.7.2\\n'\n";
+    await writeFile(executablePath, executableBytes);
+    await chmod(executablePath, 0o755);
+    let snapshotPath: string | null = null;
+    const error = await rejection(readExactBombadilExecutableVersionForTest(
+      executablePath,
+      directory,
+      {
+        afterPrivateSnapshotMaterialized: async (path) => {
+          snapshotPath = path;
+          await link(path, retainedLink);
+        },
+      },
+    ));
+    expect(error.message).toContain("snapshot file identity changed");
+    if (snapshotPath === null) throw new Error("Expected retained snapshot evidence");
+    expect(await readFile(snapshotPath, "utf8")).toBe(executableBytes);
+    expect(await readFile(retainedLink, "utf8")).toBe(executableBytes);
+    expect((await stat(snapshotPath)).ino).toBe((await stat(retainedLink)).ino);
+    expect((await stat(snapshotPath)).nlink).toBe(2);
+    expect((await stat(dirname(snapshotPath))).mode & 0o777).toBe(0o500);
+    await chmod(dirname(snapshotPath), 0o700);
+  });
+
+  test("seals and reports partial snapshot evidence when executable attestation cannot start", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-partial-snapshot-"));
+    temporaryDirectories.push(directory);
+    const executablePath = join(directory, "bombadil");
+    await writeFile(executablePath, "non-executable source\n");
+    await chmod(executablePath, 0o600);
+    const error = await rejection(readExactBombadilExecutableVersionForTest(
+      executablePath,
+      directory,
+    ));
+    expect(error.name).toBe("BombadilPersistenceError");
+    expect(error.message).toContain("partial snapshot was retained");
+    const retained = (await readdir(directory)).filter((name) =>
+      name.startsWith(".direct-bombadil-version-snapshot-")
+    );
+    expect(retained).toHaveLength(1);
+    const retainedDirectory = join(directory, retained[0] ?? "missing");
+    expect(await readdir(retainedDirectory)).toEqual([]);
+    expect((await stat(retainedDirectory)).mode & 0o777).toBe(0o500);
+    await chmod(retainedDirectory, 0o700);
+  });
+
+  test("rejects an oversized sparse executable before copying snapshot bytes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-oversized-snapshot-"));
+    temporaryDirectories.push(directory);
+    const executablePath = join(directory, "bombadil");
+    await writeFile(executablePath, "#!/bin/sh\n");
+    await truncate(executablePath, 64 * 1024 * 1024 + 1);
+    await chmod(executablePath, 0o755);
+
+    const error = await rejection(readExactBombadilExecutableVersionForTest(
+      executablePath,
+      directory,
+    ));
+    expect(error.name).toBe("BombadilPersistenceError");
+    expect(error.message).toContain("partial snapshot was retained");
+    expect(error.cause).toBeInstanceOf(Error);
+    expect((error.cause as Error).message)
+      .toContain("exceeds the 67108864-byte attestation limit");
+
+    const retained = (await readdir(directory)).filter((name) =>
+      name.startsWith(".direct-bombadil-version-snapshot-")
+    );
+    expect(retained).toHaveLength(1);
+    const retainedDirectory = join(directory, retained[0] ?? "missing");
+    expect(await readdir(retainedDirectory)).toEqual([]);
+    expect((await stat(retainedDirectory)).mode & 0o777).toBe(0o500);
+    await chmod(retainedDirectory, 0o700);
+  });
+
+  test("rejects wrong, nonzero, oversized, and timed-out executable version probes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-version-invalid-"));
+    temporaryDirectories.push(directory);
+    const cases = [
+      {
+        expected: "must report exactly bombadil 0.7.2",
+        maximumOutputBytes: undefined,
+        name: "wrong",
+        source: "printf 'bombadil 0.7.3\\n'",
+        timeoutMs: undefined,
+      },
+      {
+        expected: "exited with status 23",
+        maximumOutputBytes: undefined,
+        name: "nonzero",
+        source: "exit 23",
+        timeoutMs: undefined,
+      },
+      {
+        expected: "stdout exceeded 64 bytes",
+        maximumOutputBytes: 64,
+        name: "oversized",
+        source: "i=0; while [ $i -lt 80 ]; do printf x; i=$((i + 1)); done",
+        timeoutMs: undefined,
+      },
+      {
+        expected: "exceeded its 50ms wall-clock limit",
+        maximumOutputBytes: undefined,
+        name: "timeout",
+        source: "sleep 5",
+        timeoutMs: 50,
+      },
+    ] as const;
+    for (const scenario of cases) {
+      const executablePath = join(directory, scenario.name);
+      await writeFile(executablePath, `#!/bin/sh\n${scenario.source}\n`);
+      await chmod(executablePath, 0o755);
+      const error = await rejection(readExactBombadilExecutableVersionForTest(
+        executablePath,
+        directory,
+        {
+          ...(scenario.maximumOutputBytes === undefined
+            ? {}
+            : { maximumOutputBytes: scenario.maximumOutputBytes }),
+          ...(scenario.timeoutMs === undefined ? {} : { timeoutMs: scenario.timeoutMs }),
+        },
+      ));
+      expect(error.message).toContain(scenario.expected);
+    }
+  });
+
+  test("strips coordination and toolchain environment from the native child", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-environment-"));
+    temporaryDirectories.push(directory);
+    const names = [
+      "DIRECT_BOMBADIL_RUN_ID",
+      "DIRECT_BOMBADIL_BUILD_CONTRACT",
+      "DIRECT_BOMBADIL_EXECUTABLE_PATH",
+      "DIRECT_BOMBADIL_EXECUTABLE_SHA256",
+      "DIRECT_BOMBADIL_SOURCE_REVISION",
+    ] as const;
+    const previous = new Map(names.map((name) => [name, process.env[name]]));
+    for (const name of names) process.env[name] = `private-${name}`;
+    try {
+      const result = await runBombadilNativeProcess({
+        command: [
+          process.execPath,
+          "-e",
+          `process.stdout.write(JSON.stringify(${JSON.stringify(names)}.map((name) => process.env[name])))`,
+        ],
+        cwd: directory,
+        outputPath: directory,
+        targetUrl: "http://127.0.0.1:4919/",
+        wallClockTimeoutMs: 5_000,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual(names.map(() => null));
+    } finally {
+      for (const name of names) {
+        const value = previous.get(name);
+        if (value === undefined) Reflect.deleteProperty(process.env, name);
+        else process.env[name] = value;
+      }
+    }
+  });
+
   test("permits only an exact Chrome download transient during the live scan", async () => {
     const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-transient-"));
     temporaryDirectories.push(directory);
@@ -4108,6 +4554,104 @@ describe("Direct Bombadil process lifecycle", () => {
     expect(await Bun.file(deferredSentinel).exists()).toBeFalse();
   });
 
+  test("does not spawn when cancellation arrives after the final executable attestation", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-final-attestation-abort-"));
+    temporaryDirectories.push(directory);
+    const sentinelPath = join(directory, "spawned");
+    const controller = new AbortController();
+    const result = await runBombadilNativeProcessForTest({
+      abortSignal: controller.signal,
+      command: [
+        process.execPath,
+        "-e",
+        `require("node:fs").writeFileSync(${JSON.stringify(sentinelPath)}, "spawned");`,
+      ],
+      cwd: directory,
+      outputPath: join(directory, "output"),
+      targetUrl: "http://127.0.0.1:4919/",
+      wallClockTimeoutMs: 5_000,
+    }, {
+      afterFinalExecutableAttestation: () => {
+        controller.abort();
+      },
+    });
+    expect(result).toMatchObject({
+      exitCode: 137,
+      stderr: "",
+      stdout: "",
+      termination: "aborted",
+    });
+    expect(await Bun.file(sentinelPath).exists()).toBeFalse();
+  });
+
+  test("rejects executable replacement during the artifact baseline before spawn", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-baseline-replacement-"));
+    temporaryDirectories.push(directory);
+    const executablePath = join(directory, "bombadil");
+    const replacementPath = join(directory, "replacement");
+    const outputPath = join(directory, "output");
+    const sentinelPath = join(directory, "spawned");
+    await writeFile(
+      executablePath,
+      `#!/bin/sh\nprintf spawned > ${JSON.stringify(sentinelPath)}\n`,
+    );
+    await writeFile(
+      replacementPath,
+      `#!/bin/sh\nprintf replacement > ${JSON.stringify(sentinelPath)}\n`,
+    );
+    await chmod(executablePath, 0o755);
+    await chmod(replacementPath, 0o755);
+    const error = await rejection(runBombadilNativeProcessForTest({
+      command: [executablePath],
+      cwd: directory,
+      outputPath,
+      targetUrl: "http://127.0.0.1:4919/",
+      wallClockTimeoutMs: 5_000,
+    }, {
+      beforeArtifactBaselineInspect: async () => {
+        await rename(replacementPath, executablePath);
+      },
+    }));
+    expect(error.message).toContain("changed before native process startup");
+    expect(await Bun.file(sentinelPath).exists()).toBeFalse();
+  });
+
+  test("runs native work from reviewed snapshot bytes after source replacement", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-native-snapshot-"));
+    temporaryDirectories.push(directory);
+    const executablePath = join(directory, "bombadil");
+    const replacementPath = join(directory, "replacement");
+    const outputPath = join(directory, "output");
+    const snapshotDirectory = join(directory, "private-snapshot");
+    const sentinelPath = join(directory, "spawned");
+    const reviewedBytes = `#!/bin/sh\nprintf reviewed > ${JSON.stringify(sentinelPath)}\n`;
+    const replacementBytes = `#!/bin/sh\nprintf unreviewed > ${JSON.stringify(sentinelPath)}\n`;
+    await writeFile(executablePath, reviewedBytes);
+    await writeFile(replacementPath, replacementBytes);
+    await chmod(executablePath, 0o755);
+    await chmod(replacementPath, 0o755);
+    let snapshotPath: string | null = null;
+    const result = await runBombadilNativeProcessForTest({
+      command: [executablePath],
+      cwd: directory,
+      outputPath,
+      targetUrl: "http://127.0.0.1:4919/",
+      wallClockTimeoutMs: 5_000,
+    }, {
+      afterPrivateSnapshotMaterialized: async (path) => {
+        snapshotPath = path;
+        await rename(replacementPath, executablePath);
+      },
+      privateExecutableSnapshotDirectory: snapshotDirectory,
+    });
+    expect(result).toMatchObject({ exitCode: 0, termination: null });
+    expect(await readFile(sentinelPath, "utf8")).toBe("reviewed");
+    expect(await readFile(executablePath, "utf8")).toBe(replacementBytes);
+    if (snapshotPath === null) throw new Error("Expected a private native snapshot path");
+    expect(await Bun.file(snapshotPath).exists()).toBeFalse();
+    expect(await Bun.file(snapshotDirectory).exists()).toBeFalse();
+  });
+
   test("gives an aborted artifact writer no quota-growing TERM grace", async () => {
     const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-abort-quota-"));
     temporaryDirectories.push(directory);
@@ -4162,6 +4706,324 @@ describe("Direct Bombadil process lifecycle", () => {
 });
 
 describe("Direct Bombadil run lifecycle", () => {
+  test("runs a reviewed native toolchain only through a private executable snapshot", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const executablePath = join(repositoryRoot, "artifacts", "toolchain", "bombadil");
+    const bytes = Buffer.from([
+      "#!/bin/sh",
+      `[ "$1" = "--version" ] || exit 64`,
+      "printf 'bombadil 0.7.2\\n'",
+      "",
+    ].join("\n"), "utf8");
+    await mkdir(dirname(executablePath), { recursive: true });
+    await writeFile(executablePath, bytes);
+    await chmod(executablePath, 0o755);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const sourceRevision = "2c86560a94788e529da4edb49cfdebb0dfa55bbd";
+    const runtime = dependencies({
+      expectedBombadilExecutable: executablePath,
+      expectedBombadilExecutableSha256: sha256,
+    });
+    const overrides = { ...runtime.overrides };
+    Reflect.deleteProperty(overrides, "readBombadilVersion");
+    const result = await runDirectBombadilFuzz({
+      ...config,
+      bombadilToolchain: {
+        buildContract: "cargo-release-browser-only",
+        executablePath,
+        sha256,
+        sourceRevision,
+        version: "0.7.2",
+      },
+    }, ["--time-limit=12s"], overrides);
+    expect(result.kind).toBe("run");
+    expect(runtime.calls).toContain("run-bombadil");
+    expect(runtime.serverOmittedEnvironment).toEqual([[
+      "DIRECT_BOMBADIL_RUN_ID",
+      "DIRECT_BOMBADIL_BUILD_CONTRACT",
+      "DIRECT_BOMBADIL_EXECUTABLE_PATH",
+      "DIRECT_BOMBADIL_EXECUTABLE_SHA256",
+      "DIRECT_BOMBADIL_SOURCE_REVISION",
+    ]]);
+    const manifest = JSON.parse(await readFile(
+      join(repositoryRoot, "artifacts", "direct-bombadil", "fixture-product", "manifest.json"),
+      "utf8",
+    )) as Record<string, unknown>;
+    expect(record(manifest.bombadil, "bombadil").toolchain).toEqual({
+      buildContract: "cargo-release-browser-only",
+      kind: "reviewed-override",
+      sha256,
+      sourceRevision,
+      version: "0.7.2",
+    });
+    if (result.kind !== "run") throw new Error("Expected a Bombadil run result");
+    expect(await Bun.file(join(result.artifactDirectory, ".bombadil-toolchain")).exists())
+      .toBeFalse();
+    const publicPayload = (await Promise.all((await readdir(result.uploadArtifactPath)).map(
+      async (name) => await readFile(join(result.uploadArtifactPath, name), "utf8"),
+    ))).join("\n");
+    expect(publicPayload).not.toContain(executablePath);
+    expect(publicPayload).not.toContain(".bombadil-toolchain");
+    expect(publicPayload).not.toContain(sourceRevision);
+    expect(publicPayload).not.toContain(sha256);
+  });
+
+  test("retains the exact reviewed snapshot when writer settlement is not proven", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const executablePath = join(repositoryRoot, "artifacts", "toolchain", "bombadil");
+    const bytes = Buffer.from("reviewed native executable\n", "utf8");
+    await mkdir(dirname(executablePath), { recursive: true });
+    await writeFile(executablePath, bytes);
+    await chmod(executablePath, 0o755);
+    const plan = artifactRunPlan(repositoryRoot, 44);
+    const runtime = dependencies({
+      expectedBombadilExecutable: executablePath,
+      expectedBombadilExecutableSha256: createHash("sha256").update(bytes).digest("hex"),
+      stopFailure: true,
+    });
+    const error = await rejection(runDirectBombadilFuzz({
+      ...config,
+      bombadilToolchain: {
+        buildContract: "cargo-release-browser-only",
+        executablePath,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        sourceRevision: "2c86560a94788e529da4edb49cfdebb0dfa55bbd",
+        version: "0.7.2",
+      },
+    }, {
+      arguments: [],
+      artifactRun: plan,
+    }, {
+      ...runtime.overrides,
+      createRunId: () => plan.runId,
+    }));
+    expect(error.name).toBe("BombadilWriterSettlementError");
+    expect(error.message).toContain("private executable snapshot was retained");
+    const snapshotDirectory = join(
+      repositoryRoot,
+      "artifacts",
+      "direct-bombadil",
+      "fixture-product",
+      plan.runId,
+      ".bombadil-toolchain",
+    );
+    const snapshotPath = join(snapshotDirectory, "bombadil");
+    expect(await readFile(snapshotPath, "utf8")).toBe(bytes.toString("utf8"));
+    expect((await stat(snapshotDirectory)).mode & 0o777).toBe(0o500);
+    expect((await stat(snapshotPath)).mode & 0o777).toBe(0o500);
+    expect(JSON.parse(await readFile(join(
+      repositoryRoot,
+      "artifacts",
+      "direct-bombadil-upload",
+      plan.runId,
+      "receipt.json",
+    ), "utf8"))).toMatchObject({
+      failureCode: "writer-settlement",
+      status: "failed",
+    });
+    await chmod(snapshotDirectory, 0o700);
+  });
+
+  test("classifies refused reviewed-snapshot cleanup as persistence", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const executablePath = join(repositoryRoot, "artifacts", "toolchain", "bombadil");
+    const replacementPath = join(repositoryRoot, "artifacts", "toolchain", "replacement");
+    const bytes = Buffer.from("reviewed native executable\n", "utf8");
+    await mkdir(dirname(executablePath), { recursive: true });
+    await writeFile(executablePath, bytes);
+    await writeFile(replacementPath, bytes);
+    await chmod(executablePath, 0o755);
+    await chmod(replacementPath, 0o500);
+    const plan = artifactRunPlan(repositoryRoot, 45);
+    const snapshotDirectory = join(
+      repositoryRoot,
+      "artifacts",
+      "direct-bombadil",
+      "fixture-product",
+      plan.runId,
+      ".bombadil-toolchain",
+    );
+    const snapshotPath = join(snapshotDirectory, "bombadil");
+    const retainedSnapshotPath = join(snapshotDirectory, "reviewed-bombadil");
+    const unrelatedSentinel = join(snapshotDirectory, "unrelated-sentinel");
+    const runtime = dependencies({
+      afterAcquire: async () => {
+        await chmod(snapshotDirectory, 0o700);
+        await rename(snapshotPath, retainedSnapshotPath);
+        await rename(replacementPath, snapshotPath);
+        await writeFile(unrelatedSentinel, "preserve me\n");
+        await chmod(unrelatedSentinel, 0o400);
+        await chmod(snapshotDirectory, 0o500);
+      },
+      expectedBombadilExecutable: executablePath,
+      expectedBombadilExecutableSha256: createHash("sha256").update(bytes).digest("hex"),
+    });
+    const error = await rejection(runDirectBombadilFuzz({
+      ...config,
+      bombadilToolchain: {
+        buildContract: "cargo-release-browser-only",
+        executablePath,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        sourceRevision: "2c86560a94788e529da4edb49cfdebb0dfa55bbd",
+        version: "0.7.2",
+      },
+    }, {
+      arguments: [],
+      artifactRun: plan,
+    }, {
+      ...runtime.overrides,
+      createRunId: () => plan.runId,
+    }));
+    expect(error.name).toBe("BombadilPersistenceError");
+    expect(error.message).toContain("snapshot could not be removed");
+    expect(runtime.calls).not.toContain("run-bombadil");
+    expect(await readFile(snapshotPath, "utf8")).toBe(bytes.toString("utf8"));
+    expect(await readFile(retainedSnapshotPath, "utf8")).toBe(bytes.toString("utf8"));
+    expect((await stat(snapshotPath)).ino).not.toBe((await stat(retainedSnapshotPath)).ino);
+    expect(await readFile(unrelatedSentinel, "utf8")).toBe("preserve me\n");
+    expect((await stat(snapshotDirectory)).mode & 0o777).toBe(0o500);
+    expect(JSON.parse(await readFile(join(
+      repositoryRoot,
+      "artifacts",
+      "direct-bombadil-upload",
+      plan.runId,
+      "receipt.json",
+    ), "utf8"))).toMatchObject({
+      failureCode: "persistence",
+      status: "failed",
+    });
+    await chmod(snapshotDirectory, 0o700);
+  });
+
+  test("rejects a digest-matching override that reports a different version", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const executablePath = join(repositoryRoot, "artifacts", "toolchain", "bombadil");
+    const bytes = Buffer.from("#!/bin/sh\nprintf 'bombadil 0.7.3\\n'\n", "utf8");
+    await mkdir(dirname(executablePath), { recursive: true });
+    await writeFile(executablePath, bytes);
+    await chmod(executablePath, 0o755);
+    const runtime = dependencies({ expectedBombadilExecutable: executablePath });
+    const overrides = { ...runtime.overrides };
+    Reflect.deleteProperty(overrides, "readBombadilVersion");
+    const error = await rejection(runDirectBombadilFuzz({
+      ...config,
+      bombadilToolchain: {
+        buildContract: "cargo-release-browser-only",
+        executablePath,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        sourceRevision: "2c86560a94788e529da4edb49cfdebb0dfa55bbd",
+        version: "0.7.2",
+      },
+    }, [], overrides));
+    expect(error.message).toContain("must report exactly bombadil 0.7.2");
+    expect(runtime.calls).toEqual([]);
+  });
+
+  test("keeps the reviewed runtime snapshot after source replacement during server startup", async () => {
+    const { config, repositoryRoot } = await fixture();
+    const executablePath = join(repositoryRoot, "artifacts", "toolchain", "bombadil");
+    const replacementPath = join(repositoryRoot, "artifacts", "toolchain", "replacement");
+    const bytes = Buffer.from("reviewed native executable\n", "utf8");
+    const replacementBytes = Buffer.from("unreviewed replacement executable\n", "utf8");
+    await mkdir(dirname(executablePath), { recursive: true });
+    await writeFile(executablePath, bytes);
+    await writeFile(replacementPath, replacementBytes);
+    await chmod(executablePath, 0o755);
+    await chmod(replacementPath, 0o755);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const runtime = dependencies({
+      afterAcquire: async () => {
+        await rename(replacementPath, executablePath);
+      },
+      expectedBombadilExecutable: executablePath,
+      expectedBombadilExecutableSha256: sha256,
+    });
+    const result = await runDirectBombadilFuzz({
+      ...config,
+      bombadilToolchain: {
+        buildContract: "nix-default-aarch64-darwin",
+        executablePath,
+        sha256,
+        sourceRevision: "2c86560a94788e529da4edb49cfdebb0dfa55bbd",
+        version: "0.7.2",
+      },
+    }, [], runtime.overrides);
+    expect(result.kind).toBe("run");
+    if (result.kind !== "run") throw new Error("Expected a Bombadil run result");
+    expect(await Bun.file(join(result.artifactDirectory, ".bombadil-toolchain")).exists())
+      .toBeFalse();
+    expect(await readFile(executablePath)).toEqual(replacementBytes);
+    expect(runtime.calls).toEqual([
+      "acquire-server",
+      "spawn-server",
+      "run-bombadil",
+      "stop-server",
+      "terminate",
+    ]);
+  });
+
+  test("rejects mismatched, non-executable, and symlinked reviewed binaries before server startup", async () => {
+    const mismatch = await fixture();
+    const mismatchPath = join(mismatch.repositoryRoot, "reviewed-bombadil");
+    const mismatchSentinel = join(mismatch.repositoryRoot, "mismatched-probe-ran");
+    await writeFile(mismatchPath, [
+      "#!/bin/sh",
+      `printf probed > ${JSON.stringify(mismatchSentinel)}`,
+      "printf 'bombadil 0.7.2\\n'",
+      "",
+    ].join("\n"));
+    await chmod(mismatchPath, 0o755);
+    const mismatchRuntime = dependencies({ expectedBombadilExecutable: mismatchPath });
+    expect((await rejection(runDirectBombadilFuzz({
+      ...mismatch.config,
+      bombadilToolchain: {
+        buildContract: "cargo-release-browser-only",
+        executablePath: mismatchPath,
+        sha256: "0".repeat(64),
+        sourceRevision: "2c86560a94788e529da4edb49cfdebb0dfa55bbd",
+        version: "0.7.2",
+      },
+    }, [], mismatchRuntime.overrides))).message).toContain("SHA-256 does not match");
+    expect(mismatchRuntime.calls).toEqual([]);
+    expect(await Bun.file(mismatchSentinel).exists()).toBeFalse();
+
+    const mode = await fixture();
+    const modePath = join(mode.repositoryRoot, "reviewed-bombadil");
+    await writeFile(modePath, "binary\n");
+    await chmod(modePath, 0o644);
+    const modeRuntime = dependencies({ expectedBombadilExecutable: modePath });
+    expect((await rejection(runDirectBombadilFuzz({
+      ...mode.config,
+      bombadilToolchain: {
+        buildContract: "cargo-release-browser-only",
+        executablePath: modePath,
+        sha256: createHash("sha256").update("binary\n").digest("hex"),
+        sourceRevision: "2c86560a94788e529da4edb49cfdebb0dfa55bbd",
+        version: "0.7.2",
+      },
+    }, [], modeRuntime.overrides))).message).toContain("executable mode bit");
+    expect(modeRuntime.calls).toEqual([]);
+
+    const linked = await fixture();
+    const targetPath = join(linked.repositoryRoot, "reviewed-bombadil-target");
+    const linkedPath = join(linked.repositoryRoot, "reviewed-bombadil");
+    await writeFile(targetPath, "binary\n");
+    await chmod(targetPath, 0o755);
+    await symlink(targetPath, linkedPath);
+    const linkedRuntime = dependencies({ expectedBombadilExecutable: linkedPath });
+    expect((await rejection(runDirectBombadilFuzz({
+      ...linked.config,
+      bombadilToolchain: {
+        buildContract: "cargo-release-browser-only",
+        executablePath: linkedPath,
+        sha256: createHash("sha256").update("binary\n").digest("hex"),
+        sourceRevision: "2c86560a94788e529da4edb49cfdebb0dfa55bbd",
+        version: "0.7.2",
+      },
+    }, [], linkedRuntime.overrides))).message).toContain("regular nonsymlink");
+    expect(linkedRuntime.calls).toEqual([]);
+  });
+
   test("starts and stops the owned server and writes attested passing artifacts", async () => {
     const { config, repositoryRoot } = await fixture();
     const runtime = dependencies();
@@ -4205,6 +5067,15 @@ describe("Direct Bombadil run lifecycle", () => {
     });
     const bombadil = record(manifest.bombadil, "bombadil");
     expect(bombadil.version).toBe("0.7.2");
+    expect(bombadil.toolchain).toMatchObject({
+      buildContract: null,
+      kind: "npm-package",
+      sourceRevision: null,
+      version: "0.7.2",
+    });
+    expect(record(bombadil.toolchain, "bombadil.toolchain").sha256).toMatch(
+      /^[0-9a-f]{64}$/u,
+    );
     expect(bombadil.termination).toBeNull();
     expect(bombadil.logPath).toBeString();
     expect(bombadil.rawTracePath).toBeString();

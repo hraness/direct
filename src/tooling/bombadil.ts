@@ -84,6 +84,8 @@ export type {
   DirectBombadilServerConfig,
   DirectBombadilTraceAttestation,
   DirectBombadilTraceBinding,
+  DirectBombadilToolchainBuildContract,
+  DirectBombadilToolchainConfig,
   DirectBombadilUploadMode,
   DirectBombadilViewportConfig,
 } from "./bombadil-runner.js";
