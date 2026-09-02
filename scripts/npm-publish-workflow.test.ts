@@ -88,6 +88,10 @@ const historicalRecoverySources = [
     expectedUnpackedBytes: 1_042_886,
     version: "0.7.14",
   },
+  {
+    commit: "965fddb5d6ab9b05bc66d4c7df93770de2f427f6",
+    version: "0.7.18",
+  },
 ] as const;
 
 function workflowStepScript(workflow: string, name: string): string {
@@ -341,7 +345,7 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       readonly version?: unknown;
     };
     expect(manifest).toEqual(expect.objectContaining({
-      version: "0.7.18",
+      version: "0.7.19",
       description: "A TypeScript harness for deterministic frontend testing and development with repeatable scenarios, local fixtures, and browser verification for coding agents.",
       keywords: [
         "frontend-development",

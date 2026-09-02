@@ -336,8 +336,26 @@ function selectBombadilFeatureProfile(version: string): BombadilFeatureProfile {
   return "baseline";
 }
 
-function bombadilToolingTypeChecks(profile: BombadilFeatureProfile): string {
+function bombadilToolingTypeChecks(
+  profile: BombadilFeatureProfile,
+  supportsBombadilToolchainOverride: boolean,
+): string {
   if (profile === "artifact-delivery") {
+    const toolchainChecks = supportsBombadilToolchainOverride
+      ? `
+    type BombadilToolchainConfig = import("@hraness/direct/tooling/bombadil").DirectBombadilToolchainConfig;
+    type BombadilConfigToolchain = NonNullable<Parameters<typeof surface1.runDirectBombadilFuzz>[0]["bombadilToolchain"]>;
+    const supportedBombadilToolchain: BombadilToolchainConfig & BombadilConfigToolchain = {
+      buildContract: "cargo-release-browser-only",
+      executablePath: "/absolute/repository/artifacts/toolchain/bombadil",
+      sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      sourceRevision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      version: "0.7.2",
+    };`
+      : "";
+    const toolchainReference = supportsBombadilToolchainOverride
+      ? "supportedBombadilToolchain, "
+      : "";
     return `
     type BombadilRunnerArity = Parameters<typeof surface1.runDirectBombadilFuzz>["length"];
     type BombadilRunnerInput = Parameters<typeof surface1.runDirectBombadilFuzz>[1];
@@ -353,6 +371,7 @@ function bombadilToolingTypeChecks(profile: BombadilFeatureProfile): string {
       },
     };
     const supportedBombadilTupleInput: BombadilRunnerInput = supportedBombadilArguments;
+    ${toolchainChecks}
     const supportedBombadilMatrixInput: BombadilMatrixInput = {
       arguments: supportedBombadilArguments,
       artifactRun: {
@@ -371,7 +390,7 @@ function bombadilToolingTypeChecks(profile: BombadilFeatureProfile): string {
     };
     // @ts-expect-error Public tooling does not expose dependency injection.
     const unsupportedBombadilRunnerArity: BombadilRunnerArity = 3;
-    void [supportedBombadilMatrixInput, supportedBombadilRunnerArities, supportedBombadilRunnerInput, supportedBombadilTupleInput, unsupportedBombadilRunnerArity, unsupportedPrivateBombadilMatrixInput];
+    void [supportedBombadilMatrixInput, supportedBombadilRunnerArities, supportedBombadilRunnerInput, ${toolchainReference}supportedBombadilTupleInput, unsupportedBombadilRunnerArity, unsupportedPrivateBombadilMatrixInput];
   `;
   }
   const matrixChecks = profile === "matrix"
@@ -566,6 +585,10 @@ const supportsNamedLayoutContracts = Bun.semver.order(
   packageManifest.version,
   "0.7.18",
 ) >= 0;
+const supportsBombadilToolchainOverride = Bun.semver.order(
+  packageManifest.version,
+  "0.7.19",
+) >= 0;
 const work = await mkdtemp(join(tmpdir(), "hraness-package-smoke-"));
 try {
   const packageInput = parsePackageInput(process.argv.slice(2), repository);
@@ -616,7 +639,10 @@ try {
   await writeFile(join(consumer, "runtime-index.ts"), typeImportSource(runtimeImportSpecifiers));
   await writeFile(
     join(consumer, "tooling-index.ts"),
-    `${typeImportSource(toolingTypeImportSpecifiers)}${bombadilToolingTypeChecks(bombadilFeatureProfile)}`,
+    `${typeImportSource(toolingTypeImportSpecifiers)}${bombadilToolingTypeChecks(
+      bombadilFeatureProfile,
+      supportsBombadilToolchainOverride,
+    )}`,
   );
   await writeFile(join(consumer, "tsconfig.bundler.json"), typeScriptConfig({
     include: "runtime-index.ts",

@@ -12,6 +12,7 @@ import type {
   DirectBombadilFuzzResult,
   DirectBombadilFuzzRunInput,
   DirectBombadilMatrixRunInput,
+  DirectBombadilToolchainConfig,
 } from "@hraness/direct/tooling/bombadil";
 import * as bundleBoundary from "@hraness/direct/tooling/bundle-boundary";
 import * as web from "@hraness/direct/web";
@@ -116,6 +117,13 @@ describe("public package exports", () => {
       },
     };
     const supportedArgumentTuple = ["--time-limit=12s"] as const;
+    const supportedToolchain: DirectBombadilToolchainConfig = {
+      buildContract: "cargo-release-browser-only",
+      executablePath: "/absolute/repository/artifacts/toolchain/bombadil",
+      sha256: "a".repeat(64),
+      sourceRevision: "b".repeat(40),
+      version: "0.7.2",
+    };
     const supportedTupleInput: DirectBombadilFuzzRunInput = supportedArgumentTuple;
     const legacyRunResult: DirectBombadilFuzzResult = {
       artifactDirectory: "/absolute/repository/artifacts/direct-bombadil/package/run",
@@ -151,6 +159,7 @@ describe("public package exports", () => {
       legacyMatrixResult,
       supportedRunOptions,
       supportedTupleInput,
+      supportedToolchain,
       unsupportedPrivateMatrixOptions,
       unsupportedRunnerArity,
     ];
