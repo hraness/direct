@@ -57,6 +57,10 @@ const CHROME_TRANSIENT_OTHER_TEST_ID = "123e4567-e89b-42d3-a456-426614174001";
 const CHROME_TRANSIENT_THIRD_TEST_ID = "123e4567-e89b-42d3-a456-426614174002";
 const temporaryDirectories: string[] = [];
 
+function testBunEvaluationCommand(source: string): string[] {
+  return ["/usr/bin/env", process.execPath, "-e", source];
+}
+
 function artifactRunPlan<
   UploadMode extends "private-vetted" | "public-summary" = "public-summary",
 >(
@@ -2720,11 +2724,9 @@ describe("Direct Bombadil process lifecycle", () => {
     for (const name of names) process.env[name] = `private-${name}`;
     try {
       const result = await runBombadilNativeProcess({
-        command: [
-          process.execPath,
-          "-e",
+        command: testBunEvaluationCommand(
           `process.stdout.write(JSON.stringify(${JSON.stringify(names)}.map((name) => process.env[name])))`,
-        ],
+        ),
         cwd: directory,
         outputPath: directory,
         targetUrl: "http://127.0.0.1:4919/",
@@ -4068,7 +4070,7 @@ describe("Direct Bombadil process lifecycle", () => {
         maxPathBytes: 256,
         maxTotalBytes: 2_048,
       },
-      command: [process.execPath, "-e", source],
+      command: testBunEvaluationCommand(source),
       cwd: directory,
       outputPath: directory,
       targetUrl: "http://127.0.0.1:4919/",
@@ -4091,11 +4093,9 @@ describe("Direct Bombadil process lifecycle", () => {
       await writeFile(join(downloads, fileName), "preexisting\n");
 
       const error = await rejection(runBombadilNativeProcess({
-        command: [
-          process.execPath,
-          "-e",
+        command: testBunEvaluationCommand(
           `require("node:fs").writeFileSync(${JSON.stringify(sentinelPath)}, "spawned");`,
-        ],
+        ),
         cwd: directory,
         outputPath: directory,
         targetUrl: "http://127.0.0.1:4919/",
@@ -4118,7 +4118,7 @@ describe("Direct Bombadil process lifecycle", () => {
       `fs.writeFileSync(${JSON.stringify(completionPath)}, 'complete');`,
     ].join(" ");
     const error = await rejection(runBombadilNativeProcess({
-      command: [process.execPath, "-e", source],
+      command: testBunEvaluationCommand(source),
       cwd: directory,
       outputPath: directory,
       targetUrl: "http://127.0.0.1:4919/",
@@ -4200,11 +4200,9 @@ describe("Direct Bombadil process lifecycle", () => {
     const previous = process.env.DIRECT_BOMBADIL_RUN_ID;
     process.env.DIRECT_BOMBADIL_RUN_ID = "child-visible-secret";
     const running = runBombadilNativeProcess({
-      command: [
-        process.execPath,
-        "-e",
+      command: testBunEvaluationCommand(
         "console.log(process.env.DIRECT_BOMBADIL_RUN_ID ?? 'absent')",
-      ],
+      ),
       cwd: directory,
       outputPath: directory,
       targetUrl: "http://127.0.0.1:4919/",
@@ -4237,7 +4235,7 @@ describe("Direct Bombadil process lifecycle", () => {
         maxPathBytes: 256,
         maxTotalBytes: 2_048,
       },
-      command: [process.execPath, "-e", source],
+      command: testBunEvaluationCommand(source),
       cwd: directory,
       outputPath: directory,
       targetUrl: "http://127.0.0.1:4919/",
@@ -4261,11 +4259,9 @@ describe("Direct Bombadil process lifecycle", () => {
         maxPathBytes: 256,
         maxTotalBytes: 2_048,
       },
-      command: [
-        process.execPath,
-        "-e",
+      command: testBunEvaluationCommand(
         `require("node:fs").writeFileSync(${JSON.stringify(overflowPath)}, Buffer.alloc(4096));`,
-      ],
+      ),
       cwd: directory,
       outputPath: directory,
       targetUrl: "http://127.0.0.1:4919/",
@@ -4291,7 +4287,7 @@ describe("Direct Bombadil process lifecycle", () => {
     ].join(" ");
     const startedAt = Date.now();
     const result = await runBombadilNativeProcess({
-      command: [process.execPath, "-e", leaderSource],
+      command: testBunEvaluationCommand(leaderSource),
       cwd: directory,
       outputPath: directory,
       targetUrl: "http://127.0.0.1:4919/",
@@ -4341,7 +4337,7 @@ describe("Direct Bombadil process lifecycle", () => {
         return kill(processId, signal);
       },
       async () => await runBombadilNativeProcess({
-        command: [process.execPath, "-e", leaderSource],
+        command: testBunEvaluationCommand(leaderSource),
         cwd: directory,
         outputPath: directory,
         targetUrl: "http://127.0.0.1:4919/",
@@ -4384,11 +4380,9 @@ describe("Direct Bombadil process lifecycle", () => {
       async () => {
         const running = runBombadilNativeProcess({
           abortSignal: controller.signal,
-          command: [
-            process.execPath,
-            "-e",
+          command: testBunEvaluationCommand(
             `require("node:fs").writeFileSync(${JSON.stringify(processIdPath)}, String(process.pid)); setTimeout(() => process.exit(0), 5000); setInterval(() => {}, 1000);`,
-          ],
+          ),
           cwd: directory,
           outputPath: directory,
           targetUrl: "http://127.0.0.1:4919/",
@@ -4418,11 +4412,9 @@ describe("Direct Bombadil process lifecycle", () => {
     const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-timeout-"));
     temporaryDirectories.push(directory);
     const invocation: DirectBombadilInvocation = {
-      command: [
-        process.execPath,
-        "-e",
+      command: testBunEvaluationCommand(
         "console.log('timeout output'); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
-      ],
+      ),
       cwd: directory,
       outputPath: directory,
       targetUrl: "http://127.0.0.1:4919/",
@@ -4446,7 +4438,7 @@ describe("Direct Bombadil process lifecycle", () => {
     ].join(" ");
     const startedAt = Date.now();
     const result = await runBombadilNativeProcess({
-      command: [process.execPath, "-e", childSource],
+      command: testBunEvaluationCommand(childSource),
       cwd: directory,
       outputPath: directory,
       targetUrl: "http://127.0.0.1:4919/",
@@ -4465,11 +4457,9 @@ describe("Direct Bombadil process lifecycle", () => {
     const startedAt = Date.now();
     const result = await runBombadilNativeProcess({
       abortSignal: controller.signal,
-      command: [
-        process.execPath,
-        "-e",
+      command: testBunEvaluationCommand(
         "console.log('abort output'); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
-      ],
+      ),
       cwd: directory,
       outputPath: directory,
       targetUrl: "http://127.0.0.1:4919/",
@@ -4490,11 +4480,9 @@ describe("Direct Bombadil process lifecycle", () => {
     alreadyAborted.abort();
     const alreadyAbortedResult = await runBombadilNativeProcessForTest({
       abortSignal: alreadyAborted.signal,
-      command: [
-        process.execPath,
-        "-e",
+      command: testBunEvaluationCommand(
         `require("node:fs").writeFileSync(${JSON.stringify(alreadyAbortedSentinel)}, "spawned");`,
-      ],
+      ),
       cwd: alreadyAbortedRoot,
       outputPath: alreadyAbortedRoot,
       targetUrl: "http://127.0.0.1:4919/",
@@ -4527,11 +4515,9 @@ describe("Direct Bombadil process lifecycle", () => {
     });
     const deferredResult = runBombadilNativeProcessForTest({
       abortSignal: deferredAbort.signal,
-      command: [
-        process.execPath,
-        "-e",
+      command: testBunEvaluationCommand(
         `require("node:fs").writeFileSync(${JSON.stringify(deferredSentinel)}, "spawned");`,
-      ],
+      ),
       cwd: deferredRoot,
       outputPath: deferredRoot,
       targetUrl: "http://127.0.0.1:4919/",
@@ -4561,11 +4547,9 @@ describe("Direct Bombadil process lifecycle", () => {
     const controller = new AbortController();
     const result = await runBombadilNativeProcessForTest({
       abortSignal: controller.signal,
-      command: [
-        process.execPath,
-        "-e",
+      command: testBunEvaluationCommand(
         `require("node:fs").writeFileSync(${JSON.stringify(sentinelPath)}, "spawned");`,
-      ],
+      ),
       cwd: directory,
       outputPath: join(directory, "output"),
       targetUrl: "http://127.0.0.1:4919/",
@@ -4674,7 +4658,7 @@ describe("Direct Bombadil process lifecycle", () => {
         maxPathBytes: 256,
         maxTotalBytes: 8_192,
       },
-      command: [process.execPath, "-e", source],
+      command: testBunEvaluationCommand(source),
       cwd: directory,
       outputPath: directory,
       targetUrl: "http://127.0.0.1:4919/",
