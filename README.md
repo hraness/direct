@@ -43,9 +43,9 @@ real interface and feature state
 Pin Direct as a development dependency:
 
 ```sh
-bun add --dev @hraness/direct@0.7.17
+bun add --dev @hraness/direct@0.7.18
 # or
-npm install --save-dev @hraness/direct@0.7.17
+npm install --save-dev @hraness/direct@0.7.18
 ```
 
 Keep Direct in `devDependencies`. A production entry must not import Direct,
@@ -58,7 +58,7 @@ composition. It requires Git and Bun 1.3.14, then downloads the source and its
 development dependencies:
 
 ```sh
-git clone --branch v0.7.17 --depth 1 https://github.com/hraness/direct.git
+git clone --branch v0.7.18 --depth 1 https://github.com/hraness/direct.git
 cd direct
 bun install --frozen-lockfile --ignore-scripts
 bun run example:direct
@@ -132,9 +132,9 @@ claim separate as `direct` evidence.
 Install Direct's single bundled skill from the public repository:
 
 ```sh
-npx skills add hraness/direct#v0.7.17
+npx skills add hraness/direct#v0.7.18
 # or
-bunx skills add hraness/direct#v0.7.17
+bunx skills add hraness/direct#v0.7.18
 ```
 
 The skill is invoked as `$direct`. It routes installation, adoption, and
@@ -148,7 +148,7 @@ Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
 Use $direct to install hraness/direct from
-the npm registry at the exact 0.7.17 version. Follow the repository README, add
+the npm registry at the exact 0.7.18 version. Follow the repository README, add
 `@hraness/direct` to devDependencies only, and verify that the production
 dependency graph excludes Direct. Do not add a fixture composition until I
 ask.
@@ -164,7 +164,7 @@ Pin the public npm package to an exact immutable version:
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "0.7.17"
+    "@hraness/direct": "0.7.18"
   }
 }
 ```
@@ -186,8 +186,8 @@ quiescence, coverage claims, cleanup, and emitted production boundaries. The
 package smoke test keeps that future packaged copy byte-identical to the
 repository skill.
 
-Prefer `npx skills add hraness/direct#v0.7.17` or
-`bunx skills add hraness/direct#v0.7.17` for runner discovery. You can also copy
+Prefer `npx skills add hraness/direct#v0.7.18` or
+`bunx skills add hraness/direct#v0.7.18` for runner discovery. You can also copy
 or link that one skill directory into a runner's configured location, then
 invoke `$direct`. Package installation leaves the skill inert: it does not run
 a `postinstall` hook or edit repository or user configuration.
@@ -313,7 +313,7 @@ A quiet probe means the declared deterministic work settled. It does not prove t
 | `@hraness/direct/react` | Typed context, provider, and external-store hooks for React DOM or React Native | Optional React peer |
 | `@hraness/direct/testing` | Sessions, manifest and probe parsers, evidence classification, activity scopes, and exact scripted transports | Development and verification |
 | `@hraness/direct/web` | Atomic browser installation, with low-level bridge and firewall escape hatches | Browser only |
-| `@hraness/direct/tooling/browser-verification` | Protocol-bound bridge reads, bounded agent-browser commands, local server leases, and artifact writes | Bun 1.3.14 with Node APIs |
+| `@hraness/direct/tooling/browser-verification` | Protocol-bound bridge reads, product-owned named-box layout contracts, bounded agent-browser commands, local server leases, and artifact writes | Bun 1.3.14 with Node APIs |
 | `@hraness/direct/tooling/bombadil-campaign` | Direct property and conservative action factories for a Bombadil specification | Bombadil 0.7.2 specification compiler |
 | `@hraness/direct/tooling/bombadil` | Local server ownership, native Bombadil lifecycle, serial campaign matrices, trace attestation and summaries, replay, and diagnostic artifacts | Bun 1.3.14 with Node APIs |
 | `@hraness/direct/tooling/bundle-boundary` | Deterministic emitted-file scans and exact versioned-wire evidence | Bun 1.3.14 with Node APIs |
@@ -335,6 +335,10 @@ agent-browser 0.32.3 at `node_modules/.bin/agent-browser` below the supplied
 `repositoryRoot` and an empty task-owned config at
 `scripts/direct/agent-browser.verify.json`. The product supplies its explicit
 launch arguments, allowed domains, scenario commands, and final close policy.
+The same tooling subpath parses named layout boxes and explicit product rules
+for containment, selected no-overlap pairs, alignment, viewport clipping,
+minimum size, and two-sample stability. It does not inspect the DOM or compare
+every box pair.
 
 ### Fuzz one Direct scenario
 

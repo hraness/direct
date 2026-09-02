@@ -10,8 +10,8 @@ definition with `parseDefinitionCoverageSnapshot` so a valid but stale catalog
 cannot be mistaken for the catalog under review.
 
 The repository carries one `$direct` Agent Skill under `skills/direct`.
-Install it with `npx skills add hraness/direct#v0.7.17` or
-`bunx skills add hraness/direct#v0.7.17`, or copy that directory into the runner's
+Install it with `npx skills add hraness/direct#v0.7.18` or
+`bunx skills add hraness/direct#v0.7.18`, or copy that directory into the runner's
 discovery location. Invoke `$direct` for the workflow below. The skill is
 independent from library package installation and structures the audit; it
 does not turn deterministic evidence into proof of a substituted live system.
@@ -210,6 +210,103 @@ The package does not choose a browser driver or visual-comparison policy. Keep
 those decisions in the product verifier. Under the canonical workflow, capture
 visual evidence from the same exact local Chromium context that produced the
 manifest, probe, actions, and semantic assertions.
+
+## Separate visual critique from layout gates
+
+A design review needs evidence at two scales. At the macro scale, inspect a
+bounded screenshot set for hierarchy, grouping, density, reading order,
+progressive disclosure, and responsive composition. Those judgments depend on
+the product and remain a reviewed visual critique. At the micro scale, turn a
+known spatial relationship into a deterministic named-box gate. Geometry can
+catch a footer form that is off center or a label that overlaps its value, but
+it cannot decide whether the page has a clear visual hierarchy.
+
+The Bun/Node `@hraness/direct/tooling/browser-verification` subpath exports a
+driver-neutral named layout contract. The product's browser evaluator measures
+only the elements in scope and returns a versioned sample. Parse that foreign
+value with `parseDirectNamedLayoutSample`. Parse the reviewed product rules
+with `parseDirectNamedLayoutContract`, then pass the parsed values to
+`validateDirectNamedLayout`:
+
+```ts
+import {
+  DIRECT_NAMED_LAYOUT_CONTRACT_SCHEMA,
+  parseDirectNamedLayoutContract,
+  parseDirectNamedLayoutSample,
+  validateDirectNamedLayout,
+} from "@hraness/direct/tooling/browser-verification";
+
+const parsedContract = parseDirectNamedLayoutContract({
+  schema: DIRECT_NAMED_LAYOUT_CONTRACT_SCHEMA,
+  rules: [
+    {
+      id: "footer.visible-controls-centered",
+      kind: "center-y",
+      first: "footer.brand",
+      second: "footer.visible-controls",
+      tolerance: 1,
+    },
+    {
+      id: "result.label-clear-of-value",
+      kind: "no-overlap",
+      first: "result.label",
+      second: "result.value",
+      tolerance: 0,
+    },
+    {
+      id: "footer.stable",
+      kind: "stable",
+      box: "footer.visible-controls",
+      tolerance: 1,
+    },
+  ],
+});
+if (!parsedContract.ok) throw new Error(parsedContract.error.message);
+
+const first = parseDirectNamedLayoutSample(await readProductLayout());
+if (!first.ok) throw new Error(first.error.message);
+
+// Rejoin product quiescence and the product's bounded render-settle boundary.
+const second = parseDirectNamedLayoutSample(await readProductLayout());
+if (!second.ok) throw new Error(second.error.message);
+
+const layout = validateDirectNamedLayout(parsedContract.value, [
+  first.value,
+  second.value,
+]);
+if (!layout.ok) {
+  throw new Error(layout.violations.map(({ message }) => message).join("\n"));
+}
+```
+
+Each sample uses schema `direct.named-layout-sample/v1`, contains
+`viewport: { width, height }`, and carries one to 128 boxes named by the
+product. A box contains `name`, `x`, `y`, `width`, and `height` in CSS pixels
+relative to that viewport. Include only resolved, visible rectangles with
+positive width and height; omit hidden or absent elements so a required name
+fails closed. Keep both samples in the same browser context and at the same
+viewport. The validator accepts exactly one or two samples at runtime. The
+`stable` rule compares all four numeric box fields across exactly two samples.
+Static rules run against both samples.
+
+The contract supports these explicit rules:
+
+- `inside` keeps one named box within another, with a CSS-pixel tolerance.
+- `no-overlap` checks one named pair. It allows edge contact and the declared
+  shallow overlap tolerance.
+- `center-x` and `center-y` compare the named box centers within a tolerance.
+- `not-clipped` keeps a box within the measured viewport. To check an
+  overflow-clipping ancestor, name that ancestor and use `inside` too.
+- `minimum-size` requires the declared width and height. Set one minimum to
+  zero when only the other axis is constrained.
+- `stable` requires a second sample and bounds changes to position and size.
+
+Direct never generates all box pairs. Intended overlays, hidden disclosures,
+offscreen content, and nested controls make a global collision scan noisy and
+can hide the relationships that matter. Name each rule after the product
+invariant, run the contract at the viewports where that invariant applies, and
+keep the screenshot critique for typography, contrast, rhythm, prominence,
+and other visual qualities that rectangles do not express.
 
 ## Tear down the browser batch
 

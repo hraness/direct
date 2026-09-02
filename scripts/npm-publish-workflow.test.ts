@@ -341,7 +341,7 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       readonly version?: unknown;
     };
     expect(manifest).toEqual(expect.objectContaining({
-      version: "0.7.17",
+      version: "0.7.18",
       description: "A TypeScript harness for deterministic frontend testing and development with repeatable scenarios, local fixtures, and browser verification for coding agents.",
       keywords: [
         "frontend-development",
@@ -475,9 +475,9 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       "const minimumFiles = 50",
       "const maximumFiles = 60",
       "const minimumPackedBytes = 140_000",
-      "const maximumPackedBytes = 230_000",
+      "const maximumPackedBytes = 260_000",
       "const minimumUnpackedBytes = 650_000",
-      "const maximumUnpackedBytes = 1_070_000",
+      "const maximumUnpackedBytes = 1_200_000",
       "record.files.length !== record.entryCount",
       "unpackedSize !== record.unpackedSize",
       'createHash("sha1")',

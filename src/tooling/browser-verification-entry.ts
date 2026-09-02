@@ -12,6 +12,7 @@ import {
 } from "./browser-verification.js";
 
 export * from "./browser-verification.js";
+export * from "./browser-layout-contract.js";
 
 export type DirectSessionBrowserContract = DirectBrowserContract<
   DirectSessionManifest,
