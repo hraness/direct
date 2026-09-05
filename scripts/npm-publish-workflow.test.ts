@@ -92,6 +92,10 @@ const historicalRecoverySources = [
     commit: "965fddb5d6ab9b05bc66d4c7df93770de2f427f6",
     version: "0.7.18",
   },
+  {
+    commit: "11850f3b70fa693f33314c755041f91b5a65ad66",
+    version: "0.7.19",
+  },
 ] as const;
 
 function workflowStepScript(workflow: string, name: string): string {
@@ -345,7 +349,7 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       readonly version?: unknown;
     };
     expect(manifest).toEqual(expect.objectContaining({
-      version: "0.7.19",
+      version: "0.7.20",
       description: "A TypeScript harness for deterministic frontend testing and development with repeatable scenarios, local fixtures, and browser verification for coding agents.",
       keywords: [
         "frontend-development",
@@ -571,7 +575,7 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
     const binaryDirectory = join(directory, "bin");
     const commandLog = join(directory, "commands.log");
     const publishMarker = join(directory, "published.txt");
-    const tarball = join(directory, "hraness-direct-0.7.17.tgz");
+    const tarball = join(directory, "hraness-direct-0.7.20.tgz");
     const metadata = join(directory, "npm-pack.json");
     const digest = join(directory, "npm-package.sha256");
     const sourceSha = "b".repeat(40);
@@ -589,7 +593,7 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
         writeFile(metadata, "reviewed metadata fixture\n", "utf8"),
         writeFile(digest, "reviewed digest fixture\n", "utf8"),
       ]);
-      await writeFile(gitStub, `#!/bin/bash\nset -euo pipefail\nprintf 'git %s\\n' "$*" >> "$COMMAND_LOG"\ncase "$*" in\n  *"rev-parse refs/heads/main"*) printf '%s\\n' "$DEFAULT_SHA" ;;\n  *"rev-parse refs/tags/v0.7.17^{commit}"*) printf '%s\\n' "$TAG_SHA" ;;\n  *"merge-base --is-ancestor"*) [[ "$ANCESTRY_STATE" == ancestor ]] ;;\n  *"tag --list v*"*) printf '%s\\n' "$REMOTE_TAGS" ;;\nesac\n`, "utf8");
+      await writeFile(gitStub, `#!/bin/bash\nset -euo pipefail\nprintf 'git %s\\n' "$*" >> "$COMMAND_LOG"\ncase "$*" in\n  *"rev-parse refs/heads/main"*) printf '%s\\n' "$DEFAULT_SHA" ;;\n  *"rev-parse refs/tags/v0.7.20^{commit}"*) printf '%s\\n' "$TAG_SHA" ;;\n  *"merge-base --is-ancestor"*) [[ "$ANCESTRY_STATE" == ancestor ]] ;;\n  *"tag --list v*"*) printf '%s\\n' "$REMOTE_TAGS" ;;\nesac\n`, "utf8");
       await writeFile(sha256Stub, `#!/bin/bash\nset -euo pipefail\nprintf 'sha256sum %s\\n' "$*" >> "$COMMAND_LOG"\ncase "$1" in\n  "$TARBALL") value="$EXPECTED_ARCHIVE_SHA256" ;;\n  "$METADATA") value="$EXPECTED_METADATA_SHA256" ;;\n  "$DIGEST") value="$EXPECTED_DIGEST_SHA256" ;;\n  *) echo "unexpected hash target: $1" >&2; exit 1 ;;\nesac\nprintf '%s  %s\\n' "$value" "$1"\n`, "utf8");
       await writeFile(npmStub, `#!/bin/bash\nset -euo pipefail\nprintf 'npm %s\\n' "$*" >> "$COMMAND_LOG"\nif [[ "\${1-}" == view ]]; then\n  printf '%s\\n' "$PUBLISHED_VERSIONS_JSON"\n  exit 0\nfi\nprintf 'published\\n' > "$PUBLISH_MARKER"\n`, "utf8");
       await Promise.all([chmod(gitStub, 0o755), chmod(npmStub, 0o755), chmod(sha256Stub, 0o755)]);
@@ -605,15 +609,15 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
         EXPECTED_DIGEST_SHA256: digestSha256,
         EXPECTED_METADATA_SHA256: metadataSha256,
         EXPECTED_SOURCE_SHA: sourceSha,
-        EXPECTED_VERSION: "0.7.17",
-        GITHUB_REF: "refs/tags/v0.7.17",
+        EXPECTED_VERSION: "0.7.20",
+        GITHUB_REF: "refs/tags/v0.7.20",
         GITHUB_REPOSITORY: "hraness/direct",
         GITHUB_SHA: sourceSha,
         METADATA: metadata,
         PATH: `${binaryDirectory}:${process.env.PATH ?? ""}`,
-        PUBLISHED_VERSIONS_JSON: '["0.7.4","0.7.5","0.7.6","0.7.7","0.7.8","0.7.9","0.7.10","0.7.11","0.7.12","0.7.13","0.7.14","0.7.15","0.7.16"]',
+        PUBLISHED_VERSIONS_JSON: '["0.7.4","0.7.5","0.7.6","0.7.7","0.7.8","0.7.9","0.7.10","0.7.11","0.7.12","0.7.13","0.7.14","0.7.15","0.7.16","0.7.17","0.7.18","0.7.19"]',
         PUBLISH_MARKER: publishMarker,
-        REMOTE_TAGS: "v0.7.4\nv0.7.5\nv0.7.6\nv0.7.7\nv0.7.8\nv0.7.9\nv0.7.10\nv0.7.11\nv0.7.12\nv0.7.13\nv0.7.14\nv0.7.15\nv0.7.16\nv0.7.17",
+        REMOTE_TAGS: "v0.7.4\nv0.7.5\nv0.7.6\nv0.7.7\nv0.7.8\nv0.7.9\nv0.7.10\nv0.7.11\nv0.7.12\nv0.7.13\nv0.7.14\nv0.7.15\nv0.7.16\nv0.7.17\nv0.7.18\nv0.7.19\nv0.7.20",
         RUNNER_TEMP: directory,
         TAG_SHA: sourceSha,
         TARBALL: tarball,
@@ -644,7 +648,7 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       });
       expect(moved.exitCode).not.toBe(0);
       expect(`${moved.stdout}${moved.stderr}`).toContain(
-        "Tag v0.7.17 changed after artifact verification",
+        "Tag v0.7.20 changed after artifact verification",
       );
       expect(await Bun.file(publishMarker).exists()).toBe(false);
 
@@ -655,18 +659,18 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       });
       expect(detached.exitCode).not.toBe(0);
       expect(`${detached.stdout}${detached.stderr}`).toContain(
-        "Tag v0.7.17 is no longer reachable from main",
+        "Tag v0.7.20 is no longer reachable from main",
       );
       expect(await Bun.file(publishMarker).exists()).toBe(false);
 
       await rm(commandLog, { force: true });
       const superseded = await runWorkflowScript(script, {
         ...baseEnvironment,
-        REMOTE_TAGS: "v0.7.4\nv0.7.5\nv0.7.6\nv0.7.7\nv0.7.8\nv0.7.9\nv0.7.10\nv0.7.11\nv0.7.12\nv0.7.13\nv0.7.14\nv0.7.15\nv0.7.16\nv0.7.17\nv0.7.18",
+        REMOTE_TAGS: "v0.7.4\nv0.7.5\nv0.7.6\nv0.7.7\nv0.7.8\nv0.7.9\nv0.7.10\nv0.7.11\nv0.7.12\nv0.7.13\nv0.7.14\nv0.7.15\nv0.7.16\nv0.7.17\nv0.7.18\nv0.7.19\nv0.7.20\nv0.7.21",
       });
       expect(superseded.exitCode).not.toBe(0);
       expect(`${superseded.stdout}${superseded.stderr}`).toContain(
-        "Tag v0.7.17 is not the newest stable tag v0.7.18",
+        "Tag v0.7.20 is not the newest stable tag v0.7.21",
       );
       expect(await readFile(commandLog, "utf8")).not.toContain("npm publish");
       expect(await Bun.file(publishMarker).exists()).toBe(false);
@@ -674,11 +678,11 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       await rm(commandLog, { force: true });
       const staleVersion = await runWorkflowScript(script, {
         ...baseEnvironment,
-        PUBLISHED_VERSIONS_JSON: '["0.7.4","0.7.18"]',
+        PUBLISHED_VERSIONS_JSON: '["0.7.4","0.7.21"]',
       });
       expect(staleVersion.exitCode).not.toBe(0);
       expect(`${staleVersion.stdout}${staleVersion.stderr}`).toContain(
-        "@hraness/direct@0.7.17 is not newer than published stable 0.7.18",
+        "@hraness/direct@0.7.20 is not newer than published stable 0.7.21",
       );
       expect(await Bun.file(publishMarker).exists()).toBe(false);
 
