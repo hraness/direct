@@ -847,7 +847,6 @@ interface LiveChromeDownloadScanContext {
   >;
   readonly pendingCompletions: ReadonlyMap<string, LiveChromeDownloadPendingCompletion>;
   readonly previous: ReadonlyMap<string, LiveChromeDownloadIdentity>;
-  readonly previousHasPartial: boolean;
 }
 
 interface ArtifactUploadSessionBase {
@@ -2072,12 +2071,26 @@ function observePendingLiveChromeDownloadCompletion(
   observation: LiveChromeDownloadCompletionObservation,
 ): "pending" | "proven" {
   const pending = context.pendingCompletions.get(runId);
+  if (
+    pending !== undefined
+    && !sameLiveChromeDownloadCompletionObservation(pending, observation)
+  ) {
+    throw new BombadilArtifactPolicyError(
+      `Bombadil Chrome download completion downloads/${runId} changed before provenance was proven`,
+    );
+  }
+  const previous = context.previous.get(runId);
+  if (previous === undefined || previous.phase !== "partial") {
+    throw new BombadilArtifactPolicyError(
+      `Bombadil Chrome download completion downloads/${runId} lacks live partial provenance`,
+    );
+  }
+  if (!sameLiveChromeDownloadIdentity(previous, observation)) {
+    throw new BombadilArtifactPolicyError(
+      `Bombadil Chrome download completion downloads/${runId} changed inode identity`,
+    );
+  }
   if (pending !== undefined) {
-    if (!sameLiveChromeDownloadCompletionObservation(pending, observation)) {
-      throw new BombadilArtifactPolicyError(
-        `Bombadil Chrome download completion downloads/${runId} changed before provenance was proven`,
-      );
-    }
     if (pending.successfulScans === 1) {
       context.nextPendingCompletions.delete(runId);
       return "proven";
@@ -2143,16 +2156,11 @@ export function requireMatchingLiveChromeDownloadIdentityForTest(options: {
   );
 }
 
-function mayAdmitUnobservedChromeDownloadCompletion(
+function mayInspectUnobservedChromeDownloadCompletion(
   context: LiveChromeDownloadScanContext,
   runId: string,
 ): boolean {
-  if (
-    !context.cleanBaselineEstablished
-    || context.previousHasPartial
-  ) {
-    return false;
-  }
+  if (!context.cleanBaselineEstablished) return false;
   context.currentUnobservedCompletions.add(runId);
   return true;
 }
@@ -2483,7 +2491,7 @@ async function scanBombadilArtifactTree(options: {
             }
             if (
               previous === undefined
-              && !mayAdmitUnobservedChromeDownloadCompletion(
+              && !mayInspectUnobservedChromeDownloadCompletion(
                 options.liveChromeDownloadScan,
                 partialRunId,
               )
@@ -2606,32 +2614,17 @@ async function scanBombadilArtifactTree(options: {
               liveChromeDownloadCompletion,
               completionObservation,
             );
-            if (
-              previous === undefined
-              && liveChromeDownloadScan.pendingCompletions.has(
-                liveChromeDownloadCompletion,
-              )
-            ) {
-              recordLiveIdentity = observePendingLiveChromeDownloadCompletion(
+            if (previous === undefined) {
+              if (!mayInspectUnobservedChromeDownloadCompletion(
                 liveChromeDownloadScan,
                 liveChromeDownloadCompletion,
-                completionObservation,
-              ) === "proven";
-            } else if (
-              previous === undefined
-              && !mayAdmitUnobservedChromeDownloadCompletion(
-                liveChromeDownloadScan,
-                liveChromeDownloadCompletion,
-              )
-            ) {
-              if (
-                !liveChromeDownloadScan.cleanBaselineEstablished
-                || !liveChromeDownloadScan.previousHasPartial
-              ) {
+              )) {
                 throw new BombadilArtifactPolicyError(
                   `Bombadil Chrome download completion ${relativePath} lacks live partial provenance`,
                 );
               }
+              recordLiveIdentity = false;
+            } else if (previous.phase === "partial") {
               recordLiveIdentity = observePendingLiveChromeDownloadCompletion(
                 liveChromeDownloadScan,
                 liveChromeDownloadCompletion,
@@ -2755,6 +2748,11 @@ async function scanBombadilArtifactTree(options: {
         runId,
         observation,
         liveChromeDownloadScan.currentCompletionObservations,
+      );
+    }
+    if (liveChromeDownloadScan.currentUnobservedCompletions.size > 0) {
+      throw new BombadilArtifactPolicyError(
+        "Bombadil Chrome download completion lacks live partial provenance",
       );
     }
     for (const runId of liveChromeDownloadScan.pendingCompletions.keys()) {
@@ -2883,8 +2881,6 @@ async function scanLiveBombadilArtifactTree(options: {
           nextPendingCompletions,
           pendingCompletions,
           previous,
-          previousHasPartial: [...previous.values()]
-            .some((identity) => identity.phase === "partial"),
         },
         policy: options.policy,
         root: options.outputPath,
@@ -2908,7 +2904,7 @@ async function scanLiveBombadilArtifactTree(options: {
       const observedOtherUnprovenCompletion = [...currentUnobservedCompletions]
         .some((runId) => runId !== error.completion.runId);
       if (
-        (error.completion.unobserved && currentPartials.size > 0)
+        error.completion.unobserved
         || observedOtherUnprovenCompletion
       ) {
         throw new BombadilArtifactPolicyError(
@@ -3046,7 +3042,11 @@ async function scanLiveBombadilArtifactTree(options: {
         successfulScans: 1,
       });
     }
-    if (next.size + nextPendingCompletions.size > options.policy.maxFiles) {
+    const liveRunIds = new Set([
+      ...next.keys(),
+      ...nextPendingCompletions.keys(),
+    ]);
+    if (liveRunIds.size > options.policy.maxFiles) {
       throw new BombadilArtifactPolicyError(
         "Bombadil live download provenance quota was exceeded",
       );
