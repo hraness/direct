@@ -43,9 +43,9 @@ real interface and feature state
 Pin Direct as a development dependency:
 
 ```sh
-bun add --dev @hraness/direct@0.7.19
+bun add --dev @hraness/direct@0.7.20
 # or
-npm install --save-dev @hraness/direct@0.7.19
+npm install --save-dev @hraness/direct@0.7.20
 ```
 
 Keep Direct in `devDependencies`. A production entry must not import Direct,
@@ -58,7 +58,7 @@ composition. It requires Git and Bun 1.3.14, then downloads the source and its
 development dependencies:
 
 ```sh
-git clone --branch v0.7.19 --depth 1 https://github.com/hraness/direct.git
+git clone --branch v0.7.20 --depth 1 https://github.com/hraness/direct.git
 cd direct
 bun install --frozen-lockfile --ignore-scripts
 bun run example:direct
@@ -132,9 +132,9 @@ claim separate as `direct` evidence.
 Install Direct's single bundled skill from the public repository:
 
 ```sh
-npx skills add hraness/direct#v0.7.19
+npx skills add hraness/direct#v0.7.20
 # or
-bunx skills add hraness/direct#v0.7.19
+bunx skills add hraness/direct#v0.7.20
 ```
 
 The skill is invoked as `$direct`. It routes installation, adoption, and
@@ -148,7 +148,7 @@ Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
 Use $direct to install hraness/direct from
-the npm registry at the exact 0.7.19 version. Follow the repository README, add
+the npm registry at the exact 0.7.20 version. Follow the repository README, add
 `@hraness/direct` to devDependencies only, and verify that the production
 dependency graph excludes Direct. Do not add a fixture composition until I
 ask.
@@ -164,7 +164,7 @@ Pin the public npm package to an exact immutable version:
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "0.7.19"
+    "@hraness/direct": "0.7.20"
   }
 }
 ```
@@ -186,8 +186,8 @@ quiescence, coverage claims, cleanup, and emitted production boundaries. The
 package smoke test keeps that future packaged copy byte-identical to the
 repository skill.
 
-Prefer `npx skills add hraness/direct#v0.7.19` or
-`bunx skills add hraness/direct#v0.7.19` for runner discovery. You can also copy
+Prefer `npx skills add hraness/direct#v0.7.20` or
+`bunx skills add hraness/direct#v0.7.20` for runner discovery. You can also copy
 or link that one skill directory into a runner's configured location, then
 invoke `$direct`. Package installation leaves the skill inert: it does not run
 a `postinstall` hook or edit repository or user configuration.
