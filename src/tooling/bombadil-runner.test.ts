@@ -2838,7 +2838,7 @@ describe("Direct Bombadil process lifecycle", () => {
     }))).message).toContain("outside the artifact allowlist");
   });
 
-  test("admits a first-seen Chrome completion only after a clean live baseline", async () => {
+  test("rejects a first-seen Chrome completion even after a clean live baseline", async () => {
     const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-fast-complete-"));
     temporaryDirectories.push(directory);
     const downloads = join(directory, "downloads");
@@ -2852,7 +2852,7 @@ describe("Direct Bombadil process lifecycle", () => {
       maxTotalBytes: 2_048,
     };
 
-    await monitorBombadilArtifactTreeForTest({
+    expect((await rejection(monitorBombadilArtifactTreeForTest({
       cleanBaselineEstablished: true,
       policy,
       root: directory,
@@ -2861,38 +2861,20 @@ describe("Direct Bombadil process lifecycle", () => {
           await mkdir(downloads);
           await writeFile(completionPath, "complete\n");
         },
-      }, {}],
-    });
-
-    const replacementRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-fast-replace-"));
-    const retainedRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-fast-retained-"));
-    temporaryDirectories.push(replacementRoot, retainedRoot);
-    const replacementDownloads = join(replacementRoot, "downloads");
-    const replacementCompletion = join(replacementDownloads, CHROME_TRANSIENT_TEST_ID);
-    const retainedCompletion = join(retainedRoot, "retained");
-    expect((await rejection(monitorBombadilArtifactTreeForTest({
-      cleanBaselineEstablished: true,
-      policy,
-      root: replacementRoot,
-      scans: [{
-        beforeScan: async () => {
-          await mkdir(replacementDownloads);
-          await writeFile(replacementCompletion, "complete\n");
-        },
-      }, {
-        beforeScan: async () => {
-          await rename(replacementCompletion, retainedCompletion);
-          await writeFile(replacementCompletion, "replacement\n");
-        },
       }],
-    }))).message).toContain("changed inode identity");
+    }))).message).toContain("lacks live partial provenance");
   });
 
-  test("does not admit contradictory partial lineage before the proof scan", async () => {
+  test("does not let an unrelated prior partial authorize another completion", async () => {
     const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-fast-cross-"));
-    temporaryDirectories.push(directory);
+    const retainedDirectory = await mkdtemp(
+      join(tmpdir(), "direct-bombadil-chrome-fast-cross-retained-"),
+    );
+    temporaryDirectories.push(directory, retainedDirectory);
     const downloads = join(directory, "downloads");
     const partialPath = join(downloads, `${CHROME_TRANSIENT_TEST_ID}.crdownload`);
+    const retainedPartial = join(retainedDirectory, "retained.crdownload");
+    const completionPath = join(downloads, CHROME_TRANSIENT_OTHER_TEST_ID);
     const policy = {
       maxDepth: 4,
       maxEntries: 8,
@@ -2913,10 +2895,14 @@ describe("Direct Bombadil process lifecycle", () => {
         },
       }, {
         beforeScan: async () => {
-          await writeFile(join(downloads, CHROME_TRANSIENT_OTHER_TEST_ID), "complete\n");
+          await rename(partialPath, retainedPartial);
+          await writeFile(completionPath, "complete\n");
+          const retainedMetadata = await stat(retainedPartial, { bigint: true });
+          const completionMetadata = await stat(completionPath, { bigint: true });
+          expect(completionMetadata.ino).not.toBe(retainedMetadata.ino);
         },
-      }],
-    }))).message).toContain("not proven before monitoring stopped");
+      }, {}],
+    }))).message).toContain("lacks live partial provenance");
   });
 
   test("rejects same-scan partial and unobserved completion lineage independent of UUID", async () => {
@@ -2931,6 +2917,7 @@ describe("Direct Bombadil process lifecycle", () => {
     for (const [completionId, completionFirst] of [
       [CHROME_TRANSIENT_TEST_ID, false],
       [CHROME_TRANSIENT_OTHER_TEST_ID, true],
+      [CHROME_TRANSIENT_OTHER_TEST_ID, false],
     ] as const) {
       const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-same-scan-"));
       temporaryDirectories.push(directory);
@@ -2958,6 +2945,44 @@ describe("Direct Bombadil process lifecycle", () => {
         }],
       }))).message).toContain("lacks live partial provenance across the current scan");
     }
+  });
+
+  test("rejects a same-inode completion created between polls while another run remains partial", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-between-polls-"));
+    temporaryDirectories.push(directory);
+    const downloads = join(directory, "downloads");
+    const firstPartial = join(downloads, `${CHROME_TRANSIENT_TEST_ID}.crdownload`);
+    const secondPartial = join(downloads, `${CHROME_TRANSIENT_OTHER_TEST_ID}.crdownload`);
+    const secondCompletion = join(downloads, CHROME_TRANSIENT_OTHER_TEST_ID);
+    const policy = {
+      maxDepth: 4,
+      maxEntries: 8,
+      maxFileBytes: 1_024,
+      maxFiles: 4,
+      maxPathBytes: 256,
+      maxTotalBytes: 2_048,
+    };
+
+    expect((await rejection(monitorBombadilArtifactTreeForTest({
+      cleanBaselineEstablished: true,
+      policy,
+      root: directory,
+      scans: [{
+        beforeScan: async () => {
+          await mkdir(downloads);
+          await writeFile(firstPartial, "partial\n");
+        },
+      }, {
+        beforeScan: async () => {
+          await writeFile(secondPartial, "complete\n");
+          const partialMetadata = await stat(secondPartial, { bigint: true });
+          await rename(secondPartial, secondCompletion);
+          const completionMetadata = await stat(secondCompletion, { bigint: true });
+          expect(completionMetadata.dev).toBe(partialMetadata.dev);
+          expect(completionMetadata.ino).toBe(partialMetadata.ino);
+        },
+      }],
+    }))).message).toContain("lacks live partial provenance across the current scan");
   });
 
   test("rejects a same-scan Chrome completion replacement by inode identity", () => {
@@ -3018,6 +3043,10 @@ describe("Direct Bombadil process lifecycle", () => {
     const crossRunRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-cross-run-"));
     temporaryDirectories.push(crossRunRoot);
     const crossRunDownloads = join(crossRunRoot, "downloads");
+    const firstRunPartial = join(
+      crossRunDownloads,
+      `${CHROME_TRANSIENT_TEST_ID}.crdownload`,
+    );
     const firstRunCompletion = join(crossRunDownloads, CHROME_TRANSIENT_TEST_ID);
     expect((await rejection(monitorBombadilArtifactTreeForTest({
       cleanBaselineEstablished: true,
@@ -3026,9 +3055,13 @@ describe("Direct Bombadil process lifecycle", () => {
       scans: [{
         beforeScan: async () => {
           await mkdir(crossRunDownloads);
-          await writeFile(firstRunCompletion, "complete\n");
+          await writeFile(firstRunPartial, "complete\n");
         },
       }, {
+        beforeScan: async () => {
+          await rename(firstRunPartial, firstRunCompletion);
+        },
+      }, {}, {
         beforeScan: async () => {
           await rename(
             firstRunCompletion,
@@ -3185,7 +3218,7 @@ describe("Direct Bombadil process lifecycle", () => {
     expect(remainingPartials).toContain(true);
   });
 
-  test("promotes an independent fast completion only after a second matching scan", async () => {
+  test("promotes an own-lineage completion while another partial remains", async () => {
     const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-fast-concurrent-"));
     temporaryDirectories.push(directory);
     const downloads = join(directory, "downloads");
@@ -3217,12 +3250,12 @@ describe("Direct Bombadil process lifecycle", () => {
         beforeScan: async () => {
           await mkdir(downloads);
           await writeFile(persistentPartial, "persistent\n");
-        },
-      }, {
-        beforeScan: async () => {
           await writeFile(fastPartial, "fast\n");
           const metadata = await stat(fastPartial, { bigint: true });
           fastPartialIdentity.value = { dev: metadata.dev, ino: metadata.ino };
+        },
+      }, {
+        beforeScan: async () => {
           await rename(fastPartial, fastCompletion);
         },
       }, {}],
@@ -3242,10 +3275,6 @@ describe("Direct Bombadil process lifecycle", () => {
     const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-fast-unproven-"));
     temporaryDirectories.push(directory);
     const downloads = join(directory, "downloads");
-    const persistentPartial = join(
-      downloads,
-      `${CHROME_TRANSIENT_TEST_ID}.crdownload`,
-    );
     const fastPartial = join(
       downloads,
       `${CHROME_TRANSIENT_OTHER_TEST_ID}.crdownload`,
@@ -3265,11 +3294,10 @@ describe("Direct Bombadil process lifecycle", () => {
       scans: [{
         beforeScan: async () => {
           await mkdir(downloads);
-          await writeFile(persistentPartial, "persistent\n");
+          await writeFile(fastPartial, "fast\n");
         },
       }, {
         beforeScan: async () => {
-          await writeFile(fastPartial, "fast\n");
           await rename(
             fastPartial,
             join(downloads, CHROME_TRANSIENT_OTHER_TEST_ID),
@@ -3283,10 +3311,6 @@ describe("Direct Bombadil process lifecycle", () => {
     const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-failed-scan-"));
     temporaryDirectories.push(directory);
     const downloads = join(directory, "downloads");
-    const persistentPartial = join(
-      downloads,
-      `${CHROME_TRANSIENT_TEST_ID}.crdownload`,
-    );
     const fastPartial = join(
       downloads,
       `${CHROME_TRANSIENT_OTHER_TEST_ID}.crdownload`,
@@ -3308,7 +3332,7 @@ describe("Direct Bombadil process lifecycle", () => {
       scans: [{
         beforeScan: async () => {
           await mkdir(downloads);
-          await writeFile(persistentPartial, "persistent\n");
+          await writeFile(fastPartial, "fast\n");
         },
       }, {
         afterEntryInspect: (path) => {
@@ -3319,7 +3343,6 @@ describe("Direct Bombadil process lifecycle", () => {
           });
         },
         beforeScan: async () => {
-          await writeFile(fastPartial, "fast\n");
           await rename(fastPartial, fastCompletion);
         },
       }],
@@ -3331,10 +3354,6 @@ describe("Direct Bombadil process lifecycle", () => {
     const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-retry-abort-"));
     temporaryDirectories.push(directory);
     const downloads = join(directory, "downloads");
-    const persistentPartial = join(
-      downloads,
-      `${CHROME_TRANSIENT_TEST_ID}.crdownload`,
-    );
     const fastPartial = join(
       downloads,
       `${CHROME_TRANSIENT_OTHER_TEST_ID}.crdownload`,
@@ -3361,12 +3380,11 @@ describe("Direct Bombadil process lifecycle", () => {
       scans: [{
         beforeScan: async () => {
           await mkdir(downloads);
-          await writeFile(persistentPartial, "persistent\n");
+          await writeFile(fastPartial, "fast\n");
           await writeFile(racedPartial, "raced\n");
         },
       }, {
         beforeScan: async () => {
-          await writeFile(fastPartial, "fast\n");
           await rename(
             fastPartial,
             join(downloads, CHROME_TRANSIENT_OTHER_TEST_ID),
@@ -3395,10 +3413,6 @@ describe("Direct Bombadil process lifecycle", () => {
       const retainedDirectory = await mkdtemp(join(tmpdir(), "direct-bombadil-retained-fast-"));
       temporaryDirectories.push(directory, retainedDirectory);
       const downloads = join(directory, "downloads");
-      const persistentPartial = join(
-        downloads,
-        `${CHROME_TRANSIENT_TEST_ID}.crdownload`,
-      );
       const fastPartial = join(
         downloads,
         `${CHROME_TRANSIENT_OTHER_TEST_ID}.crdownload`,
@@ -3419,11 +3433,10 @@ describe("Direct Bombadil process lifecycle", () => {
         scans: [{
           beforeScan: async () => {
             await mkdir(downloads);
-            await writeFile(persistentPartial, "persistent\n");
+            await writeFile(fastPartial, "fast\n");
           },
         }, {
           beforeScan: async () => {
-            await writeFile(fastPartial, "fast\n");
             await rename(fastPartial, fastCompletion);
           },
         }, {
@@ -3446,14 +3459,14 @@ describe("Direct Bombadil process lifecycle", () => {
     }
   });
 
-  test("rejects conflicting or provenance-overflowing pending Chrome completions", async () => {
+  test("rejects conflicting pending completions and counts each run once", async () => {
     const conflictingRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-conflicting-"));
     temporaryDirectories.push(conflictingRoot);
     const conflictingDownloads = join(conflictingRoot, "downloads");
-    const persistentPartial = join(
-      conflictingDownloads,
-      `${CHROME_TRANSIENT_TEST_ID}.crdownload`,
-    );
+    const conflictingPartials = [
+      CHROME_TRANSIENT_OTHER_TEST_ID,
+      CHROME_TRANSIENT_THIRD_TEST_ID,
+    ].map((runId) => join(conflictingDownloads, `${runId}.crdownload`));
     expect((await rejection(monitorBombadilArtifactTreeForTest({
       cleanBaselineEstablished: true,
       policy: {
@@ -3468,31 +3481,27 @@ describe("Direct Bombadil process lifecycle", () => {
       scans: [{
         beforeScan: async () => {
           await mkdir(conflictingDownloads);
-          await writeFile(persistentPartial, "persistent\n");
+          for (const partial of conflictingPartials) {
+            await writeFile(partial, "partial\n");
+          }
         },
       }, {
         beforeScan: async () => {
-          for (const runId of [
-            CHROME_TRANSIENT_OTHER_TEST_ID,
-            CHROME_TRANSIENT_THIRD_TEST_ID,
-          ]) {
-            const partial = join(conflictingDownloads, `${runId}.crdownload`);
-            await writeFile(partial, `${runId}\n`);
-            await rename(partial, join(conflictingDownloads, runId));
+          for (const partial of conflictingPartials) {
+            await rename(partial, partial.slice(0, -".crdownload".length));
           }
         },
       }],
     }))).message).toContain("multiple unproven concurrent candidates");
 
     const quotaRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-pending-quota-"));
-    const retainedRoot = await mkdtemp(join(tmpdir(), "direct-bombadil-retained-quota-"));
-    temporaryDirectories.push(quotaRoot, retainedRoot);
+    temporaryDirectories.push(quotaRoot);
     const quotaDownloads = join(quotaRoot, "downloads");
     const quotaPartial = join(
       quotaDownloads,
       `${CHROME_TRANSIENT_TEST_ID}.crdownload`,
     );
-    expect((await rejection(monitorBombadilArtifactTreeForTest({
+    await monitorBombadilArtifactTreeForTest({
       cleanBaselineEstablished: true,
       policy: {
         maxDepth: 4,
@@ -3506,29 +3515,24 @@ describe("Direct Bombadil process lifecycle", () => {
       scans: [{
         beforeScan: async () => {
           await mkdir(quotaDownloads);
-          await writeFile(quotaPartial, "persistent\n");
+          await writeFile(quotaPartial, "partial\n");
         },
       }, {
         beforeScan: async () => {
-          await rename(quotaPartial, join(retainedRoot, "retained"));
-          const fastPartial = join(
-            quotaDownloads,
-            `${CHROME_TRANSIENT_OTHER_TEST_ID}.crdownload`,
-          );
-          await writeFile(fastPartial, "fast\n");
           await rename(
-            fastPartial,
-            join(quotaDownloads, CHROME_TRANSIENT_OTHER_TEST_ID),
+            quotaPartial,
+            join(quotaDownloads, CHROME_TRANSIENT_TEST_ID),
           );
         },
-      }],
-    }))).message).toContain("live download provenance quota was exceeded");
+      }, {}],
+    });
   });
 
   test("carries raced Chrome completions through immediate retry quotas", async () => {
     const cases = [
       {
         expected: "file quota",
+        partialContents: "123456",
         policy: {
           maxDepth: 4,
           maxEntries: 8,
@@ -3544,6 +3548,7 @@ describe("Direct Bombadil process lifecycle", () => {
       },
       {
         expected: "aggregate artifact byte quota",
+        partialContents: "123456",
         policy: {
           maxDepth: 4,
           maxEntries: 8,
@@ -3559,6 +3564,7 @@ describe("Direct Bombadil process lifecycle", () => {
       },
       {
         expected: "aggregate artifact byte quota",
+        partialContents: "12345",
         policy: {
           maxDepth: 4,
           maxEntries: 8,
@@ -3567,12 +3573,14 @@ describe("Direct Bombadil process lifecycle", () => {
           maxPathBytes: 256,
           maxTotalBytes: 5,
         },
-        afterRetry: async (_directory: string, completionPath: string) => {
+        afterRetry: async (directory: string, completionPath: string) => {
           await writeFile(completionPath, "1");
+          await writeFile(join(directory, "trace.jsonl"), "1");
         },
       },
       {
         expected: "entry quota",
+        partialContents: "123456",
         policy: {
           maxDepth: 4,
           maxEntries: 3,
@@ -3601,6 +3609,11 @@ describe("Direct Bombadil process lifecycle", () => {
         policy: testCase.policy,
         root: directory,
         scans: [{
+          beforeScan: async () => {
+            await mkdir(downloads);
+            await writeFile(partialPath, testCase.partialContents);
+          },
+        }, {
           afterLiveChromeDownloadRenameRetry: async () => {
             await testCase.afterRetry(directory, completionPath);
           },
@@ -3609,10 +3622,6 @@ describe("Direct Bombadil process lifecycle", () => {
               renamed = true;
               await rename(partialPath, completionPath);
             }
-          },
-          beforeScan: async () => {
-            await mkdir(downloads);
-            await writeFile(partialPath, "123456");
           },
         }],
       }))).message).toContain(testCase.expected);
@@ -3650,6 +3659,11 @@ describe("Direct Bombadil process lifecycle", () => {
         policy,
         root: directory,
         scans: [{
+          beforeScan: async () => {
+            await mkdir(downloads);
+            await writeFile(partialPath, "123456");
+          },
+        }, {
           afterLiveChromeDownloadRenameRetry: () => {
             retryHookCalled = true;
           },
@@ -3657,9 +3671,7 @@ describe("Direct Bombadil process lifecycle", () => {
             if (path === partialPath) await rename(partialPath, completionPath);
           },
           beforeScan: async () => {
-            await mkdir(downloads);
             await writeFile(join(directory, "trace.jsonl"), "123456");
-            await writeFile(partialPath, "123456");
           },
         }],
       }));
@@ -3669,15 +3681,13 @@ describe("Direct Bombadil process lifecycle", () => {
     }
   });
 
-  test("counts carried Chrome provenance against historical identities", async () => {
+  test("counts completed Chrome provenance against later identities", async () => {
     const directory = await mkdtemp(join(tmpdir(), "direct-bombadil-chrome-retry-history-"));
     temporaryDirectories.push(directory);
     const downloads = join(directory, "downloads");
     const firstPartial = join(downloads, `${CHROME_TRANSIENT_TEST_ID}.crdownload`);
     const firstCompletion = join(downloads, CHROME_TRANSIENT_TEST_ID);
     const nextPartial = join(downloads, `${CHROME_TRANSIENT_OTHER_TEST_ID}.crdownload`);
-    const nextCompletion = join(downloads, CHROME_TRANSIENT_OTHER_TEST_ID);
-    let renamedNext = false;
     expect((await rejection(monitorBombadilArtifactTreeForTest({
       cleanBaselineEstablished: true,
       policy: {
@@ -3698,20 +3708,13 @@ describe("Direct Bombadil process lifecycle", () => {
         beforeScan: async () => {
           await rename(firstPartial, firstCompletion);
         },
-      }, {
-        beforeEntryInspect: async (path) => {
-          if (!renamedNext && path === nextPartial) {
-            renamedNext = true;
-            await rename(nextPartial, nextCompletion);
-          }
-        },
+      }, {}, {
         beforeScan: async () => {
           await rm(firstCompletion);
           await writeFile(nextPartial, "partial\n");
         },
       }],
     }))).message).toContain("live download provenance quota");
-    expect(renamedNext).toBeTrue();
   });
 
   test("stops immediate Chrome rename retries when monitoring is aborted", async () => {
@@ -3760,7 +3763,7 @@ describe("Direct Bombadil process lifecycle", () => {
       }, "aggregate artifact byte quota"],
       [{
         maxDepth: 4,
-        maxEntries: 2,
+        maxEntries: 3,
         maxFileBytes: 1_024,
         maxFiles: 4,
         maxPathBytes: 256,
@@ -3779,22 +3782,36 @@ describe("Direct Bombadil process lifecycle", () => {
         policy,
         root: directory,
         scans: [{
+          beforeScan: async () => {
+            await mkdir(downloads);
+            for (const runId of runIds) {
+              await writeFile(join(downloads, `${runId}.crdownload`), "1234");
+            }
+          },
+        }, {
           afterLiveChromeDownloadRenameRetry: async (completionPath) => {
             retryCount += 1;
             await rm(completionPath);
             if (retryCount === 1) {
-              await writeFile(join(downloads, `${runIds[1]}.crdownload`), "123456");
+              if (expected === "entry quota") {
+                await mkdir(join(directory, "empty"));
+              } else {
+                await writeFile(join(directory, "trace.jsonl"), "123");
+              }
             } else {
               controller.abort();
             }
           },
           beforeEntryInspect: async (path) => {
-            if (!path.endsWith(".crdownload")) return;
-            await rename(path, path.slice(0, -".crdownload".length));
-          },
-          beforeScan: async () => {
-            await mkdir(downloads);
-            await writeFile(join(downloads, `${runIds[0]}.crdownload`), "123456");
+            const expectedRunId = runIds[retryCount];
+            if (expectedRunId === undefined) return;
+            const expectedPartial = join(
+              downloads,
+              `${expectedRunId}.crdownload`,
+            );
+            if (path === expectedPartial) {
+              await rename(path, path.slice(0, -".crdownload".length));
+            }
           },
         }],
       }));
@@ -3830,24 +3847,28 @@ describe("Direct Bombadil process lifecycle", () => {
       },
       root: directory,
       scans: [{
+        beforeScan: async () => {
+          await mkdir(downloads);
+          for (const runId of runIds) {
+            await writeFile(join(downloads, `${runId}.crdownload`), "partial\n");
+          }
+        },
+      }, {
         afterLiveChromeDownloadRenameRetry: async (completionPath) => {
           retryCount += 1;
           await rm(completionPath);
           currentIndex += 1;
-          if (currentIndex < runIds.length) {
-            await writeFile(
-              join(downloads, `${runIds[currentIndex]}.crdownload`),
-              "partial\n",
-            );
-          }
         },
         beforeEntryInspect: async (path) => {
-          if (!path.endsWith(".crdownload")) return;
-          await rename(path, path.slice(0, -".crdownload".length));
-        },
-        beforeScan: async () => {
-          await mkdir(downloads);
-          await writeFile(join(downloads, `${runIds[0]}.crdownload`), "partial\n");
+          const expectedRunId = runIds[currentIndex];
+          if (expectedRunId === undefined) return;
+          const expectedPartial = join(
+            downloads,
+            `${expectedRunId}.crdownload`,
+          );
+          if (path === expectedPartial) {
+            await rename(path, path.slice(0, -".crdownload".length));
+          }
         },
       }],
     }));
@@ -3884,7 +3905,7 @@ describe("Direct Bombadil process lifecycle", () => {
         beforeScan: async () => {
           await rename(reversalPartial, reversalCompletion);
         },
-      }, {
+      }, {}, {
         beforeScan: async () => {
           await rename(reversalCompletion, reversalPartial);
         },
