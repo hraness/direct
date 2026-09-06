@@ -9,7 +9,8 @@
     "./src/index.ts",
     "./src/react.ts",
     "./src/testing/index.ts",
-    "./src/web.ts"
+    "./src/web.ts",
+    "./src/effect/index.ts"
   ],
   "packageManager": "bun@1.3.14",
   "repository": {
@@ -63,6 +64,10 @@
     "./tooling/bundle-boundary": {
       "types": "./src/tooling/bundle-boundary.ts",
       "import": "./dist/tooling/bundle-boundary.js"
+    },
+    "./effect": {
+      "types": "./src/effect/index.ts",
+      "import": "./dist/effect/index.js"
     }
   },
   "imports": {
@@ -114,12 +119,16 @@
     "src/web/fetch-firewall.ts",
     "skills",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "src/effect/index.ts",
+    "src/effect/driver.ts",
+    "src/effect/deadline.ts",
+    "src/effect/supervisor.ts"
   ],
   "scripts": {
     "build": "bun run build:clean && bun run build:runtime && bun run build:tooling",
     "build:clean": "bun -e 'await (await import(\"node:fs/promises\")).rm(\"./dist\", { recursive: true, force: true })'",
-    "build:runtime": "bun build ./src/index.ts ./src/core/index.ts ./src/react.ts ./src/testing/index.ts ./src/web.ts --outdir ./dist --root ./src --target browser --format esm --splitting --packages external",
+    "build:runtime": "bun build ./src/index.ts ./src/core/index.ts ./src/react.ts ./src/testing/index.ts ./src/web.ts ./src/effect/index.ts --outdir ./dist --root ./src --target browser --format esm --splitting --packages external",
     "build:tooling": "bun build ./src/tooling/browser-verification-entry.ts ./src/tooling/bundle-boundary.ts --outdir ./dist/tooling --root ./src/tooling --target bun --format esm --splitting --packages external && bun build ./src/tooling/bombadil.ts --outdir ./dist/tooling --root ./src/tooling --target bun --format esm --splitting --packages external",
     "typecheck": "tsc --noEmit",
     "test": "bun test ./src",
@@ -142,13 +151,15 @@
     "kb:check:lane": "bunx --bun github:hraness/kb#v0.15.2 check --root kb --no-catalog",
     "kb:check": "bunx --bun github:hraness/kb#v0.15.2 check --root kb && bunx --bun github:hraness/kb#v0.15.2 agents check --root kb --repo .",
     "kb:catalog": "bunx --bun github:hraness/kb#v0.15.2 catalog --root kb",
-    "check": "bun run typecheck && bun run test:npm-release && bun run build && bun run test:package && bun run test && bun run lint && bun run example:test && bun run example:typecheck && bun run example:verify && bun run example:react-native:test && bun run example:react-native:typecheck && bun run example:react-native:verify",
-    "prepack": "bun run check"
+    "check": "bun run typecheck && bun run check:effect && bun run test:npm-release && bun run build && bun run test:package && bun run test && bun run lint && bun run example:test && bun run example:typecheck && bun run example:verify && bun run example:react-native:test && bun run example:react-native:typecheck && bun run example:react-native:verify",
+    "prepack": "bun run check",
+    "check:effect": "bun run scripts/effect-policy.ts && bun test scripts/check-effect-architecture.test.ts"
   },
   "peerDependencies": {
     "@antithesishq/bombadil": "0.7.2",
     "agent-browser": "0.32.3",
-    "react": ">=18 <20"
+    "react": ">=18 <20",
+    "effect": "3.22.1"
   },
   "peerDependenciesMeta": {
     "@antithesishq/bombadil": {
@@ -158,6 +169,9 @@
       "optional": true
     },
     "react": {
+      "optional": true
+    },
+    "effect": {
       "optional": true
     }
   },
@@ -179,7 +193,8 @@
     "react-native-web": "~0.21.2",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.53.0",
-    "vite": "^8.1.5"
+    "vite": "^8.1.5",
+    "effect": "3.22.1"
   },
   "publishConfig": {
     "access": "public",

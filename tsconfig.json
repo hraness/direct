@@ -37,6 +37,9 @@
       ],
       "@hraness/direct/web": [
         "./src/web.ts"
+      ],
+      "@hraness/direct/effect": [
+        "./src/effect/index.ts"
       ]
     },
     "jsx": "react-jsx",

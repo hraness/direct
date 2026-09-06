@@ -33,6 +33,17 @@ Reject a design that conditionally imports fixtures from a query string, build f
 
 Treat the shared world store as a scenario seed and activity ledger. Let product adapters own mutable repositories or event streams after construction.
 
+For an Effect application workflow, use the optional `@hraness/direct/effect`
+entry with an exact `effect@3.22.1` peer. Construct one driver inside the session
+factory, expose its `observation`, and run the production workflow against a
+product-owned Layer. Select `clock: "deadline"` explicitly and advance only
+through that driver; do not mix this mode with FIFO waits. Use the operation's
+generation-bound `transact` for world commits. Keep the session's synchronous
+disposal and separately await `driver.close()`, inspecting its operation,
+activity and runtime cleanup results. Recreate the session when reset requires
+fresh Layer services. Foreign callbacks and native work need their own
+cancellation and pending-work proof.
+
 A scenario contains initial world, route, and optional logical-runtime state. Product-verifier actions, semantic assertions, and evidence policy do not belong in the scenario catalog.
 
 ## Add the development entry

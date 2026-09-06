@@ -8,7 +8,8 @@ const maximumTarBytes = 2_000_000;
 
 const packageBudget = Object.freeze({
   entryCount: { min: 50, max: 120 },
-  fileCount: { min: 50, max: 60 },
+  // Four optional Effect source files, one entry and one possible split chunk.
+  fileCount: { min: 50, max: 66 },
   packedBytes: { min: 140_000, max: 260_000 },
   unpackedBytes: { min: 650_000, max: 1_200_000 },
 });
