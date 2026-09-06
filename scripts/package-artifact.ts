@@ -11,7 +11,8 @@ const packageBudget = Object.freeze({
   // Four optional Effect source files, one entry and one possible split chunk.
   fileCount: { min: 50, max: 66 },
   packedBytes: { min: 140_000, max: 260_000 },
-  unpackedBytes: { min: 650_000, max: 1_200_000 },
+  // The optional driver ships its source types plus its external-peer bundle.
+  unpackedBytes: { min: 650_000, max: 1_250_000 },
 });
 
 const requiredPaths = Object.freeze([

@@ -1,13 +1,8 @@
-// src/core/result.ts
-function ok(value) {
-  return { ok: true, value };
-}
-function err(error) {
-  return { ok: false, error };
-}
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+import {
+  err,
+  isRecord,
+  ok
+} from "./index-mm9mqmyc.js";
 
 // src/core/ids.ts
 var IDENTIFIER_PATTERN = /^[a-z][a-z0-9]*(?:[._/-][a-z0-9]+)*$/u;
@@ -1164,4 +1159,4 @@ function createScenarioCatalog(inputs, parseWorld) {
   }));
 }
 
-export { ok, err, isRecord, parseScenarioId, parseOperationId, parseCoverageKey, scenarioId, operationId, coverageKey, renderUnknownReason, DEFAULT_JSON_LIMITS, utf8ByteLength, parseExactJsonSource, parseJsonValue, canonicalJson, cloneJson, freezeJson, STABLE_HASH_ALGORITHM, tagStableHash, parseTaggedStableHash, stableHash, parseAndCloneWorld, DIRECT_COVERAGE_SCHEMA, MAX_DIRECT_COVERAGE_ENTRIES, EMPTY_COVERAGE_CATALOG_SNAPSHOT, createCoverageCatalogSnapshot, parseCoverageCatalogSnapshot, createCoverageCatalog, LOGICAL_RUNTIME_SCHEMA, MAX_HOST_TIMER_MILLISECONDS, DEFAULT_LOGICAL_RUNTIME_SNAPSHOT, parseLogicalRuntimeSnapshot, createLogicalRuntime, FIXTURE_SCHEMA, DEFAULT_MAX_FIXTURE_BYTES, parseFixtureEnvelope, parseFixtureJson, createFixtureEnvelope, serializeFixtureJson, SCENARIO_QUERY_KEY, FIXTURE_QUERY_KEY, maximumFixtureQueryBytes, DEFAULT_MAX_QUERY_BYTES, activateDirectScenario, parseDirectQuery, MAX_DIRECT_SCENARIOS, createScenarioCatalog };
+export { parseScenarioId, parseOperationId, parseCoverageKey, scenarioId, operationId, coverageKey, renderUnknownReason, DEFAULT_JSON_LIMITS, utf8ByteLength, parseExactJsonSource, parseJsonValue, canonicalJson, cloneJson, freezeJson, STABLE_HASH_ALGORITHM, tagStableHash, parseTaggedStableHash, stableHash, parseAndCloneWorld, DIRECT_COVERAGE_SCHEMA, MAX_DIRECT_COVERAGE_ENTRIES, EMPTY_COVERAGE_CATALOG_SNAPSHOT, createCoverageCatalogSnapshot, parseCoverageCatalogSnapshot, createCoverageCatalog, LOGICAL_RUNTIME_SCHEMA, MAX_HOST_TIMER_MILLISECONDS, DEFAULT_LOGICAL_RUNTIME_SNAPSHOT, parseLogicalRuntimeSnapshot, createLogicalRuntime, FIXTURE_SCHEMA, DEFAULT_MAX_FIXTURE_BYTES, parseFixtureEnvelope, parseFixtureJson, createFixtureEnvelope, serializeFixtureJson, SCENARIO_QUERY_KEY, FIXTURE_QUERY_KEY, maximumFixtureQueryBytes, DEFAULT_MAX_QUERY_BYTES, activateDirectScenario, parseDirectQuery, MAX_DIRECT_SCENARIOS, createScenarioCatalog };

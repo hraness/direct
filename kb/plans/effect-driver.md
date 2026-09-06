@@ -17,7 +17,7 @@ Use Effect 3.22.1 through an optional exact peer plus development pin, with the 
 ## Work and verification
 
 1. Open design issue and publish the public API proposal. Complete.
-2. Add typed opt-in driver, scope ownership, captured-generation commit guards, activity/probe integration, bounded deadline scheduling and async close. Implemented; review pending.
+2. Add typed opt-in driver, scope ownership, captured-generation commit guards, activity/probe integration, bounded deadline scheduling and async close. Implemented and independently reviewed.
 3. Exercise independent deadline/property oracles, existing FIFO compatibility, cancellation/reset/finalizer failure and a neutral application controller. Complete focused checks.
 4. Add actual CLI architecture checks with paired fixtures, export/package consumption checks, and current adoption documentation.
 5. Run focused tests, typecheck, package and repository aggregate through the installed host scheduler; independently review before publishing or merging.
@@ -32,6 +32,6 @@ Focused driver, public-controller and browser graph tests pass: `bun test src/ef
 
 Independent review found two issues, each reproduced before its fix: a suspended Layer worker was omitted from quiescence, and an unjoined child failure disappeared when its root succeeded. The Supervisor now counts suspended workers and retains operation, child and background failure evidence separately.
 
-The first admitted aggregate stopped in `test:npm-release`: 10 tests passed and 13 failed because the old file-count budget rejected the added files and historical smoke tests incorrectly required the new export. The file ceiling now allows exactly six additional files, while existing byte/path/mode guards remain. Effect-specific smoke runs only when the governed source manifest declares that export. These package corrections still require focused recovery and installed-consumer proof.
+The first admitted aggregate stopped in `test:npm-release`: 10 tests passed and 13 failed because the old file-count budget rejected the added files and historical smoke tests incorrectly required the new export. The file ceiling now allows exactly six additional files. The measured artifact contains 66 files and 1,202,846 unpacked bytes; both the local parser and minimal publisher retain a bounded 1,250,000-byte unpacked ceiling and the existing packed/path/type/mode guards. Effect-specific smoke runs only when the governed source manifest declares that export. Historical recovery tests passed for 0.7.5 through 0.7.19. The current canonical-identity and publication-separation regressions pass (2 tests, 135 assertions), and the installed-consumer package gate passes, including Bundler and NodeNext type resolution and isolated Effect imports.
 
-The integration owner takes the queued final rebuild, focused package/recovery checks, final aggregate, independent review and release. Generated `dist` output must be regenerated for the final source before it is committed for delivery. Package and final-gate success are not yet claimed.
+The final source rebuild and independent review are complete. Generated `dist` output contains the reviewed child-Cause and Supervisor fixes; only the optional Effect entry imports the external Effect peer. The integration owner owns the remaining aggregate gate, pull request, required CI and immutable 0.7.20 release. Final-gate and release success are not yet claimed.
