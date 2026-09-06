@@ -312,6 +312,7 @@ A quiet probe means the declared deterministic work settled. It does not prove t
 | `@hraness/direct/core` | Advanced catalog, parser, store, runtime, effect, resource, ID, and `Result` mechanics | Framework-free |
 | `@hraness/direct/react` | Typed context, provider, and external-store hooks for React DOM or React Native | Optional React peer |
 | `@hraness/direct/testing` | Sessions, manifest and probe parsers, evidence classification, activity scopes, and exact scripted transports | Development and verification |
+| `@hraness/direct/effect` | Scoped asynchronous operations, generation-bound commits and deadline testing | Optional Effect 3.22.1 peer; development and verification |
 | `@hraness/direct/web` | Atomic browser installation, with low-level bridge and firewall escape hatches | Browser only |
 | `@hraness/direct/tooling/browser-verification` | Protocol-bound bridge reads, product-owned named-box layout contracts, bounded agent-browser commands, local server leases, and artifact writes | Bun 1.3.14 with Node APIs |
 | `@hraness/direct/tooling/bombadil-campaign` | Direct property and conservative action factories for a Bombadil specification | Bombadil 0.7.2 specification compiler |
@@ -339,6 +340,59 @@ The same tooling subpath parses named layout boxes and explicit product rules
 for containment, selected no-overlap pairs, alignment, viewport clipping,
 minimum size, and two-sample stability. It does not inspect the DOM or compare
 every box pair.
+
+### Test an Effect workflow
+
+Install `effect@3.22.1` when you use `@hraness/direct/effect`. Existing entry
+points do not import Effect. Keep Direct in the development graph and run the
+same application workflow with a product-owned test Layer, as shown in the
+[document controller example](examples/effect/document-controller.ts).
+
+Construct `createDirectEffectDriver({ context, layer, clock: "deadline" })`
+inside `createDirectSession`'s `create` callback and return `driver.observation`
+from `observe`. Call `driver.runExit("operation", operation => program)` to
+admit a scoped operation. Commit world changes through `operation.transact`;
+it checks the captured generation and rejects closed or settled owners.
+
+`driver.advance(milliseconds)` advances the existing Direct clock through
+absolute deadlines and drains owned continuations. Concurrent 10/20 ms sleeps
+finish by 20 ms. Existing FIFO waits still sum to 30 ms. Use only the driver's
+advance operation in deadline mode; mixing it with `session.clock.wait` or
+manual clock advancement is unsupported. Positive fractional Effect sleeps
+round up to the next millisecond; infinite sleeps remain interruptible. Finite
+time must stay within the safe integer range. Tied deadlines wake in admission
+order, followed by Effect scheduler priority and insertion order. Synchronize
+application races explicitly when their winner matters.
+
+Call `session.dispose()` to fence admission and request interruption
+synchronously, then await `driver.close()` to join operations and close Layer
+resources. The close report retains operation and background failure Causes, activity
+errors and the runtime teardown Exit separately. A Supervisor keeps suspended
+Layer workers visible to the probe even after a root operation finishes.
+`childFailures` retains observed operation-descendant Causes even when the
+root succeeds; joins, races or retries may have handled these exits, so they
+do not independently increment the violation counter. Background failure
+records are observed Layer-fiber exits, not proof of application failure.
+Inspect these results; expected
+domain failures and interruption are not interchangeable with defects. A reset
+interrupts old-generation operations but retains the Layer: recreate the
+session when the product requires new services. Pending old-generation
+finalizers remain visible in the probe after the store resets its ledger.
+
+Deadline mode controls Effect timers and cooperative continuations. Native
+callbacks and foreign Promises still execute on their real host. A Promise
+that ignores cancellation can continue after its Effect fiber exits; the
+product adapter must track that work and prevent late external writes.
+Guarded world transactions do not revoke external authority. Async finalizers
+that sleep need the test owner to keep advancing time while close is pending.
+The default 10,000-step drain budget reports excessive cooperative work;
+`drain()` can resume a paused queue during recovery. It cannot preempt a
+synchronous infinite loop.
+
+`bun run check:effect` enforces declared adapter/runtime ownership and rejects
+typed floating Effects, unsafe channel assertions and failure-erasing
+shortcuts. Its paired fixtures run in the aggregate check. These rules do not
+prove domain correctness or linear resource lifetimes.
 
 ### Fuzz one Direct scenario
 

@@ -271,11 +271,11 @@ jobs:
           const { readFileSync, statSync } = require("node:fs");
 
           const minimumFiles = 50;
-          const maximumFiles = 60;
+          const maximumFiles = 66;
           const minimumPackedBytes = 140_000;
           const maximumPackedBytes = 260_000;
           const minimumUnpackedBytes = 650_000;
-          const maximumUnpackedBytes = 1_200_000;
+          const maximumUnpackedBytes = 1_250_000;
           const maximumMetadataBytes = 250_000;
           const expectedName = "@hraness/direct";
           const expectedVersion = process.env.EXPECTED_VERSION;

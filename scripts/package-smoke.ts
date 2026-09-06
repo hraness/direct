@@ -28,7 +28,7 @@ const toolingTypeImportSpecifiers = [
 ];
 const importSpecifiers = [...runtimeImportSpecifiers, ...toolingRuntimeImportSpecifiers];
 const binNames: readonly string[] = [];
-const verificationPackages = ["@antithesishq/bombadil@0.7.2","@eslint/js@^9.39.2","@expo/metro-runtime@~57.0.6","@types/bun@^1.3.14","@types/node@^24.10.0","@types/react@^19.2.14","@types/react-dom@^19.2.3","@vitejs/plugin-react@^6.0.3","eslint@^9.39.2","expo@~57.0.9","fast-check@^4.8.0","react@19.2.3","react-dom@19.2.3","react-native@0.86.2","react-native-web@~0.21.2","typescript@^6.0.3","typescript-eslint@^8.53.0","vite@^8.1.5"];
+const verificationPackages = ["@antithesishq/bombadil@0.7.2","@eslint/js@^9.39.2","@expo/metro-runtime@~57.0.6","@types/bun@^1.3.14","@types/node@^24.10.0","@types/react@^19.2.14","@types/react-dom@^19.2.3","@vitejs/plugin-react@^6.0.3","effect@3.22.1","eslint@^9.39.2","expo@~57.0.9","fast-check@^4.8.0","react@19.2.3","react-dom@19.2.3","react-native@0.86.2","react-native-web@~0.21.2","typescript@^6.0.3","typescript-eslint@^8.53.0","vite@^8.1.5"];
 
 type PackageInput = Readonly<{
   archive?: string;
@@ -576,6 +576,11 @@ if (
 ) {
   throw new Error("package.json must declare a string version");
 }
+const supportsEffectDriver = Object.hasOwn(record(packageManifest.exports, "package exports"), "./effect");
+if (supportsEffectDriver) {
+  runtimeImportSpecifiers.push("@hraness/direct/effect");
+  importSpecifiers.push("@hraness/direct/effect");
+}
 const bombadilFeatureProfile = selectBombadilFeatureProfile(packageManifest.version);
 const supportsBombadilBoaNamedSnapshots = Bun.semver.order(
   packageManifest.version,
@@ -658,6 +663,29 @@ try {
     tooling: false,
   }));
   await run([process.execPath, "x", "tsc", "-p", "./tsconfig.nodenext.json"], consumer);
+  if (supportsEffectDriver) {
+    await writeFile(join(consumer, "document-controller.ts"), await readFile(
+      join(repository, "examples/effect/document-controller.ts"), "utf8",
+    ));
+    await writeFile(join(consumer, "effect-smoke.ts"), `
+      import { Effect, Exit, Layer } from "effect";
+      import { createDocumentTestSession, DocumentSource, loadDocument } from "./document-controller.ts";
+      const created = createDocumentTestSession(Layer.succeed(DocumentSource, {
+        read: Effect.sleep(20).pipe(Effect.as({ text: "Installed package" })),
+      }));
+      if (!created.ok) throw new Error(created.error.message);
+      const session = created.value;
+      const result = session.harness.runExit("document", loadDocument);
+      const advanced = session.harness.advance(20);
+      if (!advanced.ok || advanced.value !== 20) throw new Error("Deadline did not advance");
+      if (!Exit.isSuccess(await result)) throw new Error("Controller failed");
+      if (session.store.getSnapshot().world.text !== "Installed package") throw new Error("Commit missing");
+      session.dispose();
+      const closed = await session.harness.close();
+      if (!Exit.isSuccess(closed.runtime) || closed.settlementErrors.length) throw new Error("Cleanup failed");
+    `);
+    await run([process.execPath, "run", "./effect-smoke.ts"], consumer);
+  }
   await writeFile(join(consumer, "tsconfig.tooling-bundler.json"), typeScriptConfig({
     include: "tooling-index.ts",
     module: "Preserve",
