@@ -70,6 +70,45 @@ deadlines, and rotates a namespace after an unresponsive process. The product
 still supplies allowed-domain launch flags, commands, semantic assertions,
 context inventory, and the final close decision.
 
+### Inspect bounded server output
+
+`spawnVerificationServer` continuously drains stdout and stderr. Its `output`
+promise resolves only after both streams reach EOF and preserves the configured
+combined log tail. `stopVerificationServer` still requires leader exit, cleanup
+of an explicitly owned process group when configured, and output settlement
+within its existing deadlines.
+
+Call the optional `ManagedVerificationServer.outputSnapshot()` to inspect a
+detached, frozen `VerificationOutputSnapshot` without waiting for EOF. Servers
+created by `spawnVerificationServer` always provide this method; custom server
+implementations can omit it. The snapshot uses schema
+`direct.verification-output/v1` and contains separate `stdout` and `stderr`
+records:
+
+- `state` is `pending`, `eof`, or `error`.
+- `inFlightRead` reports whether the collector is awaiting a stream read. It
+  is always false in a terminal state.
+- `bytesRead` and `chunksRead` count completed data reads. Both saturate at
+  `Number.MAX_SAFE_INTEGER`; `countersSaturated` identifies an inexact count.
+- `tail` retains at most 12,000 UTF-16 code units per stream, independently of
+  the configured combined log limit. The decoder preserves split UTF-8 sequences.
+- An `error` state includes a description capped at 1,024 UTF-16 code units.
+  The output promise still rejects with the original failure.
+
+An output-settlement timeout throws `VerificationServerOutputTimeoutError`,
+which retains the original timeout message. Its `outputSnapshot` property
+contains an immutable copy captured at that deadline when available. If a
+custom snapshot reader throws or returns invalid data, `outputSnapshotFailure`
+records a bounded description without replacing the timeout. Previously
+captured snapshots do not change as draining continues.
+
+Keep stream tails and errors in bounded private diagnostics. They can contain
+command output and are not sanitized public receipts. A pending read does not
+identify a pipe holder or establish a runtime defect. EOF does not prove process
+absence, and a snapshot never completes output draining or authorizes a
+successful verification result. Retain the original failed receipt and collect
+independent process and descriptor evidence when diagnosing a timeout.
+
 ### Isolate and run the session
 
 This command path uses an empty task-owned config, a fresh socket directory, a

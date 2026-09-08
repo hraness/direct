@@ -280,7 +280,12 @@ export async function inspectPackageArtifact(
 
   const unpackedBytes = files.reduce((total, file) => total + file.size, 0);
   verifyBound("entry count", entries.length, packageBudget.entryCount);
-  verifyBound("file count", files.length, packageBudget.fileCount);
+  // Only this explicitly shipped private type dependency adds a file to the
+  // historical package budget. Other paths cannot consume an extra allowance.
+  const outputSourceCount = files.some((file) => file.path === "src/tooling/verification-output.ts") ? 1 : 0;
+  verifyBound("file count", files.length, {
+    min: packageBudget.fileCount.min, max: packageBudget.fileCount.max + outputSourceCount,
+  });
   verifyBound("unpacked byte count", unpackedBytes, packageBudget.unpackedBytes);
 
   console.log(`Reviewed package inventory (${String(files.length)} files):`);

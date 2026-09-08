@@ -105,6 +105,7 @@
     "src/tooling/browser-verification-entry.ts",
     "src/tooling/browser-layout-contract.ts",
     "src/tooling/browser-verification.ts",
+    "src/tooling/verification-output.ts",
     "src/tooling/bombadil-internal.d.ts",
     "src/tooling/bombadil-campaign.ts",
     "src/tooling/bombadil-named-snapshot.ts",

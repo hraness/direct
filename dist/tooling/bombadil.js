@@ -903,12 +903,161 @@ var SCENARIO_QUERY_KEY2 = "__direct_scenario";
 import { randomUUID } from "crypto";
 import { mkdir, rename, rm, writeFile } from "fs/promises";
 import { dirname, join } from "path";
+
+// src/tooling/verification-output.ts
+var VERIFICATION_OUTPUT_TAIL_LIMIT = 12000;
+var ERROR_DESCRIPTION_LIMIT = 1024;
+function tail(value, limit) {
+  return value.length <= limit ? value : value.slice(-limit);
+}
+function describeVerificationOutputFailure(reason) {
+  if (typeof reason === "string")
+    return tail(reason, ERROR_DESCRIPTION_LIMIT);
+  if (reason === null || typeof reason !== "object" && typeof reason !== "function") {
+    return tail(String(reason), ERROR_DESCRIPTION_LIMIT);
+  }
+  try {
+    const message = Object.getOwnPropertyDescriptor(reason, "message");
+    if (message !== undefined && "value" in message && typeof message.value === "string") {
+      return tail(message.value, ERROR_DESCRIPTION_LIMIT);
+    }
+  } catch {}
+  return "Output capture rejected with a non-text failure";
+}
+function captureVerificationOutput(stream, logLimit) {
+  let bytesRead = 0;
+  let chunksRead = 0;
+  let countersSaturated = false;
+  let retainedTail = "";
+  let state = "pending";
+  let inFlightRead = false;
+  let errorDescription = "";
+  const output = (async () => {
+    try {
+      const reader = stream.getReader();
+      const decoder = new TextDecoder;
+      let output2 = "";
+      for (;; ) {
+        inFlightRead = true;
+        const chunk = await reader.read();
+        inFlightRead = false;
+        if (chunk.done) {
+          const suffix = decoder.decode();
+          retainedTail = tail(`${retainedTail}${suffix}`, VERIFICATION_OUTPUT_TAIL_LIMIT);
+          state = "eof";
+          return tail(`${output2}${suffix}`, logLimit);
+        }
+        const nextBytes = bytesRead + chunk.value.byteLength;
+        const nextChunks = chunksRead + 1;
+        countersSaturated ||= nextBytes > Number.MAX_SAFE_INTEGER || nextChunks > Number.MAX_SAFE_INTEGER;
+        bytesRead = Math.min(nextBytes, Number.MAX_SAFE_INTEGER);
+        chunksRead = Math.min(nextChunks, Number.MAX_SAFE_INTEGER);
+        const text = decoder.decode(chunk.value, { stream: true });
+        output2 = tail(`${output2}${text}`, logLimit);
+        retainedTail = tail(`${retainedTail}${text}`, VERIFICATION_OUTPUT_TAIL_LIMIT);
+      }
+    } catch (error) {
+      inFlightRead = false;
+      state = "error";
+      errorDescription = describeVerificationOutputFailure(error);
+      throw error;
+    }
+  })();
+  return {
+    output,
+    snapshot: () => {
+      const counts = { bytesRead, chunksRead, countersSaturated, tail: retainedTail };
+      if (state === "error")
+        return Object.freeze({ ...counts, state, inFlightRead: false, error: errorDescription });
+      if (state === "eof")
+        return Object.freeze({ ...counts, state, inFlightRead: false });
+      return Object.freeze({ ...counts, state, inFlightRead });
+    }
+  };
+}
+function own(value, key) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid verification output snapshot object");
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (descriptor === undefined || !("value" in descriptor)) {
+    throw new Error("Invalid verification output snapshot field");
+  }
+  return descriptor.value;
+}
+function count(value) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error("Invalid verification output snapshot counter");
+  }
+  return value;
+}
+function copyStreamSnapshot(value) {
+  const bytesRead = count(own(value, "bytesRead"));
+  const chunksRead = count(own(value, "chunksRead"));
+  const countersSaturated = own(value, "countersSaturated");
+  const retainedTail = own(value, "tail");
+  const state = own(value, "state");
+  const inFlightRead = own(value, "inFlightRead");
+  if (typeof countersSaturated !== "boolean" || typeof retainedTail !== "string" || retainedTail.length > VERIFICATION_OUTPUT_TAIL_LIMIT || typeof inFlightRead !== "boolean") {
+    throw new Error("Invalid verification output snapshot bounds");
+  }
+  const counts = { bytesRead, chunksRead, countersSaturated, tail: retainedTail };
+  if (state === "pending")
+    return Object.freeze({ ...counts, state, inFlightRead });
+  if (inFlightRead)
+    throw new Error("Terminal verification output snapshot has a pending read");
+  if (state === "eof")
+    return Object.freeze({ ...counts, state, inFlightRead: false });
+  if (state === "error") {
+    const error = own(value, "error");
+    if (typeof error !== "string" || error.length > ERROR_DESCRIPTION_LIMIT) {
+      throw new Error("Invalid verification output snapshot error");
+    }
+    return Object.freeze({ ...counts, state, inFlightRead: false, error });
+  }
+  throw new Error("Invalid verification output snapshot state");
+}
+function copyVerificationOutputSnapshot(value) {
+  if (own(value, "schema") !== "direct.verification-output/v1") {
+    throw new Error("Invalid verification output snapshot schema");
+  }
+  return Object.freeze({
+    schema: "direct.verification-output/v1",
+    stdout: copyStreamSnapshot(own(value, "stdout")),
+    stderr: copyStreamSnapshot(own(value, "stderr"))
+  });
+}
+
+// src/tooling/browser-verification.ts
 var DEFAULT_LOG_LIMIT = 12000;
 var DEFAULT_PROBE_TIMEOUT_MS = 1500;
 var DEFAULT_REUSE_PROBE_INTERVAL_MS = 250;
 var DEFAULT_STOP_TIMEOUT_MS = 3000;
 var MAX_RENDERED_ERROR_LENGTH = 4096;
 var MAX_ERROR_CAUSE_DEPTH = 8;
+class VerificationServerOutputTimeoutError extends Error {
+  outputSnapshot;
+  outputSnapshotFailure;
+  constructor(stopTimeoutMs, server) {
+    super(`verification server output did not settle within ${stopTimeoutMs}ms after exit`);
+    this.name = "VerificationServerOutputTimeoutError";
+    let snapshot;
+    let snapshotFailure;
+    try {
+      const current = server.outputSnapshot?.();
+      if (current !== undefined)
+        snapshot = copyVerificationOutputSnapshot(current);
+    } catch (error) {
+      snapshotFailure = describeVerificationOutputFailure(error);
+    }
+    this.outputSnapshot = snapshot;
+    this.outputSnapshotFailure = snapshotFailure;
+    Object.defineProperties(this, {
+      outputSnapshot: { writable: false, configurable: false },
+      outputSnapshotFailure: { writable: false, configurable: false }
+    });
+  }
+}
 function truncateRenderedError(value) {
   if (value.length <= MAX_RENDERED_ERROR_LENGTH)
     return value;
@@ -953,7 +1102,7 @@ function renderUnknownAtDepth(value, seen, depth) {
 function renderUnknown(value) {
   return renderUnknownAtDepth(value, new WeakSet, 0);
 }
-function tail(value, maximumLength = DEFAULT_LOG_LIMIT) {
+function tail2(value, maximumLength = DEFAULT_LOG_LIMIT) {
   return value.length <= maximumLength ? value : value.slice(-maximumLength);
 }
 function normalizeRootHttpOrigin(input) {
@@ -977,17 +1126,6 @@ function normalizeRootHttpOrigin(input) {
 function canAutomaticallyStartLocalServer(baseUrl, localHosts = new Set(["127.0.0.1", "localhost"])) {
   const url = new URL(normalizeRootHttpOrigin(baseUrl));
   return url.protocol === "http:" && localHosts.has(url.hostname);
-}
-async function collectStream(stream, logLimit) {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder;
-  let output = "";
-  for (;; ) {
-    const chunk = await reader.read();
-    if (chunk.done)
-      return tail(`${output}${decoder.decode()}`, logLimit);
-    output = tail(`${output}${decoder.decode(chunk.value, { stream: true })}`, logLimit);
-  }
 }
 function verificationProcessGroupExists(processId) {
   try {
@@ -1023,11 +1161,13 @@ function spawnVerificationServer(options) {
     stderr: "pipe"
   });
   const logLimit = options.logLimit ?? DEFAULT_LOG_LIMIT;
+  const stdout = captureVerificationOutput(process_.stdout, logLimit);
+  const stderr = captureVerificationOutput(process_.stderr, logLimit);
   const output = Promise.all([
-    collectStream(process_.stdout, logLimit),
-    collectStream(process_.stderr, logLimit)
-  ]).then(([stdout, stderr]) => tail(`${stdout}
-${stderr}`.trim(), logLimit));
+    stdout.output,
+    stderr.output
+  ]).then(([stdout2, stderr2]) => tail2(`${stdout2}
+${stderr2}`.trim(), logLimit));
   const signal = (value) => {
     if (detachedProcessGroup) {
       try {
@@ -1051,6 +1191,11 @@ ${stderr}`.trim(), logLimit));
       }
     } : {},
     output,
+    outputSnapshot: () => Object.freeze({
+      schema: "direct.verification-output/v1",
+      stdout: stdout.snapshot(),
+      stderr: stderr.snapshot()
+    }),
     terminate: () => signal("SIGTERM"),
     kill: () => signal("SIGKILL")
   };
@@ -1095,7 +1240,7 @@ async function stopVerificationServerWithOutput(server, stopTimeoutMs = DEFAULT_
   await server.killDescendants?.(stopTimeoutMs);
   const output = await settleWithin(server.output, stopTimeoutMs);
   if (!output.settled) {
-    throw new Error(`verification server output did not settle within ${stopTimeoutMs}ms after exit`);
+    throw new VerificationServerOutputTimeoutError(stopTimeoutMs, server);
   }
   return output.value;
 }
@@ -1171,12 +1316,12 @@ async function acquireVerificationServer(options) {
     throw error;
   }
   if (exitedWithCode !== null) {
-    const output2 = tail(await stopVerificationServerWithOutput(server));
+    const output2 = tail2(await stopVerificationServerWithOutput(server));
     throw new Error(`${options.label} exited with ${exitedWithCode}:
 ${output2}`);
   }
   const timeoutMessage = `${options.label} did not become reachable at ${new URL(readinessPath, `${options.baseUrl}/`).href} within ${options.startupTimeoutMs}ms`;
-  const output = tail(await stopVerificationServerWithOutput(server));
+  const output = tail2(await stopVerificationServerWithOutput(server));
   throw new Error(output === "" ? timeoutMessage : `${timeoutMessage}:
 ${output}`);
 }
@@ -4441,13 +4586,13 @@ function captureStream(stream, maximumLength = LOG_LIMIT) {
         reader.cancel().catch(() => {
           return;
         });
-        return tail(`${output}${decoder.decode()}`, maximumLength);
+        return tail2(`${output}${decoder.decode()}`, maximumLength);
       }
       if (next.kind === "error")
         throw next.error;
       if (next.chunk.done)
-        return tail(`${output}${decoder.decode()}`, maximumLength);
-      output = tail(`${output}${decoder.decode(next.chunk.value, { stream: true })}`, maximumLength);
+        return tail2(`${output}${decoder.decode()}`, maximumLength);
+      output = tail2(`${output}${decoder.decode(next.chunk.value, { stream: true })}`, maximumLength);
     }
   })();
   return { result, stop: stopCapture };
@@ -4777,7 +4922,7 @@ async function readServerOutputBounded(server, timeoutMs) {
     if (outcome.kind === "error") {
       throw outcome.error instanceof Error ? outcome.error : new Error(renderUnknown(outcome.error));
     }
-    return tail(outcome.output, LOG_LIMIT);
+    return tail2(outcome.output, LOG_LIMIT);
   } finally {
     if (timeout !== undefined)
       clearTimeout(timeout);

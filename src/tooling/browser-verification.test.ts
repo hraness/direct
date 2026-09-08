@@ -1,3 +1,5 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -10,7 +12,8 @@ import {
   parseDirectSessionManifest,
 } from "@hraness/direct/testing";
 import { DIRECT_BROWSER_BRIDGE_SCHEMA } from "@hraness/direct/web";
-import { assertProperty, fc } from "../core/test-support.js";
+import { assertAsyncProperty, assertProperty, fc } from "../core/test-support.js";
+import { captureVerificationOutput, VERIFICATION_OUTPUT_TAIL_LIMIT } from "./verification-output.js";
 
 import {
   acquireVerificationServer,
@@ -37,7 +40,9 @@ import {
   stopVerificationServer,
   tail,
   writeJsonAtomically,
+  VerificationServerOutputTimeoutError,
   type ManagedVerificationServer,
+  type VerificationOutputSnapshot,
 } from "./browser-verification.js";
 
 const temporaryDirectories: string[] = [];
@@ -145,6 +150,182 @@ function fakeServer(options: { readonly exitCode?: number | null } = {}): {
     },
   };
 }
+
+function controlledOutput(logLimit = 12_000) {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({ start(value) { controller = value; } });
+  return { controller, capture: captureVerificationOutput(stream, logLimit) };
+}
+
+async function withinPipeFixture<Value>(operation: Promise<Value>, label: string): Promise<Value> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([operation, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Inherited-pipe fixture ${label} exceeded 2000ms`)), 2_000);
+    })]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+describe("verification output diagnostics", () => {
+  test("decodes split UTF-8 and observes EOF without changing the original log limit", async () => {
+    const { controller, capture } = controlledOutput(4);
+    const bytes = new TextEncoder().encode("a€🙂z");
+    const initial = capture.snapshot();
+    expect(initial.state).toBe("pending");
+    expect(initial.inFlightRead).toBeTrue();
+    for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
+    controller.close();
+    expect(await capture.output).toBe("€🙂z");
+    expect(capture.snapshot()).toEqual({ state: "eof", inFlightRead: false,
+      bytesRead: bytes.length, chunksRead: bytes.length, countersSaturated: false, tail: "a€🙂z" });
+    expect(initial).toEqual({ state: "pending", inFlightRead: true,
+      bytesRead: 0, chunksRead: 0, countersSaturated: false, tail: "" });
+  });
+
+  test("snapshots remain detached, frozen and bounded while the stream keeps draining", async () => {
+    const { controller, capture } = controlledOutput(3);
+    controller.enqueue(new TextEncoder().encode("first"));
+    await Promise.resolve();
+    const first = capture.snapshot();
+    expect(first.tail).toBe("first");
+    expect(first.state).toBe("pending");
+    expect(first.inFlightRead).toBeTrue();
+    expect(Object.isFrozen(first)).toBeTrue();
+    expect(Reflect.set(first, "tail", "replacement")).toBeFalse();
+    controller.enqueue(new TextEncoder().encode("€".repeat(VERIFICATION_OUTPUT_TAIL_LIMIT + 20)));
+    controller.close();
+    expect(await capture.output).toBe("€€€");
+    const terminal = capture.snapshot();
+    expect(terminal.tail).toHaveLength(VERIFICATION_OUTPUT_TAIL_LIMIT);
+    expect(terminal.bytesRead).toBe(5 + 3 * (VERIFICATION_OUTPUT_TAIL_LIMIT + 20));
+    expect(terminal.chunksRead).toBe(2);
+    expect(terminal.state).toBe("eof");
+    expect(first.tail).toBe("first");
+  });
+
+  test("keeps a truncated final UTF-8 sequence in the EOF tail", async () => {
+    const { controller, capture } = controlledOutput();
+    controller.enqueue(Uint8Array.of(0xe2, 0x82));
+    controller.close();
+    expect(await capture.output).toBe("�");
+    expect(capture.snapshot()).toEqual({ state: "eof", inFlightRead: false,
+      bytesRead: 2, chunksRead: 1, countersSaturated: false, tail: "�" });
+  });
+
+  test("retains the first stream rejection and a bounded error snapshot", async () => {
+    const { controller, capture } = controlledOutput();
+    controller.enqueue(new TextEncoder().encode("before failure"));
+    await Promise.resolve();
+    const original = new Error("failure".repeat(1_000));
+    const failed = capture.output.then(() => { throw new Error("Expected rejected capture"); }, (error: unknown) => error);
+    controller.error(original);
+    expect(await failed).toBe(original);
+    const snapshot = capture.snapshot();
+    expect(snapshot.state).toBe("error");
+    expect(snapshot.inFlightRead).toBeFalse();
+    expect(snapshot.tail).toBe("before failure");
+    if (snapshot.state !== "error") throw new Error("Expected a terminal stream error");
+    expect(snapshot.error).toHaveLength(1_024);
+    expect(Object.isFrozen(snapshot)).toBeTrue();
+  });
+
+  test("foreign rejection diagnostics never invoke error getters or replace undefined rejection", async () => {
+    let getterReads = 0;
+    for (const original of [undefined, Object.defineProperty({}, "message", {
+      get() { getterReads += 1; throw new Error("Do not inspect this getter"); },
+    })]) {
+      const { controller, capture } = controlledOutput();
+      const failed = capture.output.then(() => ({ accepted: true }), (error: unknown) => ({ accepted: false, error }));
+      controller.error(original);
+      assert.deepEqual(await failed, { accepted: false, error: original });
+      expect(capture.snapshot().state).toBe("error");
+    }
+    expect(getterReads).toBe(0);
+  });
+
+  test("arbitrary chunk boundaries preserve decoded output and finite counters", async () => {
+    await assertAsyncProperty(fc.asyncProperty(fc.uint8Array({ maxLength: 256 }),
+      fc.integer({ min: 1, max: 32 }), fc.integer({ min: 0, max: 64 }), async (bytes, width, limit) => {
+        const { controller, capture } = controlledOutput(limit);
+        for (let offset = 0; offset < bytes.length; offset += width) controller.enqueue(bytes.slice(offset, offset + width));
+        controller.close();
+        const decoded = new TextDecoder().decode(bytes);
+        expect(await capture.output).toBe(tail(decoded, limit));
+        const snapshot = capture.snapshot();
+        expect(snapshot.tail).toBe(decoded);
+        expect(snapshot.bytesRead).toBe(bytes.length);
+        expect(snapshot.chunksRead).toBe(Math.ceil(bytes.length / width));
+        expect(snapshot.countersSaturated).toBeFalse();
+        expect(snapshot.state).toBe("eof");
+      }));
+  });
+
+  test("timeout errors preserve the original message and copy immutable bounded snapshots", () => {
+    const stream = { state: "pending" as const, inFlightRead: true,
+      bytesRead: 3, chunksRead: 1, countersSaturated: false, tail: "old" };
+    const snapshot = { schema: "direct.verification-output/v1" as const, stdout: { ...stream }, stderr: { ...stream } };
+    const failure = new VerificationServerOutputTimeoutError(500, { outputSnapshot: () => snapshot });
+    expect(failure.message).toBe("verification server output did not settle within 500ms after exit");
+    expect(failure.name).toBe("VerificationServerOutputTimeoutError");
+    expect(failure.outputSnapshot).toEqual(snapshot);
+    snapshot.stdout.tail = "changed";
+    expect(failure.outputSnapshot?.stdout.tail).toBe("old");
+    expect(Object.isFrozen(failure.outputSnapshot)).toBeTrue();
+    expect(Object.isFrozen(failure.outputSnapshot?.stdout)).toBeTrue();
+    expect(Reflect.set(failure, "outputSnapshot", undefined)).toBeFalse();
+    expect(failure.outputSnapshotFailure).toBeUndefined();
+  });
+
+  test("a timeout snapshot does not cancel draining or change when late output reaches EOF", async () => {
+    const { controller, capture } = controlledOutput();
+    const failure = new VerificationServerOutputTimeoutError(5, {
+      outputSnapshot: () => ({ schema: "direct.verification-output/v1",
+        stdout: capture.snapshot(), stderr: capture.snapshot() }),
+    });
+    controller.enqueue(new TextEncoder().encode("late output"));
+    controller.close();
+    expect(await capture.output).toBe("late output");
+    expect(capture.snapshot().state).toBe("eof");
+    expect(failure.outputSnapshot?.stdout.state).toBe("pending");
+    expect(failure.outputSnapshot?.stdout.bytesRead).toBe(0);
+    expect(failure.outputSnapshot?.stdout.tail).toBe("");
+  });
+
+  test("snapshot absence, rejection and invalid data never replace an output timeout", () => {
+    const missing = new VerificationServerOutputTimeoutError(5, {});
+    expect(missing.outputSnapshot).toBeUndefined();
+    expect(missing.outputSnapshotFailure).toBeUndefined();
+    for (const outputSnapshot of [() => { throw new Error("snapshot failed"); },
+      () => ({ schema: "wrong" }) as unknown as VerificationOutputSnapshot]) {
+      const failure = new VerificationServerOutputTimeoutError(5, { outputSnapshot });
+      expect(failure).toBeInstanceOf(VerificationServerOutputTimeoutError);
+      expect(failure.message).toBe("verification server output did not settle within 5ms after exit");
+      expect(failure.outputSnapshot).toBeUndefined();
+      expect(typeof failure.outputSnapshotFailure).toBe("string");
+    }
+  });
+
+  test("timeout snapshots reject excessive tails, counters and contradictory terminal states", () => {
+    const stream = { state: "pending", inFlightRead: true,
+      bytesRead: 3, chunksRead: 1, countersSaturated: false, tail: "old" };
+    for (const patch of [
+      { tail: "x".repeat(VERIFICATION_OUTPUT_TAIL_LIMIT + 1) },
+      { bytesRead: Number.POSITIVE_INFINITY }, { chunksRead: -1 },
+      { state: "eof", inFlightRead: true },
+      { state: "error", inFlightRead: false, error: "x".repeat(1_025) },
+    ]) {
+      const snapshot = { schema: "direct.verification-output/v1", stdout: { ...stream, ...patch }, stderr: stream };
+      const failure = new VerificationServerOutputTimeoutError(5, {
+        outputSnapshot: () => snapshot as VerificationOutputSnapshot,
+      });
+      expect(failure.message).toBe("verification server output did not settle within 5ms after exit");
+      expect(failure.outputSnapshot).toBeUndefined();
+      expect(typeof failure.outputSnapshotFailure).toBe("string");
+    }
+  });
+});
 
 async function rejection(promise: Promise<unknown>): Promise<Error> {
   try {
@@ -635,6 +816,143 @@ describe("Direct browser contract binding", () => {
 });
 
 describe("server leases", () => {
+  for (const arm of [
+    { name: "stdout", stdout: true, stderr: false },
+    { name: "stderr", stdout: false, stderr: true },
+    { name: "both", stdout: true, stderr: true },
+    { name: "neither", stdout: false, stderr: false },
+  ] as const) {
+    test(`collects real descendant pipes (${arm.name}) after an admitted leader exit`, async () => {
+      // Register for deletion only after complete proof. Failures retain the
+      // scripts, handshake, identities and stream snapshots for diagnosis.
+      const directory = await mkdtemp(join(tmpdir(), "direct-inherited-pipes-"));
+      const nonce = randomUUID();
+      const childReady = join(directory, "child-ready.json");
+      const leaderReady = join(directory, "leader-ready.json");
+      const releaseLeader = join(directory, "release-leader");
+      const childExpired = join(directory, "child-expired");
+      const childPath = join(directory, "child.cjs");
+      const leaderPath = join(directory, "leader.cjs");
+      const markers = { stdout: "owned stdout €🙂\n", stderr: "owned stderr €🙂\n" };
+      await writeFile(childPath, [
+        "const fs = require('node:fs');",
+        "process.on('SIGTERM', () => {});",
+        `setTimeout(() => { fs.writeFileSync(${JSON.stringify(childExpired)}, 'expired', { flag: 'wx' }); process.exit(72); }, 15000);`,
+        ...(arm.stdout ? [`fs.writeSync(1, ${JSON.stringify(markers.stdout)});`] : []),
+        ...(arm.stderr ? [`fs.writeSync(2, ${JSON.stringify(markers.stderr)});`] : []),
+        `fs.writeFileSync(${JSON.stringify(`${childReady}.pending`)}, JSON.stringify({ nonce: ${JSON.stringify(nonce)}, pid: process.pid, parent: process.ppid }), { flag: 'wx' });`,
+        `fs.renameSync(${JSON.stringify(`${childReady}.pending`)}, ${JSON.stringify(childReady)});`,
+      ].join("\n"), { flag: "wx" });
+      await writeFile(leaderPath, [
+        "const fs = require('node:fs');",
+        "const { spawn } = require('node:child_process');",
+        "setTimeout(() => process.exit(71), 15000);",
+        `const child = spawn(process.execPath, [${JSON.stringify(childPath)}], { stdio: ['ignore', ${JSON.stringify(arm.stdout ? "inherit" : "ignore")}, ${JSON.stringify(arm.stderr ? "inherit" : "ignore")}] });`,
+        "child.unref();",
+        // Close the leader's public descriptors now. Observable EOF is proved
+        // only after leader exit; a live runtime may retain stream state.
+        "fs.closeSync(1); fs.closeSync(2);",
+        "(async () => {",
+        `while (!fs.existsSync(${JSON.stringify(childReady)})) await Bun.sleep(10);`,
+        `const ready = JSON.parse(fs.readFileSync(${JSON.stringify(childReady)}, 'utf8'));`,
+        `if (ready.nonce !== ${JSON.stringify(nonce)} || ready.pid !== child.pid || ready.parent !== process.pid) process.exit(73);`,
+        `fs.writeFileSync(${JSON.stringify(`${leaderReady}.pending`)}, JSON.stringify({ nonce: ${JSON.stringify(nonce)}, leader: process.pid, child: child.pid }), { flag: 'wx' });`,
+        `fs.renameSync(${JSON.stringify(`${leaderReady}.pending`)}, ${JSON.stringify(leaderReady)});`,
+        `while (!fs.existsSync(${JSON.stringify(releaseLeader)}) || fs.readFileSync(${JSON.stringify(releaseLeader)}, 'utf8') !== ${JSON.stringify(nonce)}) await Bun.sleep(10);`,
+        "process.exit(0);",
+        "})().catch(() => process.exit(74));",
+      ].join("\n"), { flag: "wx" });
+
+      const waitForState = async (condition: () => boolean | Promise<boolean>, label: string): Promise<void> => {
+        const deadline = performance.now() + 2_000;
+        for (;;) {
+          const satisfied = await condition();
+          if (performance.now() >= deadline) throw new Error(`Inherited-pipe fixture ${label} exceeded 2000ms`);
+          if (satisfied) return;
+          await Bun.sleep(10);
+        }
+      };
+      let server: ManagedVerificationServer | undefined;
+      let identities: { leader: number; child: number } | undefined;
+      let failureOutput: VerificationOutputSnapshot | undefined;
+      let failureExitCode: number | null | undefined;
+      let collected = false;
+      const failures: unknown[] = [];
+      try {
+        server = spawnVerificationServer({ command: [process.execPath, leaderPath], cwd: directory, detachedProcessGroup: true });
+        await waitForState(() => Bun.file(leaderReady).exists(), "ready handshake");
+        const ready: unknown = JSON.parse(await readFile(leaderReady, "utf8"));
+        assert.ok(ready !== null && typeof ready === "object");
+        assert.ok("nonce" in ready && ready.nonce === nonce);
+        assert.ok("leader" in ready && typeof ready.leader === "number" && Number.isSafeInteger(ready.leader) && ready.leader > 1);
+        assert.ok("child" in ready && typeof ready.child === "number" && Number.isSafeInteger(ready.child) && ready.child > 1);
+        assert.notEqual(ready.leader, ready.child);
+        identities = { leader: ready.leader, child: ready.child };
+        const snapshot = server.outputSnapshot;
+        assert.ok(snapshot !== undefined);
+        await waitForState(() => {
+          const current = snapshot();
+          return (["stdout", "stderr"] as const).every((name) => arm[name]
+            ? current[name].state === "pending" && current[name].inFlightRead && current[name].tail === markers[name]
+            : current[name].state !== "error" && current[name].bytesRead === 0 && current[name].tail === "");
+        }, "pre-exit pipe state");
+        expect(server.exitCode()).toBeNull();
+        expect(process.kill(identities.leader, 0)).toBeTrue();
+        expect(process.kill(identities.child, 0)).toBeTrue();
+        const beforeExit = snapshot();
+        const beforeExitJson = JSON.stringify(beforeExit);
+        for (const name of ["stdout", "stderr"] as const) {
+          expect(beforeExit[name].bytesRead).toBe(arm[name] ? Buffer.byteLength(markers[name]) : 0);
+          expect(beforeExit[name].countersSaturated).toBeFalse();
+        }
+        await writeFile(releaseLeader, nonce, { flag: "wx" });
+        await waitForState(() => server?.exitCode() !== null, "leader exit");
+        await withinPipeFixture(server.exited, "leader exit settlement");
+        expect(server.exitCode()).toBe(0);
+        await waitForState(() => {
+          const current = snapshot();
+          return (["stdout", "stderr"] as const).every((name) => arm[name]
+            ? current[name].state === "pending" && current[name].inFlightRead && current[name].tail === markers[name]
+            : current[name].state === "eof" && current[name].bytesRead === 0 && current[name].tail === "");
+        }, "post-exit pipe state");
+        expect(process.kill(identities.child, 0)).toBeTrue();
+        for (const name of ["stdout", "stderr"] as const) {
+          expect(snapshot()[name].state).toBe(arm[name] ? "pending" : "eof");
+        }
+        await stopVerificationServer(server, 2_000);
+        collected = true;
+        await waitForMissingProcess(identities.child);
+        await waitForMissingProcess(-identities.leader);
+        const afterStop = snapshot();
+        expect(afterStop.stdout.state).toBe("eof");
+        expect(afterStop.stderr.state).toBe("eof");
+        expect(afterStop.stdout.inFlightRead).toBeFalse();
+        expect(afterStop.stderr.inFlightRead).toBeFalse();
+        expect(await server.output).toBe(`${arm.stdout ? markers.stdout : ""}\n${arm.stderr ? markers.stderr : ""}`.trim());
+        expect(await Bun.file(childExpired).exists()).toBeFalse();
+        expect(JSON.stringify(beforeExit)).toBe(beforeExitJson);
+      } catch (error: unknown) {
+        failureOutput = server?.outputSnapshot?.();
+        failureExitCode = server?.exitCode();
+        failures.push(error);
+      } finally {
+        if (server !== undefined && !collected) {
+          try { await stopVerificationServer(server, 2_000); collected = true; }
+          catch (error: unknown) { failures.push(error); }
+        }
+      }
+      if (failures.length > 0) {
+        try {
+          await writeFile(join(directory, "failure.json"), `${JSON.stringify({ accepted: false, arm: arm.name,
+            identities, collected, failureExitCode, failureOutput,
+            output: server?.outputSnapshot?.(), failures: failures.map(renderUnknown) }, null, 2)}\n`, { flag: "wx" });
+        } catch (error: unknown) { failures.push(error); }
+        throw new AggregateError(failures, `Inherited-pipe fixture evidence preserved at ${directory}`);
+      }
+      temporaryDirectories.push(directory);
+    }, 20_000);
+  }
+
   test("omits coordination secrets from managed server environments", async () => {
     const directory = await mkdtemp(join(tmpdir(), "direct-server-environment-"));
     temporaryDirectories.push(directory);
@@ -1020,7 +1338,25 @@ describe("server leases", () => {
 
     const failure = await rejection(stopVerificationServer(server, 1));
 
+    expect(failure).toBeInstanceOf(VerificationServerOutputTimeoutError);
     expect(failure.message).toBe("verification server output did not settle within 1ms after exit");
+  }, 1_000);
+
+  test("a throwing diagnostic callback cannot replace the stop operation's EOF timeout", async () => {
+    const server: ManagedVerificationServer = {
+      exited: Promise.resolve(),
+      exitCode: () => 0,
+      output: new Promise<never>(() => undefined),
+      outputSnapshot: () => { throw new Error("snapshot unavailable"); },
+      terminate: () => { throw new Error("An exited server must not receive SIGTERM"); },
+      kill: () => { throw new Error("An exited server must not receive SIGKILL"); },
+    };
+    const failure = await rejection(stopVerificationServer(server, 1));
+    expect(failure).toBeInstanceOf(VerificationServerOutputTimeoutError);
+    expect(failure.message).toBe("verification server output did not settle within 1ms after exit");
+    if (!(failure instanceof VerificationServerOutputTimeoutError)) throw new Error("Expected an output timeout");
+    expect(failure.outputSnapshot).toBeUndefined();
+    expect(failure.outputSnapshotFailure).toBe("snapshot unavailable");
   }, 1_000);
 
   test("reports the bounded server tail once after timeout cleanup completes", async () => {
