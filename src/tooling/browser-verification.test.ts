@@ -168,6 +168,72 @@ async function withinPipeFixture<Value>(operation: Promise<Value>, label: string
   }
 }
 
+// These programs contain no runtime data. Configuration crosses only argv;
+// nonce-bearing files and marker output remain ordinary data, never source.
+const inheritedPipePrelude = String.raw`
+const fs = require('node:fs');
+const { join } = require('node:path');
+const argument = process.argv[2];
+if (process.argv.length !== 3 || typeof argument !== 'string' || argument.length > 1024) {
+  throw new Error('Invalid inherited-pipe fixture arguments');
+}
+const config = JSON.parse(argument);
+if (config === null || typeof config !== 'object' || Array.isArray(config)
+  || Object.keys(config).sort().join(',') !== 'nonce,stderr,stdout'
+  || typeof config.nonce !== 'string'
+  || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(config.nonce)
+  || typeof config.stdout !== 'boolean' || typeof config.stderr !== 'boolean') {
+  throw new Error('Invalid inherited-pipe fixture configuration');
+}
+const childReady = join(__dirname, 'child-ready.json');
+`;
+const inheritedPipeChildProgram = inheritedPipePrelude + String.raw`
+process.on('SIGTERM', () => {});
+setTimeout(() => {
+  fs.writeFileSync(join(__dirname, 'child-expired'), 'expired', { flag: 'wx' });
+  process.exit(72);
+}, 15000);
+if (config.stdout) fs.writeSync(1, 'owned stdout €🙂\n');
+if (config.stderr) fs.writeSync(2, 'owned stderr €🙂\n');
+fs.writeFileSync(childReady + '.pending', JSON.stringify({ nonce: config.nonce, pid: process.pid, parent: process.ppid }), { flag: 'wx' });
+fs.renameSync(childReady + '.pending', childReady);
+`;
+const inheritedPipeLeaderProgram = inheritedPipePrelude + String.raw`
+const { spawn } = require('node:child_process');
+const leaderReady = join(__dirname, 'leader-ready.json');
+const releaseLeader = join(__dirname, 'release-leader');
+setTimeout(() => process.exit(71), 15000);
+const child = spawn(process.execPath, [join(__dirname, 'child.cjs'), argument], {
+  stdio: ['ignore', config.stdout ? 'inherit' : 'ignore', config.stderr ? 'inherit' : 'ignore'],
+});
+child.unref();
+// A live runtime may retain stream state. EOF is proved after leader exit.
+fs.closeSync(1); fs.closeSync(2);
+(async () => {
+  while (!fs.existsSync(childReady)) await Bun.sleep(10);
+  const ready = JSON.parse(fs.readFileSync(childReady, 'utf8'));
+  if (ready.nonce !== config.nonce || ready.pid !== child.pid || ready.parent !== process.pid) process.exit(73);
+  fs.writeFileSync(leaderReady + '.pending', JSON.stringify({ nonce: config.nonce, leader: process.pid, child: child.pid }), { flag: 'wx' });
+  fs.renameSync(leaderReady + '.pending', leaderReady);
+  while (!fs.existsSync(releaseLeader) || fs.readFileSync(releaseLeader, 'utf8') !== config.nonce) await Bun.sleep(10);
+  process.exit(0);
+})().catch(() => process.exit(74));
+`;
+const detachedDescendantProgram = String.raw`
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+const childPidPath = process.argv.at(-1);
+if (typeof childPidPath !== 'string' || childPidPath.length > 4096
+  || !path.isAbsolute(childPidPath) || path.basename(childPidPath) !== 'child.pid'
+  || fs.realpathSync(path.dirname(childPidPath)) !== fs.realpathSync(process.cwd())) {
+  throw new Error('Invalid descendant fixture PID path');
+}
+const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 5000); setInterval(() => {}, 1000);"], { stdio: 'ignore' });
+child.unref();
+fs.writeFileSync(childPidPath, String(child.pid));
+`;
+
 describe("verification output diagnostics", () => {
   test("decodes split UTF-8 and observes EOF without changing the original log limit", async () => {
     const { controller, capture } = controlledOutput(4);
@@ -827,41 +893,15 @@ describe("server leases", () => {
       // scripts, handshake, identities and stream snapshots for diagnosis.
       const directory = await mkdtemp(join(tmpdir(), "direct-inherited-pipes-"));
       const nonce = randomUUID();
-      const childReady = join(directory, "child-ready.json");
       const leaderReady = join(directory, "leader-ready.json");
       const releaseLeader = join(directory, "release-leader");
       const childExpired = join(directory, "child-expired");
       const childPath = join(directory, "child.cjs");
       const leaderPath = join(directory, "leader.cjs");
       const markers = { stdout: "owned stdout €🙂\n", stderr: "owned stderr €🙂\n" };
-      await writeFile(childPath, [
-        "const fs = require('node:fs');",
-        "process.on('SIGTERM', () => {});",
-        `setTimeout(() => { fs.writeFileSync(${JSON.stringify(childExpired)}, 'expired', { flag: 'wx' }); process.exit(72); }, 15000);`,
-        ...(arm.stdout ? [`fs.writeSync(1, ${JSON.stringify(markers.stdout)});`] : []),
-        ...(arm.stderr ? [`fs.writeSync(2, ${JSON.stringify(markers.stderr)});`] : []),
-        `fs.writeFileSync(${JSON.stringify(`${childReady}.pending`)}, JSON.stringify({ nonce: ${JSON.stringify(nonce)}, pid: process.pid, parent: process.ppid }), { flag: 'wx' });`,
-        `fs.renameSync(${JSON.stringify(`${childReady}.pending`)}, ${JSON.stringify(childReady)});`,
-      ].join("\n"), { flag: "wx" });
-      await writeFile(leaderPath, [
-        "const fs = require('node:fs');",
-        "const { spawn } = require('node:child_process');",
-        "setTimeout(() => process.exit(71), 15000);",
-        `const child = spawn(process.execPath, [${JSON.stringify(childPath)}], { stdio: ['ignore', ${JSON.stringify(arm.stdout ? "inherit" : "ignore")}, ${JSON.stringify(arm.stderr ? "inherit" : "ignore")}] });`,
-        "child.unref();",
-        // Close the leader's public descriptors now. Observable EOF is proved
-        // only after leader exit; a live runtime may retain stream state.
-        "fs.closeSync(1); fs.closeSync(2);",
-        "(async () => {",
-        `while (!fs.existsSync(${JSON.stringify(childReady)})) await Bun.sleep(10);`,
-        `const ready = JSON.parse(fs.readFileSync(${JSON.stringify(childReady)}, 'utf8'));`,
-        `if (ready.nonce !== ${JSON.stringify(nonce)} || ready.pid !== child.pid || ready.parent !== process.pid) process.exit(73);`,
-        `fs.writeFileSync(${JSON.stringify(`${leaderReady}.pending`)}, JSON.stringify({ nonce: ${JSON.stringify(nonce)}, leader: process.pid, child: child.pid }), { flag: 'wx' });`,
-        `fs.renameSync(${JSON.stringify(`${leaderReady}.pending`)}, ${JSON.stringify(leaderReady)});`,
-        `while (!fs.existsSync(${JSON.stringify(releaseLeader)}) || fs.readFileSync(${JSON.stringify(releaseLeader)}, 'utf8') !== ${JSON.stringify(nonce)}) await Bun.sleep(10);`,
-        "process.exit(0);",
-        "})().catch(() => process.exit(74));",
-      ].join("\n"), { flag: "wx" });
+      await writeFile(childPath, inheritedPipeChildProgram, { flag: "wx" });
+      await writeFile(leaderPath, inheritedPipeLeaderProgram, { flag: "wx" });
+      const configuration = JSON.stringify({ nonce, stdout: arm.stdout, stderr: arm.stderr });
 
       const waitForState = async (condition: () => boolean | Promise<boolean>, label: string): Promise<void> => {
         const deadline = performance.now() + 2_000;
@@ -879,7 +919,7 @@ describe("server leases", () => {
       let collected = false;
       const failures: unknown[] = [];
       try {
-        server = spawnVerificationServer({ command: [process.execPath, leaderPath], cwd: directory, detachedProcessGroup: true });
+        server = spawnVerificationServer({ command: [process.execPath, leaderPath, configuration], cwd: directory, detachedProcessGroup: true });
         await waitForState(() => Bun.file(leaderReady).exists(), "ready handshake");
         const ready: unknown = JSON.parse(await readFile(leaderReady, "utf8"));
         assert.ok(ready !== null && typeof ready === "object");
@@ -974,15 +1014,8 @@ describe("server leases", () => {
     const directory = await mkdtemp(join(tmpdir(), "direct-server-process-group-"));
     temporaryDirectories.push(directory);
     const childPidPath = join(directory, "child.pid");
-    const source = [
-      "const { spawn } = require('node:child_process');",
-      "const fs = require('node:fs');",
-      "const child = spawn(process.execPath, ['-e', `process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 5000); setInterval(() => {}, 1000);`], { stdio: 'ignore' });",
-      "child.unref();",
-      `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
-    ].join(" ");
     const server = spawnVerificationServer({
-      command: [process.execPath, "-e", source],
+      command: [process.execPath, "-e", detachedDescendantProgram, childPidPath],
       cwd: directory,
       detachedProcessGroup: true,
     });
@@ -1037,15 +1070,8 @@ describe("server leases", () => {
     const directory = await mkdtemp(join(tmpdir(), "direct-server-process-group-eperm-"));
     temporaryDirectories.push(directory);
     const childPidPath = join(directory, "child.pid");
-    const source = [
-      "const { spawn } = require('node:child_process');",
-      "const fs = require('node:fs');",
-      "const child = spawn(process.execPath, ['-e', `process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 5000); setInterval(() => {}, 1000);`], { stdio: 'ignore' });",
-      "child.unref();",
-      `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
-    ].join(" ");
     const server = spawnVerificationServer({
-      command: [process.execPath, "-e", source],
+      command: [process.execPath, "-e", detachedDescendantProgram, childPidPath],
       cwd: directory,
       detachedProcessGroup: true,
     });
