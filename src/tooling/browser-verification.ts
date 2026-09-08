@@ -2,6 +2,15 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+import {
+  captureVerificationOutput,
+  copyVerificationOutputSnapshot,
+  describeVerificationOutputFailure,
+  type VerificationOutputSnapshot,
+} from "./verification-output.js";
+
+export type { VerificationOutputSnapshot, VerificationStreamSnapshot } from "./verification-output.js";
+
 const DEFAULT_LOG_LIMIT = 12_000;
 const DEFAULT_PROBE_TIMEOUT_MS = 1_500;
 const DEFAULT_REUSE_PROBE_INTERVAL_MS = 250;
@@ -245,8 +254,34 @@ export interface ManagedVerificationServer {
   readonly exitCode: () => number | null;
   readonly killDescendants?: (timeoutMs: number) => void | Promise<void>;
   readonly output: Promise<string>;
+  /** Detached diagnostics only; neither a snapshot nor leader exit proves EOF. */
+  readonly outputSnapshot?: () => VerificationOutputSnapshot;
   readonly terminate: () => void;
   readonly kill: () => void;
+}
+
+export class VerificationServerOutputTimeoutError extends Error {
+  readonly outputSnapshot: VerificationOutputSnapshot | undefined;
+  readonly outputSnapshotFailure: string | undefined;
+
+  constructor(stopTimeoutMs: number, server: Pick<ManagedVerificationServer, "outputSnapshot">) {
+    super(`verification server output did not settle within ${stopTimeoutMs}ms after exit`);
+    this.name = "VerificationServerOutputTimeoutError";
+    let snapshot: VerificationOutputSnapshot | undefined;
+    let snapshotFailure: string | undefined;
+    try {
+      const current = server.outputSnapshot?.();
+      if (current !== undefined) snapshot = copyVerificationOutputSnapshot(current);
+    } catch (error: unknown) {
+      snapshotFailure = describeVerificationOutputFailure(error);
+    }
+    this.outputSnapshot = snapshot;
+    this.outputSnapshotFailure = snapshotFailure;
+    Object.defineProperties(this, {
+      outputSnapshot: { writable: false, configurable: false },
+      outputSnapshotFailure: { writable: false, configurable: false },
+    });
+  }
 }
 
 export type ServerLease =
@@ -670,17 +705,6 @@ export function createAgentBrowser(options: {
   return { close, evaluate, readBodyText, restart, run };
 }
 
-async function collectStream(stream: ReadableStream<Uint8Array>, logLimit: number): Promise<string> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let output = "";
-  for (;;) {
-    const chunk = await reader.read();
-    if (chunk.done) return tail(`${output}${decoder.decode()}`, logLimit);
-    output = tail(`${output}${decoder.decode(chunk.value, { stream: true })}`, logLimit);
-  }
-}
-
 function verificationProcessGroupExists(processId: number): boolean {
   try {
     process.kill(-processId, 0);
@@ -730,9 +754,11 @@ export function spawnVerificationServer(options: {
     stderr: "pipe",
   });
   const logLimit = options.logLimit ?? DEFAULT_LOG_LIMIT;
+  const stdout = captureVerificationOutput(process_.stdout, logLimit);
+  const stderr = captureVerificationOutput(process_.stderr, logLimit);
   const output = Promise.all([
-    collectStream(process_.stdout, logLimit),
-    collectStream(process_.stderr, logLimit),
+    stdout.output,
+    stderr.output,
   ]).then(([stdout, stderr]) => tail(`${stdout}\n${stderr}`.trim(), logLimit));
 
   const signal = (value: "SIGKILL" | "SIGTERM"): void => {
@@ -760,6 +786,8 @@ export function spawnVerificationServer(options: {
         }
       : {}),
     output,
+    outputSnapshot: () => Object.freeze({ schema: "direct.verification-output/v1",
+      stdout: stdout.snapshot(), stderr: stderr.snapshot() }),
     terminate: () => signal("SIGTERM"),
     kill: () => signal("SIGKILL"),
   };
@@ -859,9 +887,7 @@ async function stopVerificationServerWithOutput(
   await server.killDescendants?.(stopTimeoutMs);
   const output = await settleWithin(server.output, stopTimeoutMs);
   if (!output.settled) {
-    throw new Error(
-      `verification server output did not settle within ${stopTimeoutMs}ms after exit`,
-    );
+    throw new VerificationServerOutputTimeoutError(stopTimeoutMs, server);
   }
   return output.value;
 }

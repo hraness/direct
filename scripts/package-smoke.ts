@@ -577,6 +577,8 @@ if (
   throw new Error("package.json must declare a string version");
 }
 const supportsEffectDriver = Object.hasOwn(record(packageManifest.exports, "package exports"), "./effect");
+const supportsOutputDiagnostics = Array.isArray(packageManifest.files)
+  && packageManifest.files.includes("src/tooling/verification-output.ts");
 if (supportsEffectDriver) {
   runtimeImportSpecifiers.push("@hraness/direct/effect");
   importSpecifiers.push("@hraness/direct/effect");
@@ -647,7 +649,18 @@ try {
     `${typeImportSource(toolingTypeImportSpecifiers)}${bombadilToolingTypeChecks(
       bombadilFeatureProfile,
       supportsBombadilToolchainOverride,
-    )}`,
+    )}${supportsOutputDiagnostics ? `
+      import { VerificationServerOutputTimeoutError,
+        type ManagedVerificationServer, type VerificationOutputSnapshot,
+        type VerificationStreamSnapshot } from "@hraness/direct/tooling/browser-verification";
+      const stream: VerificationStreamSnapshot = { state: "pending", inFlightRead: true,
+        bytesRead: 0, chunksRead: 0, countersSaturated: false, tail: "" };
+      const snapshot: VerificationOutputSnapshot = {
+        schema: "direct.verification-output/v1", stdout: stream, stderr: stream,
+      };
+      const server: Pick<ManagedVerificationServer, "outputSnapshot"> = { outputSnapshot: () => snapshot };
+      void new VerificationServerOutputTimeoutError(5000, server);
+    ` : ""}`,
   );
   await writeFile(join(consumer, "tsconfig.bundler.json"), typeScriptConfig({
     include: "runtime-index.ts",
@@ -767,6 +780,8 @@ try {
       normalizeRootHttpOrigin,
       readDirectBrowserContract,
     } from "@hraness/direct/tooling/browser-verification";
+    ${supportsOutputDiagnostics ? `import { VerificationServerOutputTimeoutError }
+      from "@hraness/direct/tooling/browser-verification";` : ""}
     ${supportsNamedLayoutContracts ? `import {
       DIRECT_NAMED_LAYOUT_CONTRACT_SCHEMA,
       DIRECT_NAMED_LAYOUT_SAMPLE_SCHEMA,
@@ -790,6 +805,20 @@ try {
     if (typeof readDirectBrowserContract !== "function") {
       throw new Error("the package-bound Direct browser reader is missing");
     }
+    ${supportsOutputDiagnostics ? `const outputTimeout = new VerificationServerOutputTimeoutError(5000, {
+      outputSnapshot: () => ({ schema: "direct.verification-output/v1",
+        stdout: { state: "pending", inFlightRead: true, bytesRead: 3, chunksRead: 1, countersSaturated: false, tail: "out" },
+        stderr: { state: "eof", inFlightRead: false, bytesRead: 0, chunksRead: 0, countersSaturated: false, tail: "" } }),
+    });
+    if (!(outputTimeout instanceof Error)
+      || outputTimeout.message !== "verification server output did not settle within 5000ms after exit"
+      || outputTimeout.outputSnapshot?.stdout.state !== "pending"
+      || outputTimeout.outputSnapshot.stderr.state !== "eof"
+      || !Object.isFrozen(outputTimeout.outputSnapshot)
+      || !Object.isFrozen(outputTimeout.outputSnapshot.stdout)
+      || !Object.isFrozen(outputTimeout.outputSnapshot.stderr)) {
+      throw new Error("the installed output timeout lost its immutable diagnostic snapshot");
+    }` : ""}
     ${supportsNamedLayoutContracts ? `const layoutSample = parseDirectNamedLayoutSample({
       schema: DIRECT_NAMED_LAYOUT_SAMPLE_SCHEMA,
       viewport: { width: 100, height: 100 },
