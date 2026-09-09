@@ -296,6 +296,10 @@ test("canonical jobs precede optional npm and all source/install and signing bou
   expect(mirror).toContain("Verify registry mirror identity and installation");
   const registry = mirror.slice(mirror.indexOf("\n  registry:\n"));
   expect(registry).not.toContain("id-token: write");
+  expect(registry).toContain("ref: main");
+  expect(registry).not.toContain("ref: ${{ needs.verify.outputs.workflow_sha }}");
+  expect(registry).toContain('[[ "$(git rev-parse HEAD)" == "$EXPECTED_WORKFLOW_SHA" && "$(git rev-parse refs/remotes/origin/main)" == "$EXPECTED_WORKFLOW_SHA" ]]');
+  expect(registry.indexOf('[[ "$(git rev-parse HEAD)"')).toBeLessThan(registry.indexOf('node "$GITHUB_WORKSPACE/scripts/github-release.ts" mirror'));
   expect(registry).toContain('--source-archive "$source_archive"');
   expect(registry).toContain('--registry-archive "$registry_archive"');
   expect(registry).toContain('run "$current_smoke"');
