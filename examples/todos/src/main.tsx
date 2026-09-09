@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client";
+import "@hraness/ui/compiler-foundation.css";
 
 import { createLocalStorageTodoPort } from "./local-storage-todo-port";
 import { TodoApp } from "./TodoApp";

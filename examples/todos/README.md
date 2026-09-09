@@ -22,6 +22,8 @@ bun run example:dev
 bun run example:direct
 ```
 
+Use Node 24 and the frozen repository dependencies. Each command compiles one immutable StyleX generation with the pinned Vite 8.2.1/Rolldown 1.2.8 toolchain, then serves it on `127.0.0.1:5173`. Run only one preview at a time. Production opens at `/`; the workbench opens at `/direct/`. After editing a recipe or component, stop the command, rebuild/restart it, and refresh the browser. This compiled preview does not claim HMR or React-plugin support. Ctrl-C closes the owned Vite preview server.
+
 The workbench provides three stable scenarios:
 
 - `todos.empty` renders the real empty state.
@@ -36,14 +38,15 @@ bun run example:typecheck
 bun run example:verify
 ```
 
-`example:verify` builds production and Direct into an isolated temporary directory, proves both emitted source-map graphs contain their expected entry modules, scans every emitted production file for forbidden markers, and removes the directory even when verification fails. The individual build commands are useful while iterating:
+`example:verify` builds production and Direct in separate fresh `artifacts/todo-*` generations. It proves both emitted source-map graphs contain their expected entry modules and scans every emitted production file for forbidden markers. Both successful generations and failed-build evidence remain retained; existing previews are never overwritten. The individual build commands also scan their newly published output and print its exact directory:
 
 ```sh
 bun run example:build
-bun run example:check-boundary
 bun run example:build:direct
+## To recheck one already published production generation:
+bun run example:check-boundary -- /absolute/path/printed/by/the/production/build
 ```
 
-The boundary command requires emitted HTML and source-mapped JavaScript, proves the production graph contains the real UI and local-storage composition, rejects sources outside `src/`, and scans every emitted file for package names, query keys, wire schemas, browser globals, and workbench markers. The full verifier separately proves that the Direct graph contains the development entry, deterministic port, shared UI, and atomic browser installation without importing the production storage composition.
+The boundary command requires an explicit generation path, emitted HTML and source-mapped JavaScript. It proves the production graph contains the real UI and local-storage composition, rejects first-party sources outside `src/`, and scans every emitted file for package names, query keys, wire schemas, browser globals, and workbench markers. The full verifier separately proves that the Direct graph contains the development entry, deterministic port, shared UI, and atomic browser installation without importing the production storage composition. These build/source-boundary checks do not replace native-browser appearance and interaction verification.
 
 The fixture claims cover interface behavior through the deterministic port. The coverage catalog keeps local-storage serialization as a direct claim because the in-memory adapter does not exercise browser storage behavior.

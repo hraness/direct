@@ -1,26 +1,2 @@
-import react from "@vitejs/plugin-react";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { defineConfig } from "vite";
-
-const directDirectory = dirname(fileURLToPath(import.meta.url));
-const exampleRoot = resolve(directDirectory, "..");
-
-export default defineConfig({
-  root: exampleRoot,
-  plugins: [react()],
-  server: {
-    host: "127.0.0.1",
-    open: "/direct/",
-    port: 5173,
-    strictPort: true,
-  },
-  build: {
-    emptyOutDir: true,
-    outDir: "dist-direct",
-    rollupOptions: {
-      input: resolve(directDirectory, "index.html"),
-    },
-    sourcemap: true,
-  },
-});
+// The separate workbench uses the same compiled graph boundary as the product.
+throw new Error("Use bun run example:build:direct or bun run example:direct for a compiled workbench preview.");

@@ -664,14 +664,13 @@ bun run example:test
 bun run example:typecheck
 bun run example:verify
 bun run example:build
-bun run example:check-boundary
 bun run example:build:direct
 bun run example:react-native:test
 bun run example:react-native:typecheck
 bun run example:react-native:verify
 ```
 
-Run the production app with `bun run example:dev`. Run the deterministic workbench with `bun run example:direct`, then select `empty`, `populated`, or `write failure` from its scenario navigation.
+Run the compiled production app with `bun run example:dev`. Run the compiled deterministic workbench with `bun run example:direct`, then select `empty`, `populated`, or `write failure` from its scenario navigation. Both require Node 24, build a fresh StyleX generation, and serve one loopback preview; after edits, stop, rebuild/restart, and refresh. They do not provide HMR. Each build performs its source-map and marker scan; to recheck a retained production generation, run `bun run example:check-boundary -- /absolute/path/printed/by/example:build`.
 
 Run the Expo workbench with `bun run example:react-native`. Its verification command exports iOS and Android production bundles plus the deterministic React Native Web composition with paired source maps, proves the expected shared and platform-specific modules were selected, and rejects native/web cross-contamination. It does not replace browser-driven semantic assertions or direct device evidence.
 

@@ -28,7 +28,7 @@ const toolingTypeImportSpecifiers = [
 ];
 const importSpecifiers = [...runtimeImportSpecifiers, ...toolingRuntimeImportSpecifiers];
 const binNames: readonly string[] = [];
-const verificationPackages = ["@antithesishq/bombadil@0.7.2","@eslint/js@^9.39.2","@expo/metro-runtime@~57.0.6","@types/bun@^1.3.14","@types/node@^24.10.0","@types/react@^19.2.14","@types/react-dom@^19.2.3","@vitejs/plugin-react@^6.0.3","effect@3.22.1","eslint@^9.39.2","expo@~57.0.9","fast-check@^4.8.0","react@19.2.3","react-dom@19.2.3","react-native@0.86.2","react-native-web@~0.21.2","typescript@^6.0.3","typescript-eslint@^8.53.0","vite@^8.1.5"];
+const verificationPackages = ["@antithesishq/bombadil@0.7.2","@babel/core@7.29.7","@eslint/js@^9.39.2","@expo/metro-runtime@~57.0.6","@hraness/ui@github:hraness/ui#v0.5.9","@stylexjs/babel-plugin@0.19.0","@stylexjs/stylex@0.19.0","@types/babel__core@7.20.5","@types/bun@^1.3.14","@types/node@^24.10.0","@types/react-dom@^19.2.3","@types/react@^19.2.14","effect@3.22.1","eslint@^9.39.2","expo@~57.0.9","fast-check@^4.8.0","lightningcss@1.33.0","react-dom@19.2.3","react-native-web@~0.21.2","react-native@0.86.2","react@19.2.3","rolldown@1.2.8","typescript-eslint@^8.53.0","typescript@6.0.3","vite@8.2.1"];
 
 type PackageInput = Readonly<{
   archive?: string;
