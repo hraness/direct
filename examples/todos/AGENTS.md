@@ -18,5 +18,6 @@
 - Use only public package names, repository paths, and commands in example code and documentation; do not refer to or infer non-public systems, products, paths, packages, or implementation details.
 - Build production before running the marker scan; fail when the scanner finds no emitted files.
 - Keep source-map coordinates in place after finalization. Never move published generations or infer a latest output for boundary verification.
+- Preserve the qualified CSS-import chain: public compiler foundation is the document stylesheet's first import, and that stylesheet is each JavaScript entry's last import. Keep all native source-map checks enabled.
 - Keep all component presentation in finite StyleX recipes; `src/styles.css` is only the shared document/reset boundary. Preview changes require rebuild/restart/manual refresh, not an HMR claim.
 - Update the scenario catalog, coverage catalog, example tests, and README together.

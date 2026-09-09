@@ -49,8 +49,11 @@ export async function buildTodo(target: TodoBuildTarget): Promise<string> {
   const stylesheets = result.output.filter((item) => item.type === "asset" && item.fileName.endsWith(".css"));
   assert.equal(entries.length, 1);
   assert.equal(stylesheets.length, 1);
-  const entryFile = entries[0]!.fileName;
-  const foundationFile = stylesheets[0]!.fileName;
+  const [entryOutput] = entries;
+  const [foundationOutput] = stylesheets;
+  assert.ok(entryOutput !== undefined && foundationOutput !== undefined, "Expected both finite client outputs");
+  const entryFile = entryOutput.fileName;
+  const foundationFile = foundationOutput.fileName;
   const html = renderTodoBuildHtml(source, target, entryFile, foundationFile);
   const produced = await prepareStylexProducedTemplate(generation, outputPath);
   await writeFile(produced.sourcePath, html, { flag: "wx" });

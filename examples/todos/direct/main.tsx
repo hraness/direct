@@ -1,10 +1,10 @@
 import { installDirectBrowser } from "@hraness/direct/web";
 import { createRoot } from "react-dom/client";
-import "@hraness/ui/compiler-foundation.css";
 
-import "../src/styles.css";
 import { createTodoDirectSession } from "./session";
 import { TodoDirectError, TodoDirectWorkbench } from "./workbench";
+// Keep extracted CSS last for the reviewed native Vite source-map profile.
+import "../src/styles.css";
 
 const rootElement = document.getElementById("root");
 if (rootElement === null) throw new Error("Todo Direct root element is missing.");

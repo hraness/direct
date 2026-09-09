@@ -1,6 +1,22 @@
 import { expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+import ts from "typescript";
 import { STYLEX_TEMPLATE_CSS_PLACEHOLDER } from "@hraness/ui/stylex-build";
 import { parseTodoBuildTarget, renderTodoBuildHtml } from "./build-contract.js";
+
+test("both entries use the qualified CSS-import graph after their JavaScript imports", async () => {
+  const css = await readFile(new URL("./src/styles.css", import.meta.url), "utf8");
+  expect(css.startsWith('@import "@hraness/ui/compiler-foundation.css";')).toBe(true);
+  for (const [path, expected] of [["./src/main.tsx", "./styles.css"], ["./direct/main.tsx", "../src/styles.css"]] as const) {
+    const source = await readFile(new URL(path, import.meta.url), "utf8");
+    const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const imports = file.statements.filter(ts.isImportDeclaration).map((statement) => statement.moduleSpecifier)
+      .filter(ts.isStringLiteral).map((specifier) => specifier.text);
+    expect(imports.at(-1)).toBe(expected);
+    expect(imports).not.toContain("@hraness/ui/compiler-foundation.css");
+    expect(imports.filter((path) => path.endsWith(".css"))).toEqual([expected]);
+  }
+});
 
 test("compiler targets are finite, never an implicit output or arbitrary entry", () => {
   expect(parseTodoBuildTarget("production")).toBe("production");
