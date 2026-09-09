@@ -68,6 +68,47 @@ export function exactRecord(value: unknown, keys: readonly string[], label: stri
   }
   return value as Record<string, unknown>;
 }
+/** agent-browser 0.32.3 adds this metadata to every successful object payload. */
+export function parseTodoDriverResult(value: unknown, bootstrap: boolean): Record<string, unknown> {
+  assert.ok(value !== null && typeof value === "object" && !Array.isArray(value), "driver result must be an object");
+  const result = exactRecord(value, Object.keys(value), "agent-browser0.32.3 result");
+  const lifecycle = exactRecord(result.lifecycle, ["reused", "launched", "relaunchedBrowser", "restartedBackground", "restoreStatus", "saveStatus", "effectiveLaunch"], "agent-browser0.32.3 lifecycle");
+  const launch = exactRecord(lifecycle.effectiveLaunch, ["browserLaunched", "engine", "launchHash"], "agent-browser0.32.3 effective launch");
+  assert.equal(lifecycle.reused, true);
+  assert.equal(lifecycle.launched, bootstrap, "unexpected browser launch during owned batch");
+  assert.equal(lifecycle.relaunchedBrowser, false, "browser relaunch forbidden");
+  assert.equal(lifecycle.restartedBackground, false, "background restart forbidden");
+  assert.equal(lifecycle.restoreStatus, "not_configured", "ambient browser state restoration forbidden");
+  assert.equal(lifecycle.saveStatus, "not_attempted", "ambient browser state persistence forbidden");
+  assert.equal(launch.browserLaunched, true);
+  assert.equal(launch.engine, "chrome");
+  // The native field is a u64, which JSON.parse may round. Raw stdout is retained;
+  // this value is metadata, never an identity substitute for PID/start/argv custody.
+  assert.ok(typeof launch.launchHash === "number" && Number.isInteger(launch.launchHash) && launch.launchHash >= 0 && launch.launchHash <= 2 ** 64, "bounded native launch hash metadata required");
+  return Object.fromEntries(Object.entries(result).filter(([key]) => key !== "lifecycle"));
+}
+export interface TodoNativeTab { readonly tabId: string; readonly active: boolean; readonly url: string }
+export function parseTodoNativeTabs(value: unknown): TodoNativeTab[] {
+  const { tabs } = exactRecord(value, ["tabs"], "agent-browser0.32.3 tab list");
+  assert.ok(Array.isArray(tabs) && tabs.length >= 1 && tabs.length <= 32, "bounded pinned tab inventory required");
+  const rows = tabs.map((tab: unknown) => {
+    const record = exactRecord(tab, ["tabId", "label", "title", "url", "type", "active"], "agent-browser0.32.3 tab");
+    assert.ok(typeof record.tabId === "string" && /^t\d+$/u.test(record.tabId));
+    assert.ok(typeof record.url === "string" && record.url.length <= 4096 && typeof record.active === "boolean");
+    assert.ok(record.label === null || (typeof record.label === "string" && record.label.length <= 4096), "bounded nullable tab label required");
+    assert.ok([record.title, record.type].every((field) => typeof field === "string" && field.length <= 4096), "bounded tab metadata required");
+    return { tabId: record.tabId, active: record.active, url: record.url };
+  });
+  assert.equal(new Set(rows.map((row) => row.tabId)).size, rows.length);
+  assert.equal(rows.filter((row) => row.active).length, 1);
+  return rows;
+}
+export function assertTodoTabClosed(value: unknown, tabId: string): void {
+  const record = exactRecord(value, ["tabId", "label", "closed"], "agent-browser0.32.3 tab close");
+  assert.equal(record.tabId, tabId, "closed tab identity mismatch");
+  assert.equal(record.closed, true);
+  assert.ok(record.label === null || (typeof record.label === "string" && record.label.length <= 4096), "bounded nullable closed-tab label required");
+}
 function text(value: unknown, label: string): string {
   assert.ok(typeof value === "string" && value.length > 0 && value.length <= 4096 && !/[\0\r\n]/u.test(value), label);
   return value;

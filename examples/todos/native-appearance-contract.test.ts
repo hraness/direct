@@ -3,7 +3,7 @@ import fc from "fast-check";
 import {
   TODO_APPEARANCE_SCHEMA, TODO_STYLE_KEYS, admitTodoContext, assertTodoStable, assertTodoStaticCss,
   boundedTodoBatches, compareTodoAppearance, parseTodoAppearanceInput, parseTodoAppearanceSample,
-  todoCasePath, parseTodoOwnedClose, withTodoCleanup,
+  todoCasePath, parseTodoDriverResult, parseTodoNativeTabs, assertTodoTabClosed, parseTodoOwnedClose, withTodoCleanup, exactRecord,
 } from "./native-appearance-contract.js";
 
 const build = { directory: "/tmp/owned-build", inventorySha256: "a".repeat(64) };
@@ -40,6 +40,41 @@ test("no-respawn close response binds the exact request and true whole-browser c
   const response = { id: "exact-request", success: true, data: { closed: true } };
   expect(parseTodoOwnedClose(response, "exact-request")).toEqual({ closed: true });
   for (const invalid of [null, { ...response, id: "foreign" }, { ...response, success: false }, { ...response, data: null }, { ...response, data: { closed: false } }]) expect(() => parseTodoOwnedClose(invalid, "exact-request")).toThrow();
+});
+const lifecycle = {
+  effectiveLaunch: { browserLaunched: true, engine: "chrome", launchHash: 685897992864875800 },
+  launched: false, relaunchedBrowser: false, restartedBackground: false,
+  restoreStatus: "not_configured", reused: true, saveStatus: "not_attempted",
+};
+const nativeTab = { active: true, label: null, tabId: "t1", title: "about:blank", type: "page", url: "about:blank" };
+test("pinned native response separates validated lifecycle from nullable tab metadata", () => {
+  const response = { lifecycle, tabs: [nativeTab] };
+  expect(parseTodoNativeTabs(parseTodoDriverResult(response, false))).toEqual([{ tabId: "t1", active: true, url: "about:blank" }]);
+  expect(response.lifecycle).toBe(lifecycle);
+  expect(parseTodoNativeTabs({ tabs: [{ ...nativeTab, label: "scenario" }] })).toHaveLength(1);
+  expect(parseTodoDriverResult({ lifecycle: { ...lifecycle, launched: true }, launched: true }, true)).toEqual({ launched: true });
+  // The rounded u64 metadata is deliberately not required to be a safe integer.
+  expect(Number.isSafeInteger(lifecycle.effectiveLaunch.launchHash)).toBe(false);
+  for (const payload of [{ result: { completed: true } }, { tabId: "t2", total: 2 }]) {
+    expect(exactRecord(parseTodoDriverResult({ lifecycle, ...payload }, false), Object.keys(payload), "payload")).toEqual(payload);
+    expect(() => exactRecord(parseTodoDriverResult({ lifecycle, ...payload, foreign: true }, false), Object.keys(payload), "payload")).toThrow();
+  }
+});
+test("lifecycle rejects missing, malformed, restored or restarted driver state", () => {
+  for (const candidate of [null, {}, { ...lifecycle, foreign: true }, { ...lifecycle, reused: false }, { ...lifecycle, launched: true }, { ...lifecycle, relaunchedBrowser: true }, { ...lifecycle, restartedBackground: true }, { ...lifecycle, restoreStatus: "restored" }, { ...lifecycle, saveStatus: "saved" }, { ...lifecycle, effectiveLaunch: null }, { ...lifecycle, effectiveLaunch: { ...lifecycle.effectiveLaunch, engine: "firefox" } }, { ...lifecycle, effectiveLaunch: { ...lifecycle.effectiveLaunch, browserLaunched: false } }]) {
+    expect(() => parseTodoDriverResult({ lifecycle: candidate, result: 1 }, false)).toThrow();
+  }
+  for (const launchHash of [null, "685897992864875797", -1, 0.5, Infinity, NaN, 2 ** 65]) expect(() => parseTodoDriverResult({ lifecycle: { ...lifecycle, effectiveLaunch: { ...lifecycle.effectiveLaunch, launchHash } }, result: 1 }, false)).toThrow();
+  expect(() => parseTodoDriverResult({ result: 1 }, false)).toThrow();
+  expect(() => parseTodoDriverResult({ lifecycle, result: 1 }, true)).toThrow();
+  expect(() => parseTodoDriverResult(Object.defineProperty({ result: 1 }, "lifecycle", { enumerable: true, get: () => lifecycle }), false)).toThrow();
+  expect(() => parseTodoDriverResult({ lifecycle, result: 1, [Symbol("foreign")]: true }, false)).toThrow();
+});
+test("tab inventory and close preserve exact identities, shape and bounds", () => {
+  for (const tabs of [[], Array.from({ length: 33 }, (_, index) => ({ ...nativeTab, tabId: `t${index}`, active: index === 0 })), [nativeTab, nativeTab], [{ ...nativeTab, active: false }], [{ ...nativeTab, label: 1 }], [{ ...nativeTab, label: "x".repeat(4097) }], [{ ...nativeTab, foreign: true }], [{ ...nativeTab, tabId: "foreign" }], [{ ...nativeTab, title: null }]]) expect(() => parseTodoNativeTabs({ tabs })).toThrow();
+  expect(() => parseTodoNativeTabs({ lifecycle, tabs: [nativeTab] })).toThrow();
+  for (const label of [null, "scenario"]) expect(() => assertTodoTabClosed({ tabId: "t2", label, closed: true }, "t2")).not.toThrow();
+  for (const closed of [{ tabId: "t3", label: null, closed: true }, { tabId: "t2", label: null, closed: false }, { tabId: "t2", closed: true }, { tabId: "t2", label: 1, closed: true }, { tabId: "t2", label: null, closed: true, foreign: true }]) expect(() => assertTodoTabClosed(closed, "t2")).toThrow();
 });
 test("runtime CSS observation rejects style injection, adopted sheets and foreign fields", () => {
   const valid = { styleNodes: 0, adoptedSheets: 0, mutations: [] };

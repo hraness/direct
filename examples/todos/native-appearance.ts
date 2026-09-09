@@ -17,8 +17,8 @@ import { POPULATED_TODOS } from "./direct/world.js";
 import { TODO_STORAGE_KEY } from "./src/local-storage-todo-port.js";
 import {
   TODO_APPEARANCE_CASES, TODO_APPEARANCE_WIDTHS, TODO_BREAKPOINT_WIDTHS, TODO_STYLE_KEYS,
-  admitTodoContext, assertTodoStable, assertTodoStaticCss, boundedTodoBatches, compareTodoAppearance, exactRecord,
-  parseTodoAppearanceInput, parseTodoAppearanceSample, parseTodoOwnedClose, todoCasePath, todoFailureText as errorText, withTodoCleanup as withCleanup,
+  admitTodoContext, assertTodoStable, assertTodoStaticCss, assertTodoTabClosed, boundedTodoBatches, compareTodoAppearance, exactRecord,
+  parseTodoAppearanceInput, parseTodoAppearanceSample, parseTodoDriverResult, parseTodoNativeTabs as parseTabs, parseTodoOwnedClose, todoCasePath, todoFailureText as errorText, withTodoCleanup as withCleanup,
   type TodoAppearanceCase, type TodoAppearanceDifference, type TodoAppearanceInput,
   type TodoAppearanceSample, type TodoSourceIdentity,
 } from "./native-appearance-contract.js";
@@ -157,22 +157,6 @@ function ownProcessClosure(all: readonly ProcessIdentity[], roots: readonly Proc
   return [...result.values()];
 }
 
-type Tab = { readonly tabId: string; readonly active: boolean; readonly url: string };
-function parseTabs(value: unknown): Tab[] {
-  const { tabs } = exactRecord(value, ["tabs"], "agent-browser0.32.3 tab list");
-  assert.ok(Array.isArray(tabs) && tabs.length >= 1 && tabs.length <= 32, "bounded pinned tab inventory required");
-  const rows = tabs.map((tab: unknown) => {
-    const record = exactRecord(tab, ["tabId", "label", "title", "url", "type", "active"], "agent-browser0.32.3 tab");
-    assert.ok(typeof record.tabId === "string" && /^t\d+$/u.test(record.tabId));
-    assert.ok(typeof record.url === "string" && record.url.length <= 4096 && typeof record.active === "boolean");
-    assert.ok([record.label, record.title, record.type].every((field) => typeof field === "string" && field.length <= 4096), "bounded tab metadata required");
-    return { tabId: record.tabId, active: record.active, url: record.url };
-  });
-  assert.equal(new Set(rows.map((row) => row.tabId)).size, rows.length);
-  assert.equal(rows.filter((row) => row.active).length, 1);
-  return rows;
-}
-
 interface NativeBatch {
   readonly browser: Pick<AgentBrowser, "run" | "evaluate">;
   readonly newContext: (label: string) => Promise<void>;
@@ -244,7 +228,7 @@ async function createNativeBatch(input: TodoAppearanceInput, directory: string, 
     const value = parseAgentBrowserEnvelope(raw);
     // Command labels never include script bodies or page contents.
     await record(`command-${operations}`, { command: args[0], result: value });
-    return value;
+    return parseTodoDriverResult(value, operations === 1);
   };
   const evaluate = async (expression: string): Promise<unknown> => {
     const result = exactRecord(await run(["eval", expression]), ["result"], "page evaluation");
@@ -328,9 +312,12 @@ async function createNativeBatch(input: TodoAppearanceInput, directory: string, 
       }
       const before = parseTabs(await run(["tab"]));
       const created = exactRecord(await run(["window", "new"]), ["tabId", "total"], "agent-browser0.32.3 window");
-      assert.ok(typeof created.tabId === "string" && /^t\d+$/u.test(created.tabId) && typeof created.total === "number");
+      assert.ok(typeof created.tabId === "string" && /^t\d+$/u.test(created.tabId) && typeof created.total === "number" && Number.isSafeInteger(created.total));
       await record(`fresh-${contexts}`, { label, result: created });
       const after = parseTabs(await run(["tab"]));
+      assert.equal(created.total, after.length, "new window total must match complete tab census");
+      assert.equal(after.length, before.length + 1, "new window must preserve all prior tabs");
+      assert.ok(before.every((tab) => after.some((next) => next.tabId === tab.tabId)), "new window lost a prior tab");
       scenarioTabs = new Set(after.filter((tab) => !before.some((old) => old.tabId === tab.tabId)).map((tab) => tab.tabId));
       assert.equal(scenarioTabs.size, 1, "fresh window must create exactly one new context tab");
       assert.ok(scenarioTabs.has(created.tabId));
@@ -339,7 +326,11 @@ async function createNativeBatch(input: TodoAppearanceInput, directory: string, 
     async closeContext() {
       const tabs = parseTabs(await run(["tab"]));
       // Every tab created after the inert bootstrap is owned by this sequential batch.
-      for (const tab of tabs) if (tab.tabId !== bootstrap) await record(`tab-close-${contexts}-${tab.tabId}`, await run(["tab", "close", tab.tabId]));
+      for (const tab of tabs) if (tab.tabId !== bootstrap) {
+        const response = await run(["tab", "close", tab.tabId]);
+        await record(`tab-close-${contexts}-${tab.tabId}`, response);
+        assertTodoTabClosed(response, tab.tabId);
+      }
       await record(`post-tab-attempt-${contexts}`, await run(["tab"]));
       await census(); // Tab-close success alone does not prove context disposal in0.32.3.
     }, close };
