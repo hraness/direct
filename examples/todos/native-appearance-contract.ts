@@ -9,6 +9,10 @@ import {
 
 export const TODO_APPEARANCE_SCHEMA = "direct.todo-appearance/v1";
 export const TODO_APPEARANCE_BATCH_LIMIT = 8;
+// A full keyboard/scenario case uses hundreds of bounded driver commands.
+// Retire each browser after the two viewport cases, before the unchanged
+// 1500-command ceiling can be consumed by unrelated later scenarios.
+export const TODO_APPEARANCE_CASE_BATCH_LIMIT = 2;
 export const TODO_NATIVE_PARK_PATH = "/__todo_native_park";
 export function todoNativeParkUrl(port: number): string {
   assert.ok(Number.isSafeInteger(port) && port >= 1024 && port <= 65535, "owned parking port required");
@@ -233,7 +237,7 @@ export function todoCasePath(scenario: TodoAppearanceCase): string {
   return `/direct/?${query.toString()}`;
 }
 export function boundedTodoBatches<T>(values: readonly T[]): readonly (readonly T[])[] {
-  return Array.from({ length: Math.ceil(values.length / TODO_APPEARANCE_BATCH_LIMIT) }, (_, index) => values.slice(index * TODO_APPEARANCE_BATCH_LIMIT, (index + 1) * TODO_APPEARANCE_BATCH_LIMIT));
+  return Array.from({ length: Math.ceil(values.length / TODO_APPEARANCE_CASE_BATCH_LIMIT) }, (_, index) => values.slice(index * TODO_APPEARANCE_CASE_BATCH_LIMIT, (index + 1) * TODO_APPEARANCE_CASE_BATCH_LIMIT));
 }
 export function admitTodoContext(count: number): number {
   assert.ok(Number.isSafeInteger(count) && count >= 0 && count < TODO_APPEARANCE_BATCH_LIMIT, "ninth context rejected before launch");

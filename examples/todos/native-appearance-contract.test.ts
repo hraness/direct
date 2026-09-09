@@ -131,8 +131,16 @@ test("the ninth context is rejected before window creation; every batch preserve
   fc.assert(fc.property(fc.array(fc.integer(), { maxLength: 100 }), (values) => {
     const batches = boundedTodoBatches(values);
     expect(batches.flat()).toEqual(values);
-    expect(batches.every((batch) => batch.length > 0 && batch.length <= 8)).toBe(true);
+    expect(batches.every((batch) => batch.length > 0 && batch.length <= 2)).toBe(true);
+    expect(batches.length).toBe(Math.ceil(values.length / 2));
   }), { numRuns: 50 });
+});
+
+test("the complete ordered appearance matrix retires each browser after two viewport cases", () => {
+  const cases = ["production", "todos.empty", "todos.populated", "todos.write-failure", "unknown", "duplicate"];
+  const rows = cases.flatMap(scenario => [1280, 390].map(width => ({ scenario, width })));
+  expect(boundedTodoBatches(rows)).toEqual(cases.map(scenario => [{ scenario, width: 1280 }, { scenario, width: 390 }]));
+  expect(boundedTodoBatches([])).toEqual([]);
 });
 test("activation cases use the exported reserved query key and retain explicit malformed input", () => {
   expect(todoCasePath("production")).toBe("/");

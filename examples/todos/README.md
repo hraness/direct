@@ -97,8 +97,12 @@ and hide one scenario description through opacity in-page, require the correspon
 oracle to reject, then recover by navigation
 from the unchanged generation.
 
-Each case receives a fresh BrowserContext through `window new`. Batches contain
-at most eight contexts. Completed contexts navigate to the exact owned-loopback
+Each case receives a fresh BrowserContext through `window new`. Ordinary batches
+contain two scenario/viewport cases; the three negative controls use their own
+batch. Each batch keeps the 1,500-command ceiling and a hard eight-context
+admission limit. The smaller ordinary batches retire the browser before later
+scenarios consume its command budget; they do not omit cases or observations.
+Completed contexts navigate to the exact owned-loopback
 `/__todo_native_park` document and remain
 parked, not disposed, until the batch ends; their complete tab inventory stays
 bound to the original browser. This avoids the pinned driver's stale-target
