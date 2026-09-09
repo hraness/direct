@@ -18,33 +18,29 @@ global `direct` CLI.
 
 ## Add the library
 
-For a new installation, pin the reviewed public release:
+For a new installation, verify that the immutable v0.7.21 GitHub release and
+its archive are published before using this version. Source candidates do not
+establish public availability. Check the release manifest, checksums, and
+provenance using the tagged publishing guide, then install the exact archive:
 
 ```sh
-bun add --dev @hraness/direct@0.7.20
+bun add --dev https://github.com/hraness/direct/releases/download/v0.7.21/hraness-direct-0.7.21.tgz
 # or, in an npm project
-npm install --save-dev @hraness/direct@0.7.20
+npm install --save-dev https://github.com/hraness/direct/releases/download/v0.7.21/hraness-direct-0.7.21.tgz
 ```
 
-The equivalent manifest entry is:
-
-```json
-{
-  "devDependencies": {
-    "@hraness/direct": "0.7.20"
-  }
-}
-```
-
-Then run `bun install`. Do not add another package manager or lockfile to a
-repository that already defines its package manager.
+The package keeps the name `@hraness/direct`. An independently verified npm
+mirror may instead use the immutable pin `@hraness/direct@0.7.21`. Use the
+consumer's existing package manager and lockfile. To upgrade, replace the
+exact archive version and run the consumer's type, installation, and emitted
+production-boundary checks; do not use a moving Latest URL.
 
 If the task starts with skill installation rather than a loaded skill, install
 the single repository skill with either command:
 
 ```sh
-npx skills add hraness/direct#v0.7.20
-bunx skills add hraness/direct#v0.7.20
+npx skills add hraness/direct#v0.7.21
+bunx skills add hraness/direct#v0.7.21
 ```
 
 Restart or reload the agent runner if it does not discover newly installed
