@@ -16,7 +16,7 @@ import { todoDirectDefinition } from "./direct/definition.js";
 import { POPULATED_TODOS } from "./direct/world.js";
 import { TODO_STORAGE_KEY } from "./src/local-storage-todo-port.js";
 import {
-  TODO_APPEARANCE_CASES, TODO_APPEARANCE_WIDTHS, TODO_BREAKPOINT_WIDTHS, TODO_STYLE_KEYS,
+  TODO_APPEARANCE_CASES, TODO_APPEARANCE_WIDTHS, TODO_BREAKPOINT_WIDTHS, TODO_STYLE_KEYS, TODO_NATIVE_PARK_PATH, todoNativeParkUrl, todoNativeParkResponse,
   admitTodoContext, assertTodoStable, assertTodoStaticCss, assertTodoParkedTabs, assertTodoConsole, boundedTodoBatches, compareTodoAppearance, exactRecord,
   parseTodoAppearanceInput, parseTodoAppearanceSample, parseTodoDriverResult, parseTodoEvaluation, parseTodoNativeTabs as parseTabs, parseTodoOwnedClose, todoCasePath, todoFailureText as errorText, withTodoCleanup as withCleanup,
   type TodoAppearanceCase, type TodoAppearanceDifference, type TodoAppearanceInput,
@@ -100,6 +100,7 @@ async function serveBuild(directory: string, port: number, expected: string): Pr
   const inventory = await todoBuildInventory(directory);
   assert.equal(inventory.sha256, expected);
   const files = new Map(inventory.files.map(([name, , , hash]) => [`/${name}`, hash]));
+  assert.ok(!files.has(TODO_NATIVE_PARK_PATH), "build cannot shadow the reserved verification parking document");
   const requests: { path: string; status: number }[] = [];
   const denied: string[] = [];
   const server = Bun.serve({ hostname: "127.0.0.1", port, async fetch(request) {
@@ -109,6 +110,11 @@ async function serveBuild(directory: string, port: number, expected: string): Pr
     if (request.method !== "GET" || requests.length >= 1024 || url.origin !== `http://127.0.0.1:${port}` || /%|\\|\/\.{1,2}(?:\/|$)/u.test(path)) {
       if (denied.length < 32) denied.push("unadmitted request");
       return new Response("Rejected", { status: 403 });
+    }
+    if (path === TODO_NATIVE_PARK_PATH) {
+      if (url.search !== "") { if (denied.length < 32) denied.push("parking query"); return new Response("Rejected", { status: 403 }); }
+      requests.push({ path, status: 200 });
+      return todoNativeParkResponse();
     }
     if (path === "/favicon.ico" && !files.has(path)) return new Response(null, { status: 204 });
     const hash = files.get(path);
@@ -331,9 +337,11 @@ async function createNativeBatch(input: TodoAppearanceInput, directory: string, 
       // target, then fail network-control installation against the dead target.
       // Do not suppress that failure or disable the allowlist. Retain at most
       // eight genuine isolated contexts, parked inert until whole-browser close.
-      await run(["open", "about:blank"]);
+      // Its explicit navigation parser rejects hostless about:blank URLs.
+      // Keep the allowlist intact by using our exact scriptless parking route.
+      await run(["open", todoNativeParkUrl(input.port)]);
       const after = parseTabs(await run(["tab"]));
-      assertTodoParkedTabs(before, after, tabId, contexts);
+      assertTodoParkedTabs(before, after, tabId, contexts, input.port);
       await record(`parked-${contexts}`, { tabs: after, disposed: false });
       const errors = exactRecord(await run(["errors"]), ["errors"], "parked native page errors");
       const messages = await run(["console"]);
@@ -680,7 +688,7 @@ export async function runTodoAppearance(input: TodoAppearanceInput): Promise<str
     failure = (error instanceof Error ? `${error.name}: ${error.message}` : "Unknown native appearance failure").slice(0, 4096);
     throw error;
   } finally {
-    await writeFile(join(directory, "receipt.json"), `${JSON.stringify({ schema: "direct.todo-native-receipt/v1", accepted, failure, mode: input.mode, browser: { version: input.browser.version, driverSha256: input.browser.driverSha256, executableSha256: input.browser.executableSha256 }, differences, limits: ["fixture browser proof does not establish storage quota, remote services or device behavior", "completed contexts are parked at about:blank and retained until whole-browser close, not individually disposed", "console/error observations sample the active case and parking transition, not continuous background-context monitoring", "runtime CSS observer starts at initial settled document; transient insertion before observer attachment is not claimed", "screenshots are retained evidence; comparison uses authored named geometry and computed presentation, not a screenshot similarity score", "appearance samples require quiescence; transient loading and busy-state paint is not observed"] })}\n`, { mode: 0o600, flag: "wx" });
+    await writeFile(join(directory, "receipt.json"), `${JSON.stringify({ schema: "direct.todo-native-receipt/v1", accepted, failure, mode: input.mode, browser: { version: input.browser.version, driverSha256: input.browser.driverSha256, executableSha256: input.browser.executableSha256 }, differences, limits: ["fixture browser proof does not establish storage quota, remote services or device behavior", "completed contexts are parked at an inert owned-loopback document and retained until whole-browser close, not individually disposed", "console/error observations sample the active case and parking transition, not continuous background-context monitoring", "runtime CSS observer starts at initial settled document; transient insertion before observer attachment is not claimed", "screenshots are retained evidence; comparison uses authored named geometry and computed presentation, not a screenshot similarity score", "appearance samples require quiescence; transient loading and busy-state paint is not observed"] })}\n`, { mode: 0o600, flag: "wx" });
   }
 }
 if (import.meta.main) {

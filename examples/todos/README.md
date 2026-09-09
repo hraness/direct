@@ -98,10 +98,15 @@ oracle to reject, then recover by navigation
 from the unchanged generation.
 
 Each case receives a fresh BrowserContext through `window new`. Batches contain
-at most eight contexts. Completed contexts navigate to `about:blank` and remain
+at most eight contexts. Completed contexts navigate to the exact owned-loopback
+`/__todo_native_park` document and remain
 parked, not disposed, until the batch ends; their complete tab inventory stays
 bound to the original browser. This avoids the pinned driver's stale-target
 network-control failure on tab close without disabling its domain allowlist.
+The reserved parking response contains no scripts or styles and has a sandboxed
+`default-src 'none'` policy. It admits no query, foreign origin, or artifact
+replacement. The initial bootstrap alone remains at `about:blank`, which the
+pinned driver's explicit navigation parser rejects as a hostless URL.
 A final close-only request goes to the exact
 already-owned private daemon socket, without the CLI's respawn path. The final
 receipt requires whole-browser/daemon descendant absence and owned server

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import fc from "fast-check";
 import {
-  TODO_APPEARANCE_SCHEMA, TODO_STYLE_KEYS, admitTodoContext, assertTodoStable, assertTodoStaticCss,
+  TODO_APPEARANCE_SCHEMA, TODO_STYLE_KEYS, TODO_NATIVE_PARK_PATH, todoNativeParkUrl, todoNativeParkResponse, admitTodoContext, assertTodoStable, assertTodoStaticCss,
   boundedTodoBatches, compareTodoAppearance, parseTodoAppearanceInput, parseTodoAppearanceSample,
   todoCasePath, parseTodoDriverResult, parseTodoEvaluation, parseTodoNativeTabs, assertTodoTabClosed, assertTodoParkedTabs, assertTodoConsole, parseTodoOwnedClose, withTodoCleanup, exactRecord,
 } from "./native-appearance-contract.js";
@@ -89,12 +89,25 @@ test("tab inventory and close preserve exact identities, shape and bounds", () =
 });
 test("parking preserves the same bounded isolated contexts without claiming disposal", () => {
   const before = [{ tabId: "t1", active: false, url: "about:blank" }, { tabId: "t2", active: true, url: "http://127.0.0.1:5519/" }];
-  const parked = before.map((tab) => ({ ...tab, url: "about:blank" }));
-  expect(() => assertTodoParkedTabs(before, parked, "t2", 1)).not.toThrow();
+  const parked = before.map((tab, index) => ({ ...tab, url: index === 0 ? "about:blank" : todoNativeParkUrl(5519) }));
+  expect(() => assertTodoParkedTabs(before, parked, "t2", 1, 5519)).not.toThrow();
   for (const after of [parked.slice(0, 1), [...parked, { tabId: "t3", active: false, url: "about:blank" }], before,
-    parked.map((tab, index) => index === 0 ? { ...tab, tabId: "t9" } : tab), parked.map((tab) => ({ ...tab, active: !tab.active }))]) expect(() => assertTodoParkedTabs(before, after, "t2", 1)).toThrow();
-  for (const contexts of [0, 2, 9, NaN, 1.5]) expect(() => assertTodoParkedTabs(before, parked, "t2", contexts)).toThrow();
-  expect(() => assertTodoParkedTabs(before, parked, "t1", 1)).toThrow();
+    parked.map((tab, index) => index === 0 ? { ...tab, tabId: "t9" } : tab), parked.map((tab) => ({ ...tab, active: !tab.active })),
+    ...["about:blank", todoNativeParkUrl(5520), todoNativeParkUrl(5519) + "?extra=1", "https://example.com/__todo_native_park"].map((url) => parked.map((tab, index) => index === 0 ? tab : { ...tab, url }))]) expect(() => assertTodoParkedTabs(before, after, "t2", 1, 5519)).toThrow();
+  for (const contexts of [0, 2, 9, NaN, 1.5]) expect(() => assertTodoParkedTabs(before, parked, "t2", contexts, 5519)).toThrow();
+  expect(() => assertTodoParkedTabs(before, parked, "t1", 1, 5519)).toThrow();
+  expect(() => assertTodoParkedTabs(before.map((tab) => ({ ...tab, url: todoNativeParkUrl(5519) })), parked, "t2", 1, 5519)).toThrow();
+});
+test("parking document is a finite scriptless sandbox at the exact owned loopback port", async () => {
+  expect(todoNativeParkUrl(5519)).toBe("http://127.0.0.1:5519" + TODO_NATIVE_PARK_PATH);
+  for (const port of [80, NaN, 5519.5, 65536]) expect(() => todoNativeParkUrl(port)).toThrow();
+  const response = todoNativeParkResponse();
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-security-policy")).toBe("default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; sandbox");
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+  expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
+  expect(await response.text()).toBe('<!doctype html><html><head><meta charset="utf-8"><title>Verification parking</title></head><body></body></html>');
 });
 test("runtime CSS observation rejects style injection, adopted sheets and foreign fields", () => {
   const valid = { styleNodes: 0, adoptedSheets: 0, mutations: [] };

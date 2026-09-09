@@ -9,6 +9,20 @@ import {
 
 export const TODO_APPEARANCE_SCHEMA = "direct.todo-appearance/v1";
 export const TODO_APPEARANCE_BATCH_LIMIT = 8;
+export const TODO_NATIVE_PARK_PATH = "/__todo_native_park";
+export function todoNativeParkUrl(port: number): string {
+  assert.ok(Number.isSafeInteger(port) && port >= 1024 && port <= 65535, "owned parking port required");
+  return `http://127.0.0.1:${port}${TODO_NATIVE_PARK_PATH}`;
+}
+/** Verification-only inert document: no artifact, script, style or network input. */
+export function todoNativeParkResponse(): Response {
+  return new Response('<!doctype html><html><head><meta charset="utf-8"><title>Verification parking</title></head><body></body></html>', {
+    headers: {
+      "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff",
+      "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; sandbox",
+    },
+  });
+}
 export const TODO_APPEARANCE_CASES = ["production", "todos.empty", "todos.populated", "todos.write-failure", "unknown", "duplicate"] as const;
 export type TodoAppearanceCase = typeof TODO_APPEARANCE_CASES[number];
 export const TODO_APPEARANCE_WIDTHS = [1280, 390] as const;
@@ -109,13 +123,16 @@ export function assertTodoTabClosed(value: unknown, tabId: string): void {
   assert.equal(record.closed, true);
   assert.ok(record.label === null || (typeof record.label === "string" && record.label.length <= 4096), "bounded nullable closed-tab label required");
 }
-export function assertTodoParkedTabs(before: readonly TodoNativeTab[], after: readonly TodoNativeTab[], tabId: string, contexts: number): void {
+export function assertTodoParkedTabs(before: readonly TodoNativeTab[], after: readonly TodoNativeTab[], tabId: string, contexts: number, port: number): void {
   assert.ok(Number.isSafeInteger(contexts) && contexts >= 1 && contexts <= TODO_APPEARANCE_BATCH_LIMIT);
   assert.equal(before.length, contexts + 1, "only the inert bootstrap and bounded scenario contexts are admitted");
   assert.deepEqual(after.map((tab) => tab.tabId), before.map((tab) => tab.tabId), "parking changed the owned tab inventory");
   assert.deepEqual(before.filter((tab) => tab.active).map((tab) => tab.tabId), [tabId]);
   assert.deepEqual(after.filter((tab) => tab.active).map((tab) => tab.tabId), [tabId]);
-  assert.ok(after.every((tab) => tab.url === "about:blank"), "all completed contexts must remain parked at inert blank documents");
+  const [bootstrap] = before;
+  assert.ok(bootstrap && bootstrap.url === "about:blank" && !bootstrap.active, "original inert bootstrap required");
+  const parkedUrl = todoNativeParkUrl(port);
+  assert.ok(after.every((tab) => tab.url === (tab.tabId === bootstrap.tabId ? "about:blank" : parkedUrl)), "completed contexts must remain on the exact inert owned-loopback parking document");
 }
 /** The pinned driver calls this field origin but reports the complete page URL. */
 export function parseTodoEvaluation(value: unknown, port: number): unknown {
