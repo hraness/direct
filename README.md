@@ -41,19 +41,20 @@ real interface and feature state
 
 ## Install
 
-GitHub Releases are canonical for versions after 0.7.20, with npm as an optional
-mirror. The commands below retain the last verified npm release until the first
-canonical archive is live. See the [publishing guide](docs/publishing.md#install-and-update-from-github)
-for installing and verifying an exact release archive.
+Install the immutable [v0.7.21 GitHub release](https://github.com/hraness/direct/releases/tag/v0.7.21).
+GitHub Releases are canonical, with npm as an optional mirror of the same archive.
+See the [publishing guide](docs/publishing.md#install-and-update-from-github)
+for archive and provenance verification.
 
 Pin Direct as a development dependency:
 
 ```sh
-bun add --dev @hraness/direct@0.7.20
+bun add --dev https://github.com/hraness/direct/releases/download/v0.7.21/hraness-direct-0.7.21.tgz
 # or
-npm install --save-dev @hraness/direct@0.7.20
+npm install --save-dev https://github.com/hraness/direct/releases/download/v0.7.21/hraness-direct-0.7.21.tgz
 ```
 
+The verified npm mirror is also available as `@hraness/direct@0.7.21`.
 Keep Direct in `devDependencies`. A production entry must not import Direct,
 its fixture worlds, or its workbench.
 
@@ -64,7 +65,7 @@ composition. It requires Git and Bun 1.3.14, then downloads the source and its
 development dependencies:
 
 ```sh
-git clone --branch v0.7.20 --depth 1 https://github.com/hraness/direct.git
+git clone --branch v0.7.21 --depth 1 https://github.com/hraness/direct.git
 cd direct
 bun install --frozen-lockfile --ignore-scripts
 bun run example:direct
@@ -138,9 +139,9 @@ claim separate as `direct` evidence.
 Install Direct's single bundled skill from the public repository:
 
 ```sh
-npx skills add hraness/direct#v0.7.20
+npx skills add hraness/direct#v0.7.21
 # or
-bunx skills add hraness/direct#v0.7.20
+bunx skills add hraness/direct#v0.7.21
 ```
 
 The skill is invoked as `$direct`. It routes installation, adoption, and
@@ -153,8 +154,8 @@ installed skills during the current session.
 Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
-Use $direct to install hraness/direct from
-the npm registry at the exact 0.7.20 version. Follow the repository README, add
+Use $direct to install hraness/direct from the immutable v0.7.21 GitHub release
+archive. Follow the repository README, add
 `@hraness/direct` to devDependencies only, and verify that the production
 dependency graph excludes Direct. Do not add a fixture composition until I
 ask.
@@ -165,12 +166,12 @@ does not add Direct to a consumer project. The skills CLI remains the preferred
 way to let runners discover it; the packaged copy supports runners and tools
 that read skills from installed development dependencies.
 
-Pin the public npm package to an exact immutable version:
+Pin the canonical archive in the consumer manifest:
 
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "0.7.20"
+    "@hraness/direct": "https://github.com/hraness/direct/releases/download/v0.7.21/hraness-direct-0.7.21.tgz"
   }
 }
 ```
@@ -189,11 +190,11 @@ Packages built from this source include one Agent Skill under
 `node_modules/@hraness/direct/skills/direct/`. `$direct` guides a product-owned
 port and deterministic composition, then audits scenario behavior,
 quiescence, coverage claims, cleanup, and emitted production boundaries. The
-package smoke test keeps that future packaged copy byte-identical to the
+package smoke test keeps the packaged copy byte-identical to the tagged
 repository skill.
 
-Prefer `npx skills add hraness/direct#v0.7.20` or
-`bunx skills add hraness/direct#v0.7.20` for runner discovery. You can also copy
+Prefer `npx skills add hraness/direct#v0.7.21` or
+`bunx skills add hraness/direct#v0.7.21` for runner discovery. You can also copy
 or link that one skill directory into a runner's configured location, then
 invoke `$direct`. Package installation leaves the skill inert: it does not run
 a `postinstall` hook or edit repository or user configuration.
