@@ -350,7 +350,7 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       readonly version?: unknown;
     };
     expect(manifest).toEqual(expect.objectContaining({
-      version: "0.7.20",
+      version: "0.7.21",
       description: "A TypeScript harness for deterministic frontend testing and development with repeatable scenarios, local fixtures, and browser verification for coding agents.",
       keywords: [
         "frontend-development",
