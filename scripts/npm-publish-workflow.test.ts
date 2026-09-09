@@ -13,6 +13,7 @@ import {
 import { verifyNpmPackageIdentity } from "./npm-package-identity.js";
 
 const publishWorkflowUrl = new URL("../.github/workflows/npm-publish.yml", import.meta.url);
+const legacyReleaseWorkflowUrl = new URL("../.github/workflows/legacy-release.yml", import.meta.url);
 const releaseWorkflowUrl = new URL("../.github/workflows/release.yml", import.meta.url);
 const ciWorkflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
 const manifestUrl = new URL("../package.json", import.meta.url);
@@ -349,7 +350,7 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       readonly version?: unknown;
     };
     expect(manifest).toEqual(expect.objectContaining({
-      version: "0.7.20",
+      version: "0.7.21",
       description: "A TypeScript harness for deterministic frontend testing and development with repeatable scenarios, local fixtures, and browser verification for coding agents.",
       keywords: [
         "frontend-development",
@@ -410,7 +411,7 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
     expect(verifyStart).toBeGreaterThan(-1);
     expect(publishStart).toBeGreaterThan(verifyStart);
     const verifyJob = workflow.slice(verifyStart, publishStart);
-    const publishJob = workflow.slice(publishStart);
+    const publishJob = workflow.slice(publishStart, workflow.indexOf("\n  registry:\n"));
 
     expect(workflow).toContain("workflow_call:");
     expect(workflow).toContain("permissions:\n  contents: read");
@@ -430,12 +431,6 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       'bun-version: "1.3.14"',
       "npm@11.19.0",
       "name: Verify release tag identity",
-      "github.event.repository.default_branch",
-      '"$GITHUB_EVENT_NAME" != push',
-      '"$GITHUB_REF" != "refs/tags/$GITHUB_REF_NAME"',
-      'git merge-base --is-ancestor "$GITHUB_SHA" "$default_head"',
-      'release_ref="refs/direct-npm-publish-tags/$GITHUB_REF_NAME"',
-      'remote_tag_sha="$(git rev-parse "$release_ref^{commit}")"',
       "name: Verify package publication state",
       'npm view "$package_name" name --json',
       'npm view "$package_name@$package_version" version --json',
@@ -444,14 +439,17 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       "bun install --frozen-lockfile --ignore-scripts",
       "bun run check",
       "git status --porcelain --untracked-files=all -- dist bun.lock",
-      "scripts/prepare-npm-package.ts",
       "scripts/package-smoke.ts",
       '--archive "$archive"',
       '--pack-json "$metadata"',
       "npm-package.sha256",
       'sha256sum "$archive"',
       'sha256sum "$metadata"',
-      "$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT",
+      "$SOURCE_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT",
+      'git merge-base --is-ancestor "$source_sha" "$workflow_sha"',
+      'release_ref="refs/direct-npm-publish-tags/$REQUESTED_TAG"',
+      'node "$GITHUB_WORKSPACE/scripts/github-release.ts" mirror "$canonical_directory"',
+      'cp "$CANONICAL_DIRECTORY/$tarball_name" "$archive"',
       "Reviewed npm artifact must contain exactly three files",
       'if [[ ! -f "$required_file" || -L "$required_file" ]]',
       "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f",
@@ -521,7 +519,8 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
     }
 
     expect(workflow.match(/id-token: write/gu) ?? []).toHaveLength(1);
-    expect(publishJob).not.toContain("contents: read");
+    expect(publishJob).toContain("contents: read");
+    expect(publishJob).toContain("actions: read");
     expect(publishJob).not.toContain("actions/checkout@");
     expect(publishJob).not.toContain("setup-bun@");
     expect(publishJob).not.toMatch(/\bbun\b/u);
@@ -552,17 +551,17 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
     expect(workflow).not.toContain("workflow_dispatch:");
     expect(workflow).not.toMatch(/npm stage publish/u);
     expect(workflow.match(/registry-url: "https:\/\/registry\.npmjs\.org"/gu) ?? [])
-      .toHaveLength(2);
+      .toHaveLength(3);
     expect(new Set(workflow.match(/--registry=[^\s"')]+/gu) ?? []))
       .toEqual(new Set([`--registry=${npmRegistry}`]));
 
     for (const required of [
-      "if: github.event_name == 'push'",
+      "needs: [authorize, publish]",
       "contents: read\n      id-token: write",
       "uses: ./.github/workflows/npm-publish.yml",
-      "needs: npm",
-      "needs.npm.result == 'success'",
-      "github.event_name == 'workflow_dispatch'",
+      "needs.publish.result == 'success'",
+      "needs.authorize.outputs.mode == 'mirror'",
+      "workflow_dispatch:",
     ] as const) {
       expect(releaseWorkflow).toContain(required);
     }
@@ -579,12 +578,13 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
     const metadata = join(directory, "npm-pack.json");
     const digest = join(directory, "npm-package.sha256");
     const sourceSha = "b".repeat(40);
-    const archiveSha256 = "c".repeat(64);
-    const metadataSha256 = "d".repeat(64);
+    const archiveSha256 = createHash("sha256").update("reviewed tarball fixture\n").digest("hex");
+    const metadataSha256 = createHash("sha256").update("reviewed metadata fixture\n").digest("hex");
     const digestSha256 = "e".repeat(64);
     const gitStub = join(binaryDirectory, "git");
     const npmStub = join(binaryDirectory, "npm");
     const sha256Stub = join(binaryDirectory, "sha256sum");
+    const ghStub = join(binaryDirectory, "gh");
 
     try {
       await mkdir(binaryDirectory, { recursive: true });
@@ -596,7 +596,35 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       await writeFile(gitStub, `#!/bin/bash\nset -euo pipefail\nprintf 'git %s\\n' "$*" >> "$COMMAND_LOG"\ncase "$*" in\n  *"rev-parse refs/heads/main"*) printf '%s\\n' "$DEFAULT_SHA" ;;\n  *"rev-parse refs/tags/v0.7.20^{commit}"*) printf '%s\\n' "$TAG_SHA" ;;\n  *"merge-base --is-ancestor"*) [[ "$ANCESTRY_STATE" == ancestor ]] ;;\n  *"tag --list v*"*) printf '%s\\n' "$REMOTE_TAGS" ;;\nesac\n`, "utf8");
       await writeFile(sha256Stub, `#!/bin/bash\nset -euo pipefail\nprintf 'sha256sum %s\\n' "$*" >> "$COMMAND_LOG"\ncase "$1" in\n  "$TARBALL") value="$EXPECTED_ARCHIVE_SHA256" ;;\n  "$METADATA") value="$EXPECTED_METADATA_SHA256" ;;\n  "$DIGEST") value="$EXPECTED_DIGEST_SHA256" ;;\n  *) echo "unexpected hash target: $1" >&2; exit 1 ;;\nesac\nprintf '%s  %s\\n' "$value" "$1"\n`, "utf8");
       await writeFile(npmStub, `#!/bin/bash\nset -euo pipefail\nprintf 'npm %s\\n' "$*" >> "$COMMAND_LOG"\nif [[ "\${1-}" == view ]]; then\n  printf '%s\\n' "$PUBLISHED_VERSIONS_JSON"\n  exit 0\nfi\nprintf 'published\\n' > "$PUBLISH_MARKER"\n`, "utf8");
-      await Promise.all([chmod(gitStub, 0o755), chmod(npmStub, 0o755), chmod(sha256Stub, 0o755)]);
+      await writeFile(ghStub, `#!${process.execPath}
+const { readFileSync, appendFileSync } = require('node:fs');
+const { createHash } = require('node:crypto');
+const e = process.env, args = process.argv.slice(2), path = args.find(x => x.startsWith('/repos/'));
+appendFileSync(e.COMMAND_LOG, 'gh ' + args.join(' ') + '\\n');
+const source = e.EXPECTED_SOURCE_SHA, tag = 'v' + e.EXPECTED_VERSION;
+const names = ['hraness-direct-' + e.EXPECTED_VERSION + '.tgz', 'npm-pack.json', 'release-manifest.json', 'SHA256SUMS', 'provenance.jsonl'];
+const bytes = names.map((name, index) => index < 2 ? readFileSync(index ? e.METADATA : e.TARBALL) : Buffer.from(name));
+const assets = names.map((name, index) => ({ id: index + 1, name, state: 'uploaded', size: bytes[index].length,
+  digest: 'sha256:' + createHash('sha256').update(bytes[index]).digest('hex'),
+  browser_download_url: 'https://github.com/hraness/direct/releases/download/' + tag + '/' + name }));
+const run = id => ({ id, run_attempt: 1, workflow_id: 320004413, path: '.github/workflows/release.yml', name: 'Release',
+  head_sha: source, head_branch: tag, event: 'push', status: id === 111 ? 'completed' : 'in_progress', conclusion: id === 111 ? 'failure' : null,
+  actor: { id: 894119, type: 'User' }, triggering_actor: { id: e.BAD_ACTOR ? 99 : 894119, type: 'User' },
+  repository: { id: 1306913032, full_name: 'hraness/direct', private: false } });
+let value;
+if (path.endsWith('/git/ref/heads/main')) value = { object: { type: 'commit', sha: e.FRESH_MAIN_SHA || e.EXPECTED_WORKFLOW_SHA } };
+else if (path.includes('/git/ref/tags/')) value = { object: { type: 'commit', sha: source } };
+else if (path.endsWith('/releases/55')) value = { id: 55, tag_name: tag, name: 'Direct ' + tag, target_commitish: source,
+  draft: false, prerelease: false, immutable: true, author: { id: 41898282, login: 'github-actions[bot]', type: 'Bot' }, assets };
+else if (path.includes('/releases/assets/')) { process.stdout.write(e.BAD_BYTES ? Buffer.from('changed') : bytes[Number(path.split('/').pop()) - 1]); process.exit(0); }
+else if (path.includes('/jobs?')) value = { jobs: ['Authorize release request', 'Verify', 'Attest canonical artifact', 'Publish'].map((name, index) => ({
+  id: index + 1, name, run_id: 111, run_attempt: e.BAD_CANONICAL_ATTEMPT ? 2 : 1, head_sha: source, status: 'completed', conclusion: e.BAD_CANONICAL_JOB && index === 3 ? 'failure' : 'success' })) };
+else if (path.endsWith('/actions/runs/123/attempts/1')) value = run(123);
+else if (path.endsWith('/actions/runs/111/attempts/1')) value = run(111);
+else throw new Error('Unexpected fixture gh request ' + path);
+process.stdout.write(args.includes('--jq') ? value.object.sha + '\\n' : JSON.stringify(value));
+`, "utf8");
+      await Promise.all([chmod(gitStub, 0o755), chmod(npmStub, 0o755), chmod(sha256Stub, 0o755), chmod(ghStub, 0o755)]);
 
       const baseEnvironment = Object.freeze({
         ALREADY_PUBLIC: "false",
@@ -612,6 +640,16 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
         EXPECTED_VERSION: "0.7.20",
         GITHUB_REF: "refs/tags/v0.7.20",
         GITHUB_REPOSITORY: "hraness/direct",
+        GITHUB_REPOSITORY_ID: "1306913032",
+        GITHUB_ACTOR_ID: "894119",
+        GITHUB_EVENT_NAME: "push",
+        GITHUB_WORKFLOW_REF: "hraness/direct/.github/workflows/release.yml@refs/tags/v0.7.20",
+        GITHUB_RUN_ID: "123",
+        GITHUB_RUN_ATTEMPT: "1",
+        EXPECTED_WORKFLOW_SHA: "a".repeat(40),
+        CANONICAL_RELEASE_ID: "55",
+        CANONICAL_RUN_ID: "111",
+        CANONICAL_RUN_ATTEMPT: "1",
         GITHUB_SHA: sourceSha,
         METADATA: metadata,
         PATH: `${binaryDirectory}:${process.env.PATH ?? ""}`,
@@ -686,6 +724,11 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       );
       expect(await Bun.file(publishMarker).exists()).toBe(false);
 
+      for (const invalid of [{ BAD_ACTOR: "true" }, { BAD_BYTES: "true" }, { BAD_CANONICAL_JOB: "true" }, { BAD_CANONICAL_ATTEMPT: "true" }, { FRESH_MAIN_SHA: "f".repeat(40) }]) {
+        const denied = await runWorkflowScript(script, { ...baseEnvironment, ...invalid });
+        expect(denied.exitCode).not.toBe(0);
+        expect(await Bun.file(publishMarker).exists()).toBe(false);
+      }
       await rm(commandLog, { force: true });
       const idempotent = await runWorkflowScript(script, {
         ...baseEnvironment,
@@ -700,14 +743,14 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
 
   test("gates immutable releases on canonical package content and supports bounded recovery", async () => {
     const [workflow, artifact, identity] = await Promise.all([
-      readFile(releaseWorkflowUrl, "utf8"),
+      readFile(legacyReleaseWorkflowUrl, "utf8"),
       readFile(packageArtifactUrl, "utf8"),
       readFile(packageIdentityUrl, "utf8"),
     ]);
 
     for (const required of [
-      "workflow_dispatch:",
-      "Existing stable tag to recover after npm delivery succeeded",
+      "workflow_call:",
+      "Canonical releases cannot use historical asset-free recovery",
       "RECOVERY_TAG: ${{ inputs.tag }}",
       "Recovery must run from current $DEFAULT_BRANCH head",
       'release_ref="refs/direct-release-tags/$release_tag"',

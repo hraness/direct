@@ -10,6 +10,7 @@ interface and feature code against named, validated local fixture worlds, so
 signed-in, empty, and error states are repeatable without clicking through setup
 or depending on live systems.
 
+[Canonical GitHub releases](https://github.com/hraness/direct/releases) ·
 [Install @hraness/direct from npm](https://www.npmjs.com/package/@hraness/direct) ·
 [Direct source on GitHub](https://github.com/hraness/direct) ·
 [Direct overview](https://hraness.com/direct)
@@ -39,6 +40,11 @@ real interface and feature state
   a verifier reports a result.
 
 ## Install
+
+GitHub Releases are canonical for versions after 0.7.20, with npm as an optional
+mirror. The commands below retain the last verified npm release until the first
+canonical archive is live. See the [publishing guide](docs/publishing.md#install-and-update-from-github)
+for installing and verifying an exact release archive.
 
 Pin Direct as a development dependency:
 

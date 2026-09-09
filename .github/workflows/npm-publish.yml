@@ -2,6 +2,10 @@ name: Publish npm package
 
 on:
   workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -15,6 +19,9 @@ jobs:
     name: Verify exact package
     permissions:
       contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     outputs:
@@ -23,10 +30,18 @@ jobs:
       package_version: ${{ steps.artifact.outputs.package_version }}
       source_sha: ${{ steps.identity.outputs.source_sha }}
       tarball_name: ${{ steps.artifact.outputs.tarball_name }}
+      workflow_sha: ${{ steps.identity.outputs.workflow_sha }}
+      canonical_release_id: ${{ steps.identity.outputs.canonical_release_id }}
+      canonical_run_id: ${{ steps.identity.outputs.canonical_run_id }}
+      canonical_run_attempt: ${{ steps.identity.outputs.canonical_run_attempt }}
+      canonical_archive_sha256: ${{ steps.identity.outputs.archive_sha256 }}
+      canonical_pack_sha256: ${{ steps.identity.outputs.pack_sha256 }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          fetch-depth: 0
+          ref: main
+          fetch-depth: 1
+          fetch-tags: false
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
@@ -47,51 +62,35 @@ jobs:
       - name: Verify release tag identity
         id: identity
         env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REQUESTED_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" != push || \
-                "$GITHUB_REF" != "refs/tags/$GITHUB_REF_NAME" || \
-                ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "::error::npm publication requires an exact stable tag push"
-            exit 1
-          fi
-          git check-ref-format "refs/tags/$GITHUB_REF_NAME"
-          git check-ref-format "refs/heads/$DEFAULT_BRANCH"
-          git fetch --no-tags origin \
-            "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
-          default_head="$(git rev-parse "origin/$DEFAULT_BRANCH")"
-          checked_out_head="$(git rev-parse HEAD)"
-          if [[ "$GITHUB_SHA" != "$checked_out_head" ]]; then
-            echo "::error::Tag event does not match the checked package commit"
-            exit 1
-          fi
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" "$default_head"; then
-            echo "::error::Tag $GITHUB_REF_NAME is not reachable from current $DEFAULT_BRANCH"
-            exit 1
-          fi
-          package_name="$(node -p 'require("./package.json").name')"
-          package_version="$(node -p 'require("./package.json").version')"
-          if [[ "$package_name" != "@hraness/direct" || \
-                ! "$package_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ || \
-                "$GITHUB_REF_NAME" != "v$package_version" ]]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match the Direct package identity"
-            exit 1
-          fi
-          release_ref="refs/direct-npm-publish-tags/$GITHUB_REF_NAME"
-          git fetch --no-tags origin "refs/tags/$GITHUB_REF_NAME:$release_ref"
-          remote_tag_sha="$(git rev-parse "$release_ref^{commit}")"
-          if [[ "$remote_tag_sha" != "$GITHUB_SHA" ]]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not resolve to the checked package commit"
-            exit 1
-          fi
-          printf 'source_sha=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          [[ "$GITHUB_REPOSITORY" == hraness/direct && "$GITHUB_REPOSITORY_ID" == 1306913032 && "$GITHUB_ACTOR_ID" == 894119 ]]
+          [[ "$REQUESTED_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          git fetch --no-tags --unshallow origin "refs/heads/main:refs/remotes/origin/main"
+          workflow_sha="$(git rev-parse HEAD)"
+          [[ "$workflow_sha" == "$(git rev-parse refs/remotes/origin/main)" ]]
+          release_ref="refs/direct-npm-publish-tags/$REQUESTED_TAG"
+          git fetch --no-tags origin "refs/tags/$REQUESTED_TAG:$release_ref"
+          [[ "$(git cat-file -t "$release_ref")" == commit ]]
+          source_sha="$(git rev-parse "$release_ref^{commit}")"
+          git merge-base --is-ancestor "$source_sha" "$workflow_sha"
+          canonical_directory="$RUNNER_TEMP/direct-canonical-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          EXPECTED_VERSION="${REQUESTED_TAG#v}" EXPECTED_WORKFLOW_SHA="$workflow_sha" \
+            node "$GITHUB_WORKSPACE/scripts/github-release.ts" mirror "$canonical_directory"
+          [[ "$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).sourceSha' "$canonical_directory/release-manifest.json")" == "$source_sha" ]]
+          source_tree="$RUNNER_TEMP/direct-mirror-source"
+          git worktree add --detach "$source_tree" "$source_sha"
+          printf 'source_sha=%s\nworkflow_sha=%s\nsource_tree=%s\ncanonical_directory=%s\n' \
+            "$source_sha" "$workflow_sha" "$source_tree" "$canonical_directory" >> "$GITHUB_OUTPUT"
       - name: Verify package publication state
         id: availability
+        env:
+          SOURCE_TREE: ${{ steps.identity.outputs.source_tree }}
         run: |
           set -euo pipefail
-          package_name="$(node -p 'require("./package.json").name')"
-          package_version="$(node -p 'require("./package.json").version')"
+          package_name="$(node -p 'require(process.env.SOURCE_TREE + "/package.json").name')"
+          package_version="$(node -p 'require(process.env.SOURCE_TREE + "/package.json").version')"
           if [[ "$package_name" != "@hraness/direct" ]]; then
             echo "::error::Unexpected package name $package_name"
             exit 1
@@ -118,8 +117,11 @@ jobs:
           fi
           printf 'already_public=%s\n' "$already_public" >> "$GITHUB_OUTPUT"
       - run: bun install --frozen-lockfile --ignore-scripts
+        working-directory: ${{ steps.identity.outputs.source_tree }}
       - run: bun run check
+        working-directory: ${{ steps.identity.outputs.source_tree }}
       - name: Verify generated tree
+        working-directory: ${{ steps.identity.outputs.source_tree }}
         run: |
           set -euo pipefail
           generated_status="$(git status --porcelain --untracked-files=all -- dist bun.lock)"
@@ -129,18 +131,35 @@ jobs:
           fi
       - name: Prepare and smoke exact npm artifact
         id: artifact
+        env:
+          CANONICAL_DIRECTORY: ${{ steps.identity.outputs.canonical_directory }}
+          SOURCE_TREE: ${{ steps.identity.outputs.source_tree }}
+          SOURCE_SHA: ${{ steps.identity.outputs.source_sha }}
+          WORKFLOW_SHA: ${{ steps.identity.outputs.workflow_sha }}
+          EXPECTED_VERSION: ${{ steps.identity.outputs.package_version }}
         run: |
           set -euo pipefail
           artifact_directory="$RUNNER_TEMP/direct-npm-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          package_version="$(node -p 'require("./package.json").version')"
+          package_version="$EXPECTED_VERSION"
           tarball_name="hraness-direct-$package_version.tgz"
           archive="$artifact_directory/$tarball_name"
           metadata="$artifact_directory/npm-pack.json"
           digest="$artifact_directory/npm-package.sha256"
-          bun run ./scripts/prepare-npm-package.ts "$artifact_directory"
-          bun run ./scripts/package-smoke.ts \
-            --archive "$archive" \
-            --pack-json "$metadata"
+          [[ "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" == "$WORKFLOW_SHA" ]]
+          for tool in scripts/github-release.ts scripts/package-smoke.ts scripts/package-artifact.ts scripts/npm-package-identity.ts; do
+            [[ -f "$GITHUB_WORKSPACE/$tool" && ! -L "$GITHUB_WORKSPACE/$tool" ]]
+            [[ "$(git -C "$GITHUB_WORKSPACE" rev-parse "$WORKFLOW_SHA:$tool")" == "$(git hash-object "$GITHUB_WORKSPACE/$tool")" ]]
+          done
+          EXPECTED_WORKFLOW_SHA="$WORKFLOW_SHA" node "$GITHUB_WORKSPACE/scripts/github-release.ts" mirror-verify "$CANONICAL_DIRECTORY"
+          mkdir "$artifact_directory"
+          cp "$CANONICAL_DIRECTORY/$tarball_name" "$archive"
+          cp "$CANONICAL_DIRECTORY/npm-pack.json" "$metadata"
+          (
+            cd "$SOURCE_TREE"
+            bun --no-env-file --config=/dev/null run "$GITHUB_WORKSPACE/scripts/package-smoke.ts" \
+              --archive "$archive" \
+              --pack-json "$metadata"
+          )
           archive_sha256="$(sha256sum "$archive" | cut -d ' ' -f 1)"
           metadata_sha256="$(sha256sum "$metadata" | cut -d ' ' -f 1)"
           printf '%s  %s\n%s  npm-pack.json\n' \
@@ -163,7 +182,7 @@ jobs:
               exit 1
             fi
           done
-          artifact_name="npm-package-$package_version-$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          artifact_name="npm-package-$package_version-$SOURCE_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           printf 'artifact_name=%s\npackage_version=%s\ntarball_name=%s\n' \
             "$artifact_name" "$package_version" "$tarball_name" >> "$GITHUB_OUTPUT"
       - name: Upload reviewed npm artifact
@@ -180,6 +199,10 @@ jobs:
     needs: verify
     permissions:
       id-token: write
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -224,6 +247,8 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
           EXPECTED_TARBALL_NAME: ${{ needs.verify.outputs.tarball_name }}
           EXPECTED_VERSION: ${{ needs.verify.outputs.package_version }}
+          CANONICAL_ARCHIVE_SHA256: ${{ needs.verify.outputs.canonical_archive_sha256 }}
+          CANONICAL_PACK_SHA256: ${{ needs.verify.outputs.canonical_pack_sha256 }}
         run: |
           set -euo pipefail
           artifact_directory="$RUNNER_TEMP/direct-npm-publish"
@@ -306,6 +331,9 @@ jobs:
           const archiveSha256 = createHash("sha256").update(archiveBytes).digest("hex");
           const metadataSha256 = createHash("sha256").update(metadataBytes).digest("hex");
           const digestSha256 = createHash("sha256").update(digestBytes).digest("hex");
+          if (archiveSha256 !== process.env.CANONICAL_ARCHIVE_SHA256 || metadataSha256 !== process.env.CANONICAL_PACK_SHA256) {
+            throw new Error("Downloaded mirror differs from the cryptographically verified canonical archive");
+          }
           const digestText = new TextDecoder("utf-8", { fatal: true }).decode(digestBytes);
           const digestLines = digestText.split("\n");
           if (digestLines.length !== 3 || digestLines[2] !== "") {
@@ -344,8 +372,10 @@ jobs:
           if (!/^hraness-direct-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.tgz$/u.test(record.filename)) {
             throw new Error("npm-pack.json has an unsafe tarball filename");
           }
+          // Match the parser's existing exact-path allowance for its private type dependency.
+          const outputSourceCount = Array.isArray(record.files) && record.files.some(file => file?.path === "src/tooling/verification-output.ts") ? 1 : 0;
           for (const [field, minimum, maximum] of [
-            ["entryCount", minimumFiles, maximumFiles],
+            ["entryCount", minimumFiles, maximumFiles + outputSourceCount],
             ["size", minimumPackedBytes, maximumPackedBytes],
             ["unpackedSize", minimumUnpackedBytes, maximumUnpackedBytes],
           ]) {
@@ -435,6 +465,10 @@ jobs:
       - name: Revalidate release tag and publish exact package
         env:
           ALREADY_PUBLIC: ${{ needs.verify.outputs.already_public }}
+          EXPECTED_WORKFLOW_SHA: ${{ needs.verify.outputs.workflow_sha }}
+          CANONICAL_RELEASE_ID: ${{ needs.verify.outputs.canonical_release_id }}
+          CANONICAL_RUN_ID: ${{ needs.verify.outputs.canonical_run_id }}
+          CANONICAL_RUN_ATTEMPT: ${{ needs.verify.outputs.canonical_run_attempt }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           DIGEST: ${{ steps.artifact.outputs.digest }}
           EXPECTED_ARCHIVE_SHA256: ${{ steps.artifact.outputs.archive_sha256 }}
@@ -461,9 +495,7 @@ jobs:
             "refs/tags/v*:refs/tags/v*"
           current_default_sha="$(git --git-dir="$current_repository" rev-parse "refs/heads/$DEFAULT_BRANCH")"
           current_tag_sha="$(git --git-dir="$current_repository" rev-parse "refs/tags/$release_tag^{commit}")"
-          if [[ "$GITHUB_REF" != "refs/tags/$release_tag" || \
-                "$GITHUB_SHA" != "$EXPECTED_SOURCE_SHA" || \
-                "$current_tag_sha" != "$EXPECTED_SOURCE_SHA" ]]; then
+          if [[ "$current_default_sha" != "$EXPECTED_WORKFLOW_SHA" || "$current_tag_sha" != "$EXPECTED_SOURCE_SHA" ]]; then
             echo "::error::Tag $release_tag changed after artifact verification"
             exit 1
           fi
@@ -481,6 +513,79 @@ jobs:
             echo "::error::Downloaded package changed after release-tag verification"
             exit 1
           fi
+          node <<'NODE'
+          const { execFileSync } = require('node:child_process');
+          const { readFileSync } = require('node:fs');
+          const { createHash } = require('node:crypto');
+          const e = process.env;
+          const fail = message => { throw new Error(message); };
+          const positive = value => Number.isSafeInteger(value) && value > 0;
+          const sha = /^[a-f0-9]{40}$/u;
+          const tag = `v${e.EXPECTED_VERSION}`;
+          const dispatch = e.GITHUB_EVENT_NAME === 'workflow_dispatch';
+          const source = dispatch ? e.EXPECTED_WORKFLOW_SHA : e.EXPECTED_SOURCE_SHA;
+          const ref = dispatch ? 'refs/heads/main' : `refs/tags/${tag}`;
+          if (e.GITHUB_REPOSITORY !== 'hraness/direct' || e.GITHUB_REPOSITORY_ID !== '1306913032'
+            || e.GITHUB_ACTOR_ID !== '894119' || (!dispatch && e.GITHUB_EVENT_NAME !== 'push')
+            || e.GITHUB_SHA !== source || e.GITHUB_REF !== ref || e.GITHUB_WORKFLOW_REF !== `hraness/direct/.github/workflows/release.yml@${ref}`
+            || !sha.test(e.EXPECTED_SOURCE_SHA ?? '') || !sha.test(e.EXPECTED_WORKFLOW_SHA ?? '')) fail('Untrusted mirror event');
+          const options = { timeout: 30000, killSignal: 'SIGKILL', maxBuffer: 8000000, stdio: ['ignore', 'pipe', 'pipe'] };
+          const api = path => JSON.parse(execFileSync('gh', ['api', '--method', 'GET', `/repos/hraness/direct/${path}`], options).toString('utf8'));
+          const run = api(`actions/runs/${e.GITHUB_RUN_ID}/attempts/${e.GITHUB_RUN_ATTEMPT}`);
+          if (run.id !== Number(e.GITHUB_RUN_ID) || run.run_attempt !== Number(e.GITHUB_RUN_ATTEMPT)
+            || run.workflow_id !== 320004413 || run.path !== '.github/workflows/release.yml' || run.name !== 'Release'
+            || run.head_sha !== source || run.head_branch !== (dispatch ? 'main' : tag) || run.event !== e.GITHUB_EVENT_NAME
+            || run.status !== 'in_progress' || run.conclusion !== null
+            || run.actor?.id !== 894119 || run.actor?.type !== 'User' || run.triggering_actor?.id !== 894119 || run.triggering_actor?.type !== 'User'
+            || run.repository?.id !== 1306913032 || run.repository?.full_name !== 'hraness/direct' || run.repository?.private !== false) fail('Mirror run authority changed');
+          const main = api('git/ref/heads/main').object;
+          const version = api(`git/ref/tags/${tag}`).object;
+          if (main?.type !== 'commit' || main.sha !== e.EXPECTED_WORKFLOW_SHA
+            || version?.type !== 'commit' || version.sha !== e.EXPECTED_SOURCE_SHA) fail('Mirror source or current workflow moved');
+          const releaseId = Number(e.CANONICAL_RELEASE_ID), runId = Number(e.CANONICAL_RUN_ID), attempt = Number(e.CANONICAL_RUN_ATTEMPT);
+          if (![releaseId, runId, attempt].every(positive)) fail('Invalid canonical provider identity');
+          const release = api(`releases/${releaseId}`);
+          const names = [`hraness-direct-${e.EXPECTED_VERSION}.tgz`, 'npm-pack.json', 'release-manifest.json', 'SHA256SUMS', 'provenance.jsonl'];
+          if (release.id !== releaseId || release.tag_name !== tag || release.name !== `Direct ${tag}`
+            || release.target_commitish !== e.EXPECTED_SOURCE_SHA || release.draft !== false || release.prerelease !== false || release.immutable !== true
+            || release.author?.id !== 41898282 || release.author?.login !== 'github-actions[bot]' || release.author?.type !== 'Bot'
+            || !Array.isArray(release.assets) || release.assets.length !== 5
+            || JSON.stringify(release.assets.map(a => a.name).sort()) !== JSON.stringify([...names].sort())) fail('Canonical immutable release changed');
+          const ids = new Set();
+          for (const asset of release.assets) {
+            if (!positive(asset.id) || ids.has(asset.id) || asset.state !== 'uploaded' || !positive(asset.size)
+              || !/^sha256:[a-f0-9]{64}$/u.test(asset.digest ?? '')
+              || asset.browser_download_url !== `https://github.com/hraness/direct/releases/download/${tag}/${asset.name}`) fail('Canonical asset identity is invalid');
+            ids.add(asset.id);
+          }
+          for (const [name, path, expected] of [[names[0], e.TARBALL, e.EXPECTED_ARCHIVE_SHA256], ['npm-pack.json', e.METADATA, e.EXPECTED_METADATA_SHA256]]) {
+            const asset = release.assets.find(a => a.name === name), bytes = readFileSync(path);
+            const remote = execFileSync('gh', ['api', '--method', 'GET', `/repos/hraness/direct/releases/assets/${asset.id}`, '-H', 'Accept: application/octet-stream'], options);
+            if (asset.size !== bytes.length || asset.digest !== `sha256:${expected}` || createHash('sha256').update(bytes).digest('hex') !== expected
+              || !remote.equals(bytes)) fail('npm mirror bytes differ from the canonical release');
+          }
+          const canonical = api(`actions/runs/${runId}/attempts/${attempt}`);
+          if (canonical.id !== runId || canonical.run_attempt !== attempt || canonical.workflow_id !== 320004413 || canonical.name !== 'Release'
+            || canonical.path !== '.github/workflows/release.yml' || canonical.event !== 'push' || canonical.head_sha !== e.EXPECTED_SOURCE_SHA || canonical.head_branch !== tag
+            || canonical.actor?.id !== 894119 || canonical.actor?.type !== 'User' || canonical.triggering_actor?.id !== 894119 || canonical.triggering_actor?.type !== 'User'
+            || canonical.repository?.id !== 1306913032 || canonical.repository?.full_name !== 'hraness/direct' || canonical.repository?.private !== false) fail('Canonical provenance run changed');
+          const required = new Set(['Authorize release request', 'Verify', 'Attest canonical artifact', 'Publish']);
+          const seenJobs = new Set(), seenIds = new Set();
+          let complete = false;
+          for (let page = 1; page <= 10; page++) {
+            const response = api(`actions/runs/${runId}/attempts/${attempt}/jobs?per_page=100&page=${page}`);
+            if (!Array.isArray(response.jobs) || response.jobs.length > 100) fail('Invalid canonical job inventory');
+            for (const job of response.jobs) {
+              if (!positive(job.id) || seenIds.has(job.id) || job.run_id !== runId || job.run_attempt !== attempt || job.head_sha !== e.EXPECTED_SOURCE_SHA) fail('Canonical job source identity changed');
+              seenIds.add(job.id);
+              if (!required.has(job.name)) continue;
+              if (seenJobs.has(job.name) || job.status !== 'completed' || job.conclusion !== 'success') fail('Canonical publication job has not succeeded');
+              seenJobs.add(job.name);
+            }
+            if (response.jobs.length < 100) { complete = true; break; }
+          }
+          if (!complete || seenJobs.size !== required.size) fail('Canonical publication proof is incomplete');
+          NODE
           case "$ALREADY_PUBLIC" in
             true)
               echo "@hraness/direct@$EXPECTED_VERSION is already public; registry verification will prove identity"
@@ -529,6 +634,12 @@ jobs:
                 echo "::error::Tag $release_tag is not the newest stable tag $newest_stable_tag"
                 exit 1
               fi
+              fresh_main="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq '.object.sha')"
+              fresh_tag="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/tags/$release_tag" --jq '.object.sha')"
+              if [[ "$fresh_main" != "$EXPECTED_WORKFLOW_SHA" || "$fresh_tag" != "$EXPECTED_SOURCE_SHA" ]]; then
+                echo "::error::Release source changed immediately before npm publication"
+                exit 1
+              fi
               npm publish "$TARBALL" \
                 --access public \
                 --ignore-scripts \
@@ -540,3 +651,132 @@ jobs:
               exit 1
               ;;
           esac
+
+
+  registry:
+    name: Verify registry mirror
+    needs: [verify, publish]
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+          registry-url: "https://registry.npmjs.org"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+      - name: Pin npm
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.19.0 --ignore-scripts --registry=https://registry.npmjs.org
+          test "$(npm --version)" = "11.19.0"
+      - name: Rebind canonical mirror source
+        id: source
+        env:
+          EXPECTED_VERSION: ${{ needs.verify.outputs.package_version }}
+          EXPECTED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          EXPECTED_WORKFLOW_SHA: ${{ needs.verify.outputs.workflow_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --unshallow origin "refs/heads/main:refs/remotes/origin/main"
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_WORKFLOW_SHA" && "$(git rev-parse refs/remotes/origin/main)" == "$EXPECTED_WORKFLOW_SHA" ]]
+          git merge-base --is-ancestor "$EXPECTED_SOURCE_SHA" "$EXPECTED_WORKFLOW_SHA"
+          canonical_directory="$RUNNER_TEMP/direct-registry-canonical"
+          node "$GITHUB_WORKSPACE/scripts/github-release.ts" mirror "$canonical_directory"
+          source_tree="$RUNNER_TEMP/direct-registry-source"
+          git worktree add --detach "$source_tree" "$EXPECTED_SOURCE_SHA"
+          printf 'tree=%s\ncanonical_directory=%s\n' "$source_tree" "$canonical_directory" >> "$GITHUB_OUTPUT"
+      - name: Install isolated source consumer tools
+        working-directory: ${{ steps.source.outputs.tree }}
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Verify registry mirror identity and installation
+        env:
+          EXPECTED_NAME: "@hraness/direct"
+          EXPECTED_VERSION: v${{ needs.verify.outputs.package_version }}
+          SOURCE_TREE: ${{ steps.source.outputs.tree }}
+          CANONICAL_DIRECTORY: ${{ steps.source.outputs.canonical_directory }}
+          WORKFLOW_SHA: ${{ needs.verify.outputs.workflow_sha }}
+        run: |
+          set -euo pipefail
+          package_version="${EXPECTED_VERSION#v}"
+          if [[ "$EXPECTED_VERSION" != "v$package_version" || \
+                ! "$package_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Verified package version is invalid"
+            exit 1
+          fi
+          package_spec="$EXPECTED_NAME@$package_version"
+          tarball_name="hraness-direct-$package_version.tgz"
+          source_directory="$CANONICAL_DIRECTORY"
+          registry_directory="$RUNNER_TEMP/direct-release-registry-package"
+          source_archive="$source_directory/$tarball_name"
+          source_pack_json="$source_directory/npm-pack.json"
+          registry_archive="$registry_directory/$tarball_name"
+          registry_pack_json="$registry_directory/npm-pack.json"
+          registry_view_json="$registry_directory/npm-view.json"
+
+          if [[ "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" != "$WORKFLOW_SHA" ]]; then
+            echo "::error::Reviewed workflow checkout changed before package verification"
+            exit 1
+          fi
+          current_tools=(
+            scripts/package-artifact.ts
+            scripts/npm-package-identity.ts
+            scripts/package-smoke.ts
+            scripts/github-release.ts
+          )
+          for relative_tool in "${current_tools[@]}"; do
+            current_tool="$GITHUB_WORKSPACE/$relative_tool"
+            if [[ ! -f "$current_tool" || -L "$current_tool" ]]; then
+              echo "::error::Reviewed current workflow tool is missing or linked: $relative_tool"
+              exit 1
+            fi
+            expected_blob="$(git -C "$GITHUB_WORKSPACE" rev-parse "$WORKFLOW_SHA:$relative_tool")"
+            actual_blob="$(git hash-object "$current_tool")"
+            if [[ "$actual_blob" != "$expected_blob" ]]; then
+              echo "::error::Reviewed current workflow tool changed: $relative_tool"
+              exit 1
+            fi
+          done
+          current_identity="$GITHUB_WORKSPACE/scripts/npm-package-identity.ts"
+          current_smoke="$GITHUB_WORKSPACE/scripts/package-smoke.ts"
+
+          EXPECTED_VERSION="$package_version" EXPECTED_WORKFLOW_SHA="$WORKFLOW_SHA" \
+            node "$GITHUB_WORKSPACE/scripts/github-release.ts" mirror-verify "$source_directory"
+          mkdir -p "$registry_directory"
+          npm pack "$package_spec" \
+            --ignore-scripts \
+            --json \
+            --pack-destination "$registry_directory" \
+            --registry=https://registry.npmjs.org \
+            > "$registry_pack_json"
+          npm view "$package_spec" name version dist \
+            --json \
+            --registry=https://registry.npmjs.org \
+            > "$registry_view_json"
+          bun --no-env-file --config=/dev/null run "$current_identity" \
+            --expected-name "$EXPECTED_NAME" \
+            --expected-version "$package_version" \
+            --source-archive "$source_archive" \
+            --source-pack-json "$source_pack_json" \
+            --registry-archive "$registry_archive" \
+            --registry-pack-json "$registry_pack_json" \
+            --registry-view-json "$registry_view_json"
+          (
+            cd "$SOURCE_TREE"
+            bun --no-env-file --config=/dev/null run "$current_smoke" \
+              --archive "$registry_archive" \
+              --pack-json "$registry_pack_json"
+          )
