@@ -8,6 +8,7 @@
 - `vite.config.ts` – guard against uncompiled legacy Vite invocation.
 - `tsconfig.json` – strict example typecheck boundary.
 - `verify.ts` – bounded production and Direct build/scan gate with retained immutable generation outputs.
+- `native-appearance.ts` and its contract/tests – exact-generation native comparison, keyboard checks, negative controls, and owned browser/server collection.
 - `README.md` – commands, layout, scenarios, and proof limits.
 
 # Guidelines
@@ -21,3 +22,4 @@
 - Preserve the qualified CSS-import chain: public compiler foundation is the document stylesheet's first import, and that stylesheet is each JavaScript entry's last import. Keep all native source-map checks enabled.
 - Keep all component presentation in finite StyleX recipes; `src/styles.css` is only the shared document/reset boundary. Preview changes require rebuild/restart/manual refresh, not an HMR claim.
 - Update the scenario catalog, coverage catalog, example tests, and README together.
+- Native appearance verification takes explicit sealed source/build/browser identities. Preserve failed receipts; do not adopt a server, infer a latest generation, replace expected baseline styles, or treat a canary as baseline acceptance.
