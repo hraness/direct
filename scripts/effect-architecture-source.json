@@ -1,0 +1,25 @@
+{
+  "schema": "effect-architecture-source/v1",
+  "edition": "1.5.0",
+  "canonicalRepository": "https://github.com/hraness/direct",
+  "identity": "The reviewed containing Git commit identifies this canonical edition; consumers record its full SHA.",
+  "files": {
+    "scripts/check-effect-architecture.ts": "1d8828b92298ba1caabbc3a5158975a56bd4fde14e6df6894d2b5146bd14e33f",
+    "scripts/check-effect-architecture.test.ts": "08cc8386a5409113b4c7991c5e01982d82e2786302f291c1576298496caffb36"
+  },
+  "qualifiedToolchain": {
+    "bun": "1.3.14",
+    "typescript": "6.0.3",
+    "effect": "3.22.1",
+    "fast-check": "4.9.0"
+  },
+  "developmentOnly": true,
+  "reference": "docs/effect-architecture.md",
+  "predecessor": {
+    "edition": "1.4.0",
+    "origin": "Reviewed development-source packet; this record does not attribute its earlier canonical ownership to Direct.",
+    "engineSha256": "8518b621a789cd3a6c0cb74b15d2e8d59dfc3504304017fbd3aaf11a8300d35b",
+    "neutralFixtureSha256": "67add1e1ca9800d0a1e2183051313e2752cf687a779a6ee58a226c6283654315",
+    "adaptation": "Direct retains the .js extension in the fixture engine import."
+  }
+}
