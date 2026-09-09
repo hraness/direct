@@ -1,5 +1,8 @@
 # Architecture
 
+The [Effect architecture checker](./effect-architecture.md) documents the
+development constraints, module roles and independent source-adoption procedure.
+
 Direct changes the development composition below the behavior under review. The real interface, feature state, reducers, parsing, and navigation remain. Deterministic adapters replace the external boundary that makes a state slow, unavailable, or nondeterministic.
 
 ## Own the semantic port in the product
