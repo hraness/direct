@@ -18,7 +18,7 @@ import { TODO_STORAGE_KEY } from "./src/local-storage-todo-port.js";
 import {
   TODO_APPEARANCE_CASES, TODO_APPEARANCE_WIDTHS, TODO_BREAKPOINT_WIDTHS, TODO_STYLE_KEYS, TODO_NATIVE_PARK_PATH, todoNativeParkUrl, todoNativeParkResponse,
   admitTodoContext, assertTodoStable, assertTodoStaticCss, assertTodoParkedTabs, assertTodoConsole, boundedTodoBatches, compareTodoAppearance, exactRecord,
-  parseTodoAppearanceInput, parseTodoAppearanceSample, parseTodoDriverResult, parseTodoEvaluation, parseTodoNativeTabs as parseTabs, parseTodoOwnedClose, todoCasePath, todoFailureText as errorText, withTodoCleanup as withCleanup,
+  parseTodoAppearanceInput, parseTodoAppearanceSample, parseTodoDriverResult, parseTodoEvaluation, parseTodoNativeTabs as parseTabs, parseTodoOwnedClose, sampleTodoPaintMutation, todoCasePath, todoFailureText as errorText, withTodoCleanup as withCleanup,
   type TodoAppearanceCase, type TodoAppearanceDifference, type TodoAppearanceInput,
   type TodoAppearanceSample, type TodoSourceIdentity,
 } from "./native-appearance-contract.js";
@@ -582,8 +582,11 @@ async function checkNegativeControls(batch: NativeBatch, baseUrl: string, record
         assert.equal(await browser.evaluate(focusProgram), false, "focus suppression did not trip the native focus oracle");
         await record("negative-focus", { positiveBefore: true, rejectedAfterSuppression: true });
       } else {
-        await browser.evaluate(`(() => {const child=document.querySelector('nav[aria-label="Todo scenarios"] a small');if(!(child instanceof HTMLElement))throw new Error('Scenario description absent');child.style.setProperty('opacity','0','important');return true;})()`);
-        const changed = parseTodoAppearanceSample(await browser.evaluate(sampleProgram));
+        const changed = await sampleTodoPaintMutation(
+          () => browser.evaluate(`(() => {const child=document.querySelector('nav[aria-label="Todo scenarios"] a small');if(!(child instanceof HTMLElement))throw new Error('Scenario description absent');child.style.setProperty('opacity','0','important');return true;})()`),
+          () => browser.evaluate(renderSettleProgram),
+          async () => parseTodoAppearanceSample(await browser.evaluate(sampleProgram)),
+        );
         const differences = compareTodoAppearance("negative-descendant", before, changed);
         assert.ok(differences.some((difference) => difference.box === "scenario-description0" && difference.property === "opacity" && difference.current === "0"), "descendant-only opacity mutation did not trip the oracle");
         await record("negative-descendant-paint", { rejected: true, differences });

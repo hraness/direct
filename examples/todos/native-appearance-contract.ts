@@ -47,6 +47,13 @@ export const TODO_STYLE_KEYS = [
 ] as const;
 
 export const todoFailureText = (error: unknown) => (error instanceof Error ? `${error.name}: ${error.message}` : String(error)).slice(0, 4096);
+/** Observe a deliberate paint mutation only after the caller's native paint
+ * boundary completes. Do not poll for, rewrite or infer an expected style. */
+export async function sampleTodoPaintMutation<T>(mutate: () => Promise<unknown>, settle: () => Promise<unknown>, sample: () => Promise<T>): Promise<T> {
+  await mutate();
+  await settle();
+  return sample();
+}
 /** Cleanup is attempted exactly once and cannot erase the primary failure. */
 export async function withTodoCleanup<T>(work: () => Promise<T>, cleanup: () => Promise<void>): Promise<T> {
   let result: { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: unknown };

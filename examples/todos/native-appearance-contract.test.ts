@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import fc from "fast-check";
 import {
   TODO_APPEARANCE_SCHEMA, TODO_STYLE_KEYS, TODO_NATIVE_PARK_PATH, todoNativeParkUrl, todoNativeParkResponse, admitTodoContext, assertTodoStable, assertTodoStaticCss,
-  boundedTodoBatches, compareTodoAppearance, parseTodoAppearanceInput, parseTodoAppearanceSample,
+  boundedTodoBatches, compareTodoAppearance, parseTodoAppearanceInput, parseTodoAppearanceSample, sampleTodoPaintMutation,
   todoCasePath, parseTodoDriverResult, parseTodoEvaluation, parseTodoNativeTabs, assertTodoTabClosed, assertTodoParkedTabs, assertTodoConsole, parseTodoOwnedClose, withTodoCleanup, exactRecord,
 } from "./native-appearance-contract.js";
 
@@ -170,4 +170,40 @@ test("descendant-only paint changes cannot hide behind identical parent geometry
   const before = parseTodoAppearanceSample({ ...fixture, styles });
   const after = parseTodoAppearanceSample({ ...fixture, styles: { ...styles, "scenario-description0": { ...styles["scenario-description0"], opacity: "0" } } });
   expect(compareTodoAppearance("child", before, after)).toEqual([{ sample: "child", box: "scenario-description0", property: "opacity", baseline: "0.72", current: "0" }]);
+});
+
+test("paint mutation waits for native settlement before the unchanged comparison samples", async () => {
+  const order: string[] = [];
+  let releasePaint = () => {};
+  let paintStarted = () => {};
+  const paint = new Promise<void>(resolve => { releasePaint = resolve; });
+  const started = new Promise<void>(resolve => { paintStarted = resolve; });
+  const before = parseTodoAppearanceSample(sample());
+  const changed = sample();
+  changed.styles.heading.opacity = "0";
+  const after = parseTodoAppearanceSample(changed);
+  const observed = sampleTodoPaintMutation(
+    async () => { order.push("mutation"); },
+    async () => { order.push("settlement-start"); paintStarted(); await paint; order.push("settlement-complete"); },
+    async () => { order.push("sample"); return after; },
+  );
+  await started;
+  expect(order).toEqual(["mutation", "settlement-start"]);
+  releasePaint();
+  const actual = await observed;
+  expect(actual).toBe(after);
+  expect(order).toEqual(["mutation", "settlement-start", "settlement-complete", "sample"]);
+  expect(compareTodoAppearance("paint", before, actual)).toEqual([{ sample: "paint", box: "heading", property: "opacity", baseline: "normal", current: "0" }]);
+  const unchanged = await sampleTodoPaintMutation(async () => {}, async () => {}, async () => before);
+  expect(compareTodoAppearance("paint", before, unchanged)).toEqual([]);
+});
+
+test("mutation, settlement and sampling failures retain identity and prevent later stages", async () => {
+  const stages = ["mutation", "settlement", "sample"] as const;
+  for (const failing of stages) {
+    const order: string[] = [], failure = new Error(failing);
+    const operation = async (stage: typeof stages[number]) => { order.push(stage); if (stage === failing) throw failure; };
+    await expect(sampleTodoPaintMutation(() => operation("mutation"), () => operation("settlement"), () => operation("sample"))).rejects.toBe(failure);
+    expect(order).toEqual(stages.slice(0, stages.indexOf(failing) + 1));
+  }
 });
