@@ -83,6 +83,12 @@ installation smoke, npm workflow, package manifest, and lockfile. Source code
 runs only in read-only jobs; privileged jobs load the reviewed standalone
 built-in helper after comparing tagged and current-main Git blobs.
 
+Keep the clean consumer's verification toolchain pinned to a tuple qualified
+against Direct's own frozen dependencies. The smoke checks the five resolved
+package identities and records their manifest hashes and the consumer lock hash
+before compiling the original type fixtures. These verifier selectors do not
+change the public package's dependency requirements or historical artifacts.
+
 ## Install and update from GitHub
 
 After an asset is published and verified, install its exact stable version:
