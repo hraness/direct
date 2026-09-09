@@ -119,6 +119,31 @@ test("one finite real entry and document stylesheet are required", () => {
   }
 });
 
+test("compiled script census rejects malformed browser end tags and hidden extra entries", () => {
+  for (const role of ["baseline", "current"] as const) {
+    const script = `<script type="module"${role === "baseline" ? " crossorigin" : ""} src="/assets/entry.js"></script>`;
+    const styles = '<link rel="stylesheet" href="/assets/document.css">'
+      + (role === "current" ? '<link rel="stylesheet" href="/stylex.css">' : "");
+    const html = `<!doctype html><html><head>${styles}</head><body>${script}</body></html>`;
+    const outputs = ["assets/entry.js", "assets/document.css", ...(role === "current" ? ["stylex.css"] : [])];
+    expect(driver.busyHtmlReferences(html, outputs, role)).toEqual(outputs.map(path => `/${path}`));
+    expect(driver.busyHtmlReferences(html.replace("<body>", "<body>İ"), outputs, role)).toEqual(outputs.map(path => `/${path}`));
+    const malformedEnds = ["</script >", "</script\t>", "</script\n>", "</script/>", '</script foo="bar">', "</SCRIPT>", "</script"];
+    for (const closing of malformedEnds) {
+      expect(() => driver.busyHtmlReferences(html.replace("</script>", closing), outputs, role)).toThrow();
+      const extra = `<script>alert(1)${closing}`;
+      expect(() => driver.busyHtmlReferences(html.replace("</body>", `${extra}</body>`), outputs, role)).toThrow();
+    }
+    for (const extra of ["<ScRiPt>alert(1)</ScRiPt >", "<script/src=foreign.js></script>", "<!-- <script -->", "<scripture>"]) {
+      expect(() => driver.busyHtmlReferences(html + extra, outputs, role)).toThrow();
+    }
+    for (const replacement of [script + script, script.replace("<script", "<SCRIPT"), script.replace('src="', 'onload="bad()" src="'),
+      script.replace("></script>", ">alert(1)</script>"), script.replace("></script>", "> </script>"), script.replace("</script>", "")]) {
+      expect(() => driver.busyHtmlReferences(html.replace(script, replacement), outputs, role)).toThrow();
+    }
+  }
+});
+
 test("positive map closure requires every real runtime and excludes production/workbench/test sources", () => {
   for (const role of ["baseline", "current"]) driver.assertBusyMapClosure([...runtime, "node_modules/react/index.js"], role);
   for (let index = 0; index < runtime.length; index += 1) expect(() => driver.assertBusyMapClosure(runtime.filter((_, item) => item !== index), "current")).toThrow();

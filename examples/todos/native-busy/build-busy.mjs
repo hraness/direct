@@ -300,14 +300,26 @@ export function assertBusyRecipeReceipt(receipt, expectedArtifact) {
   assert.deepEqual(receipt.inputs.filter((item) => item.path === RECIPE), [{ path: RECIPE, bytes: expectedArtifact.bytes, sha256: expectedArtifact.sha256 }], "actual recipe compiler membership required");
 }
 export function busyHtmlReferences(html, outputPaths, role) {
+  expectedBusyPackages(role);
   assert.ok(!/<style\b|\sstyle\s*=/iu.test(html), "fixture must not introduce inline style");
   const references = [];
-  const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/giu)];
-  assert.equal(scripts.length, 1, "one compiled fixture entry required");
-  for (const [, attributes, body] of scripts) {
-    assert.equal(body.trim(), ""); assert.match(attributes, /\btype="module"/u);
-    const match = /\bsrc="([^"]+)"/u.exec(attributes); assert.ok(match); references.push(match[1]);
-  }
+  // These two compiler outputs have a closed script grammar. Count every raw
+  // spelling before accepting the canonical tag; malformed browser end tags
+  // or script-like text in comments must never disappear from the census.
+  const folded = html.replace(/[A-Z]/gu, character => character.toLowerCase());
+  assert.equal(folded.split("<script").length, 2, "one compiled fixture entry required");
+  assert.equal(folded.split("</script").length, 2, "one canonical script end required");
+  const start = folded.indexOf("<script"), end = folded.indexOf("</script");
+  const openingEnd = html.indexOf(">", start);
+  assert.ok(openingEnd > start && end > openingEnd, "complete script tag order required");
+  assert.equal(html.slice(end, end + "</script>".length), "</script>", "noncanonical script end");
+  const prefix = role === "baseline" ? '<script type="module" crossorigin src="' : '<script type="module" src="';
+  const opening = html.slice(start, openingEnd + 1);
+  assert.ok(opening.startsWith(prefix) && opening.endsWith('">'), "noncanonical compiled script opening");
+  const scriptUrl = opening.slice(prefix.length, -2);
+  assert.ok(!scriptUrl.includes('"') && !scriptUrl.includes("<"), "extra script attributes forbidden");
+  assert.equal(html.slice(openingEnd + 1, end), "", "compiled script body must be empty");
+  references.push(scriptUrl);
   const styles = [...html.matchAll(/<link\b([^>]*)>/giu)].filter(([, attributes]) => /\brel="stylesheet"/u.test(attributes));
   assert.equal(styles.length, role === "current" ? 2 : 1);
   for (const [, attributes] of styles) {
