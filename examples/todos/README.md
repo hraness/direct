@@ -136,3 +136,40 @@ this is not a screenshot-similarity score. Appearance samples are taken only
 after quiescence; transient loading and busy-state paint is not observed.
 Browser fixtures do not prove remote
 services, storage quota behavior, device appearance or production deployment.
+
+## Controlled pending-state comparison
+
+`native-busy/` adds a separate verification entry that mounts the real `TodoApp`
+with held read and write promises. The fixture exposes one-shot operation tickets;
+it does not inject React state, enable disabled inputs, or replace DOM observations
+with its own state. Each side covers 1280px and 390px viewports, successful and
+rejected writes, and four phases: read pending, ready, write pending, and finished.
+Native Tab and Space reach the real checkbox; a pointer attempt against the
+disabled checkbox must leave the pending write unchanged.
+
+Build each side in its own minimal prepared source directory with
+`native-busy/build-busy.mjs` under Node 24. The build request pins the complete
+source and shared fixture inventory, original HTML, Node binary, and resolved
+compiler packages and modules. The baseline uses Vite 8.1.5, Rolldown 1.1.5, and
+React plugin 6.0.4. The current side uses the repository's StyleX compiler and
+Vite 8.2.1/Rolldown 1.2.8. Both emit `/native-busy/index.html`; neither build
+changes the production or workbench entry. Retain both successful build receipts
+and all failed outputs.
+
+Run `bun examples/todos/native-busy/native.ts /absolute/private/input.json
+INPUT_SHA256` through the host and repository schedulers. Its exact input contains
+`schema: "direct.todo-busy-native/v1"`, `baseline` and `current` objects with
+`repository`, `commit`, `tree`, `receiptPath`, and `receiptSha256`, plus the same
+`browser`, `artifactParent`, and `port` fields as the ordinary comparison.
+Source checkouts must be committed and clean. The runner independently rejoins
+full Git blob bytes, shared fixtures, the one-entry HTML substitution, positive
+runtime source-map coverage, and the complete immutable output inventory.
+
+The comparison retains the ordinary geometry and exact computed-style oracle
+while pending promises remain unresolved across font and frame settlement.
+Receipts distinguish expected samples from observations reached before a failure.
+Browser, daemon, context parking, and server collection reuse the ordinary
+verifier's ownership rules. This fixture proves standalone pending-state paint;
+it does not prove workbench busy layout or production persistence timing. The
+ordinary comparison, its negative controls, and the separate edit/rebuild canary
+remain required. A successful fixture build alone is not native acceptance.

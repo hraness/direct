@@ -163,13 +163,13 @@ function ownProcessClosure(all: readonly ProcessIdentity[], roots: readonly Proc
   return [...result.values()];
 }
 
-interface NativeBatch {
+export interface NativeBatch {
   readonly browser: Pick<AgentBrowser, "run" | "evaluate">;
   readonly newContext: (label: string) => Promise<void>;
   readonly parkContext: () => Promise<void>;
   readonly close: () => Promise<void>;
 }
-async function createNativeBatch(input: TodoAppearanceInput, directory: string, record: (label: string, value: unknown) => Promise<void>): Promise<NativeBatch> {
+export async function createNativeBatch(input: Pick<TodoAppearanceInput, "browser" | "port">, directory: string, record: (label: string, value: unknown) => Promise<void>): Promise<NativeBatch> {
   const session = boundedAgentBrowserSessionName("todo", process.pid, randomUUID());
   // Short socket root is an exact new private leaf; no ambient cache/session is adopted.
   const sockets = await mkdtemp("/private/tmp/tn-");
@@ -352,7 +352,7 @@ async function createNativeBatch(input: TodoAppearanceInput, directory: string, 
     }, close };
 }
 
-const sampleProgram = `(() => {
+export const sampleProgram = `(() => {
   const styles = {}, boxes = [], keys = ${JSON.stringify(TODO_STYLE_KEYS)};
   const add = (name, node) => { if (!(node instanceof HTMLElement)) return;
     const rect = node.getBoundingClientRect(), computed = getComputedStyle(node);
@@ -392,7 +392,7 @@ const cssAuditProgram = `(() => {
   for(const node of nodes)if(node.shadowRoot)roots.push(node.shadowRoot);
   return {styleNodes:roots.reduce((n,root)=>n+root.querySelectorAll('style').length,0),adoptedSheets:roots.reduce((n,root)=>n+root.adoptedStyleSheets.length,0),mutations:[...window.__todoStyleAudit.mutations]};
 })()`;
-async function assertStaticCss(browser: Pick<AgentBrowser, "evaluate">): Promise<void> {
+export async function assertStaticCss(browser: Pick<AgentBrowser, "evaluate">): Promise<void> {
   assertTodoStaticCss(await browser.evaluate(cssAuditProgram));
 }
 

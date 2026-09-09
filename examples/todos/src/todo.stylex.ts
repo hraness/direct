@@ -21,6 +21,7 @@ export const todoStyles = stylex.create({
     fontWeight: 700,
     letterSpacing: "0.12em",
     textTransform: "uppercase",
+    overflowWrap: "normal",
   },
   heading: {
     margin: 0,
@@ -29,6 +30,7 @@ export const todoStyles = stylex.create({
     fontWeight: 700,
     letterSpacing: "-0.06em",
     lineHeight: 0.95,
+    overflowWrap: "normal",
   },
   remaining: { paddingBottom: 4, color: "#617064" },
   list: {
@@ -40,10 +42,14 @@ export const todoStyles = stylex.create({
     listStyle: "none",
   },
   surface: {
-    border: "1px solid #ccd7ce",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "#ccd7ce",
     borderRadius: 16,
     backgroundColor: "#fff",
     boxShadow: "0 12px 32px rgb(26 48 34 / 8%)",
+    // The foundation targets list items directly; preserve their native wrapping.
+    overflowWrap: "normal",
   },
   label: {
     display: "flex",
@@ -82,7 +88,9 @@ export const todoStyles = stylex.create({
   retry: {
     minHeight: 42,
     padding: "0 16px",
-    border: "1px solid #405849",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "#405849",
     borderRadius: 999,
     color: "#17211b",
     backgroundColor: "#fff",
