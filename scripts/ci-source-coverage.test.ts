@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 type RecordValue = Record<string, unknown>;
 
@@ -14,6 +16,10 @@ function record(value: unknown): RecordValue {
 
 const manifest = record(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")));
 const workflow = record(Bun.YAML.parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")));
+const releaseWorkflow = record(Bun.YAML.parse(readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8")));
+const canonicalPackScript = 'set -euo pipefail\npackage_directory="$(mktemp -d "$RUNNER_TEMP/direct-canonical-ci.XXXXXX")"\nbun --no-env-file --config=/dev/null run ./scripts/prepare-npm-package.ts "$package_directory"\ncat "$package_directory/npm-pack.json"\n';
+const canonicalPackStep = "      - name: Verify canonical npm archive\n        run: |\n"
+  + canonicalPackScript.trimEnd().split("\n").map((line) => `          ${line}\n`).join("");
 const phases = [
   "typecheck", "check:effect", "test:npm-release", "build", "test:package", "test", "lint",
   "example:test", "example:typecheck", "example:verify", "example:react-native:test",
@@ -62,13 +68,25 @@ function assertSourceCoverage(packageValue: RecordValue, workflowValue: RecordVa
     expect(step["continue-on-error"]).toBeUndefined();
   }
   const runs = steps.map((step) => step.run).filter((run): run is string => typeof run === "string");
-  expect(runs).toHaveLength(6);
+  expect(runs).toHaveLength(7);
   expect(runs[0]).toContain("npm install --global npm@11.19.0");
   expect(runs[1]).toBe("bun install --frozen-lockfile --ignore-scripts");
   expect(runs[2]).toBe("bun run check");
   expect(runs[3]).toBe('generated_status="$(git status --porcelain --untracked-files=all -- dist bun.lock)"\nif [[ -n "$generated_status" ]]; then\n  printf \'%s\\n\' "$generated_status"\n  exit 1\nfi\n');
   expect(runs[4]).toBe("bun pm pack --dry-run --ignore-scripts");
   expect(runs[5]).toBe('node --input-type=module -e \'await Promise.all(["./dist/index.js","./dist/core/index.js","./dist/react.js","./dist/testing/index.js","./dist/web.js","./dist/tooling/browser-verification-entry.js","./dist/tooling/bundle-boundary.js"].map((path) => import(path)))\'');
+  expect(runs[6]).toBe(canonicalPackScript);
+  const node = steps.find((step) => String(step.uses).startsWith("actions/setup-node@"));
+  expect(record(node?.with)["node-version"]).toBe("24.18.1");
+  expect(record(node?.with)["package-manager-cache"]).toBe(false);
+  const releaseVerify = record(record(releaseWorkflow.jobs).verify);
+  if (!Array.isArray(releaseVerify.steps)) throw new TypeError("Missing canonical release verification steps");
+  const releaseSteps = releaseVerify.steps.map(record);
+  const releaseNode = releaseSteps.find((step) => String(step.uses).startsWith("actions/setup-node@"));
+  expect(record(node?.with)["node-version"]).toBe(record(releaseNode?.with)["node-version"]);
+  expect(releaseSteps.some((step) => step.run === "npm install --global --ignore-scripts npm@11.19.0 --registry=https://registry.npmjs.org")).toBe(true);
+  expect(releaseSteps.some((step) => typeof step.run === "string"
+    && step.run.includes('bun --no-env-file --config=/dev/null run ./scripts/prepare-npm-package.ts "$release_directory"'))).toBe(true);
   const required = record(jobs.required);
   expect(required.name).toBe("Required");
   expect(required.if).toBe("always()");
@@ -82,8 +100,70 @@ function assertSourceCoverage(packageValue: RecordValue, workflowValue: RecordVa
 }
 
 test("complete CI retains the root aggregate, release-contract discovery, and committed-output checks", () => {
-  expect(createHash("sha256").update(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url))).digest("hex")).toBe("b47f2d0ead76414025eddf15dedbd940ba8114a53fc93b9efecc78554015aaa0");
+  const current = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  // Removing only this additive pack gate and its Node patch pin must recover all prior CI bytes.
+  const prior = current.replace(canonicalPackStep, "").replace('node-version: "24.18.1"', 'node-version: "24"');
+  expect(createHash("sha256").update(prior).digest("hex")).toBe("b47f2d0ead76414025eddf15dedbd940ba8114a53fc93b9efecc78554015aaa0");
   assertSourceCoverage(manifest, workflow);
+});
+
+test("canonical packing refuses helper, toolchain, conditional, and failure-propagation drift", () => {
+  const mutations = [
+    (steps: RecordValue[]) => { steps.pop(); },
+    (steps: RecordValue[]) => { record(steps.at(-1)).run = "bun pm pack --dry-run --ignore-scripts"; },
+    (steps: RecordValue[]) => { record(steps.at(-1)).run = `${canonicalPackScript.trimEnd()} || true\n`; },
+    (steps: RecordValue[]) => { record(steps.at(-1)).if = "false"; },
+    (steps: RecordValue[]) => { record(steps.at(-1))["continue-on-error"] = true; },
+    (steps: RecordValue[]) => {
+      record(steps.find((step) => String(step.uses).startsWith("actions/setup-node@"))?.with)["node-version"] = "24";
+    },
+    (steps: RecordValue[]) => {
+      const pin = steps.find((step) => step.name === "Pin npm");
+      record(pin).run = String(pin?.run).replaceAll("11.19.0", "11.18.0");
+    },
+  ];
+  for (const mutate of mutations) {
+    const changed = structuredClone(workflow);
+    const check = record(record(changed.jobs).check);
+    if (!Array.isArray(check.steps)) throw new TypeError("Missing check steps");
+    mutate(check.steps as RecordValue[]);
+    expect(() => assertSourceCoverage(manifest, changed)).toThrow();
+  }
+});
+
+test("the actual canonical pack shell uses a fresh directory and propagates preparation failure", () => {
+  const check = record(record(workflow.jobs).check);
+  if (!Array.isArray(check.steps)) throw new TypeError("Missing check steps");
+  const step = check.steps.map(record).find((value) => value.name === "Verify canonical npm archive");
+  if (typeof step?.run !== "string") throw new TypeError("Missing canonical pack shell");
+  for (const exitCode of [0, 23]) {
+    const root = mkdtempSync(join(tmpdir(), "direct-ci-pack-shell-"));
+    try {
+      const child = spawnSync("/bin/bash", ["-c", `
+bun() {
+  printf '%s\\n' "$@" > "$RUNNER_TEMP/invocation"
+  if [[ "$PREPARE_EXIT" != 0 ]]; then return "$PREPARE_EXIT"; fi
+  printf '[]\\n' > "$5/npm-pack.json"
+}
+${step.run}printf 'canonical-complete\\n'
+`], {
+        env: { NODE_ENV: "test", PATH: "/usr/bin:/bin", RUNNER_TEMP: root, PREPARE_EXIT: String(exitCode) },
+        timeout: 2_000, maxBuffer: 4_096, encoding: "utf8",
+      });
+      expect(child.error).toBeUndefined();
+      expect(child.status).toBe(exitCode);
+      const args = readFileSync(join(root, "invocation"), "utf8").trimEnd().split("\n");
+      expect(args.slice(0, 4)).toEqual(["--no-env-file", "--config=/dev/null", "run", "./scripts/prepare-npm-package.ts"]);
+      const directory = args[4];
+      if (directory === undefined) throw new TypeError("Missing canonical output directory");
+      expect(directory.startsWith(`${root}/direct-canonical-ci.`)).toBe(true);
+      expect(readdirSync(directory)).toEqual(exitCode === 0 ? ["npm-pack.json"] : []);
+      expect(existsSync(join(directory, "npm-pack.json"))).toBe(exitCode === 0);
+      expect(child.stdout).toBe(exitCode === 0 ? "[]\ncanonical-complete\n" : "");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
 });
 
 test("coverage admission detects omitted phases, filtered tests, conditional jobs, and ignored failures", () => {

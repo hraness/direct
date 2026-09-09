@@ -819,7 +819,7 @@ process.stdout.write(args.includes('--jq') ? value.object.sha + '\\n' : JSON.str
     for (const required of [
       "fetch-depth: 0",
       "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38",
-      'node-version: "24"',
+      'node-version: "24.18.1"',
       "package-manager-cache: false",
       "npm@11.19.0",
       'test "$(npm --version)" = "11.19.0"',
