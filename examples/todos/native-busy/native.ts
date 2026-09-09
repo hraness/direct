@@ -132,9 +132,15 @@ export function parseBusyBuildReceipt(value: unknown, identity: Source, role: "b
   assert.equal(request.schema, receipt.schema); assert.equal(request.role, role); assert.equal(request.receiptPath, identity.receiptPath);
   assert.equal(request.sourceCommit, identity.commit); assert.equal(request.sourceTree, identity.tree);
   const preparedRoot = absolutePath(request.root, "prepared root"), outputParent = absolutePath(request.outputParent, "output parent");
-  assert.ok(preparedRoot !== outputParent && !inside(preparedRoot, outputParent) && !inside(outputParent, preparedRoot));
+  if (role === "current") assert.equal(outputParent, join(preparedRoot, "busy-output"), "reserved in-root map publication required");
+  else assert.ok(preparedRoot !== outputParent && !inside(preparedRoot, outputParent) && !inside(outputParent, preparedRoot));
   assert.equal(dirname(identity.receiptPath), outputParent);
   const directory = absolutePath(receipt.output, "busy output"); assert.ok(inside(outputParent, directory));
+  if (role === "current") {
+    assert.equal(basename(directory), "todo-native-busy");
+    assert.equal(dirname(dirname(directory)), outputParent);
+    assert.match(basename(dirname(directory)), /^todo-busy-current-[A-Za-z0-9]+$/u);
+  }
   const files = parseBusyInventory(request.sourceFiles), fixtures = parseBusyInventory(request.fixtureFiles);
   const sourcePaths = ["bun.lock", "package.json", "tsconfig.json", `${prefix}tsconfig.json`, `${prefix}index.html`, `${prefix}src/styles.css`, driverPath, templatePath, ...runtimePaths, ...fixturePaths,
     ...(role === "current" ? [recipePath] : [])];
@@ -247,8 +253,18 @@ async function verifyBuild(identity: Source, role: "baseline" | "current", curre
   assert.equal((await git(identity.repository, "status", "--porcelain=v1", "--untracked-files=all")).trim(), "", "source must be committed and clean");
   const bytes = await ordinary(identity.receiptPath);
   assert.equal(sha256(bytes), identity.receiptSha256);
-  const { receipt, preparedRoot, directory, files, fixtures, original, outputRows, mappedSources, complete } = parseBusyBuildReceipt(JSON.parse(bytes.toString()), identity, role);
+  const { receipt, request, preparedRoot, directory, files, fixtures, original, outputRows, mappedSources, complete } = parseBusyBuildReceipt(JSON.parse(bytes.toString()), identity, role);
   assert.equal(await realpath(preparedRoot), preparedRoot);
+  const ownedOutput = role === "current" ? join(preparedRoot, "busy-output") : null;
+  if (ownedOutput !== null) {
+    for (const path of [ownedOutput, dirname(directory)]) {
+      assert.equal(await realpath(path), path);
+      const info = await lstat(path); assert.ok(info.isDirectory() && !info.isSymbolicLink());
+    }
+    assert.equal(request.outputParent, ownedOutput);
+    assert.deepEqual((await readdir(ownedOutput)).sort(), [basename(identity.receiptPath), basename(dirname(directory))].sort(), "unexpected retained output entry");
+    assert.deepEqual(await readdir(dirname(directory)), ["todo-native-busy"], "unexpected generation sibling");
+  }
   const preparedNames: string[] = [];
   let directories = 0;
   const visit = async (path: string): Promise<void> => {
@@ -258,6 +274,7 @@ async function verifyBuild(identity: Source, role: "baseline" | "current", curre
     for (const name of (await readdir(path)).sort()) {
       if (path === preparedRoot && name === "node_modules") continue;
       const target = join(path, name), logical = relative(preparedRoot, target);
+      if (target === ownedOutput) continue;
       assert.ok(!name.startsWith(".") && !/^(?:credentials|secrets?|sessions?)(?:[._-]|$)/iu.test(name), "protected prepared state");
       const info = await lstat(target); assert.ok(!info.isSymbolicLink());
       if (info.isDirectory()) await visit(target);

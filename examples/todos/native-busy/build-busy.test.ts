@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,6 +13,7 @@ const driver = await import(new URL("./build-busy.mjs", import.meta.url).href) a
   busyOrdinaryBytes(path: string): Buffer;
   parseBusyInventory(value: unknown): Row[];
   parseBusyBuildInput(value: unknown): unknown;
+  checkBusyPreparedSource(input: { role: string; root: string; outputParent: string; sourceFiles: Row[] }, outputLeaf?: string): Row[];
   deriveBusyHtml(value: string): string;
   renderBusyHtml(source: string, entry: string, css: string, placeholder: string): string;
   finiteBusyOutputs(value: unknown): { entry: string; stylesheet: string };
@@ -31,6 +32,7 @@ const original = '<!doctype html><html><head><title>Todo example</title></head><
 const placeholder = "__HRANESS_STYLEX_CSS__";
 const row = (path: string): Row => ({ path, mode: 420, bytes: 1, sha256: "a".repeat(64) });
 function request(role: "baseline" | "current" = "current") {
+  const outputParent = role === "current" ? "/private/tmp/prepared-source/busy-output" : "/private/tmp/qualified-output";
   const fixtureFiles = ["controlled-port.test.ts", "controlled-port.ts", "entry.tsx"].map((path) => row(`${prefix}native-busy/${path}`)).sort((a, b) => a.path.localeCompare(b.path));
   const paths = ["package.json", "bun.lock", `${prefix}native-busy/build-busy.mjs`, `${prefix}index.html`, `${prefix}native-busy/index.html`, `${prefix}src/styles.css`, ...runtime,
     ...(role === "current" ? [`${prefix}src/todo.stylex.ts`] : []), ...fixtureFiles.map((item) => item.path)];
@@ -41,7 +43,7 @@ function request(role: "baseline" | "current" = "current") {
     packages: Object.entries(driver.expectedBusyPackages(role)).map(([name, version]) => ({ name, version,
       manifest: `node_modules/${name}/package.json`, entry: `node_modules/${name}/index.js`, manifestSha256: "d".repeat(64), entrySha256: "e".repeat(64) })),
     compilerModules: driver.expectedBusyCompilerModules(role).map((specifier) => ({ specifier, path: `node_modules/${specifier}/index.js`, sha256: "f".repeat(64) })),
-    outputParent: "/private/tmp/qualified-output", receiptPath: "/private/tmp/qualified-output/receipt.json",
+    outputParent, receiptPath: `${outputParent}/receipt.json`,
   };
 }
 
@@ -57,8 +59,39 @@ test("prepared request has only the two exact toolchains and shared fixture byte
     (value: ReturnType<typeof request>) => ({ ...value, fixtureFiles: value.fixtureFiles.map((item) => ({ ...item, mode: 493 })) }),
     (value: ReturnType<typeof request>) => ({ ...value, sourceFiles: value.sourceFiles.filter((item) => item.path !== `${prefix}src/TodoApp.tsx`) }),
     (value: ReturnType<typeof request>) => ({ ...value, outputParent: `${value.root}/dist` }),
+    (value: ReturnType<typeof request>) => ({ ...value, outputParent: "/private/tmp/foreign-output" }),
+    (value: ReturnType<typeof request>) => ({ ...value, sourceFiles: [...value.sourceFiles, row("busy-output/foreign.ts")].sort((a, b) => a.path.localeCompare(b.path)) }),
     (value: ReturnType<typeof request>) => ({ ...value, receiptPath: `${value.root}/receipt.json` }),
   ]) expect(() => driver.parseBusyBuildInput(change(request()))).toThrow();
+});
+
+test("current source census excludes only its canonical empty or finalized owned output", async () => {
+  const scope = await realpath(await mkdtemp(join(tmpdir(), "todo-busy-owned-output-")));
+  try {
+    const root = join(scope, "prepared"), outputParent = join(root, "busy-output");
+    await mkdir(outputParent, { recursive: true });
+    await writeFile(join(root, "source.ts"), "x");
+    const sourceFiles = [{ path: "source.ts", mode: 0o644, bytes: 1, sha256: driver.busySha256("x") }];
+    const input = { role: "current", root, outputParent, sourceFiles };
+    expect(driver.checkBusyPreparedSource(input)).toEqual(sourceFiles);
+    expect(() => driver.checkBusyPreparedSource({ ...input, outputParent: join(root, "other") })).toThrow();
+    const leaf = join(outputParent, "todo-busy-current-ABC123");
+    await mkdir(join(leaf, "todo-native-busy"), { recursive: true });
+    expect(() => driver.checkBusyPreparedSource(input)).toThrow();
+    expect(driver.checkBusyPreparedSource(input, leaf)).toEqual(sourceFiles);
+    await writeFile(join(leaf, "foreign.txt"), "must not disappear");
+    expect(() => driver.checkBusyPreparedSource(input, leaf)).toThrow();
+    await rm(join(leaf, "foreign.txt"));
+    await writeFile(join(outputParent, "foreign.txt"), "must not disappear");
+    expect(() => driver.checkBusyPreparedSource(input, leaf)).toThrow();
+    await rm(join(outputParent, "foreign.txt"));
+    await writeFile(join(root, "foreign.ts"), "must not disappear");
+    expect(() => driver.checkBusyPreparedSource(input, leaf)).toThrow();
+    await rm(join(root, "foreign.ts"));
+    const linkedRoot = join(scope, "linked-prepared"); await mkdir(linkedRoot);
+    await symlink(outputParent, join(linkedRoot, "busy-output"));
+    expect(() => driver.checkBusyPreparedSource({ ...input, root: linkedRoot, outputParent: join(linkedRoot, "busy-output") }, leaf)).toThrow();
+  } finally { await rm(scope, { recursive: true, force: true }); }
 });
 
 test("identical template transformation preserves every non-entry byte and rejects ambiguous metadata", () => {

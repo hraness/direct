@@ -6,7 +6,7 @@ import { assertBusyCompilerEvidence, assertBusyGitBlob, deriveBusyTemplate, pars
 const hash = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const sha = "a".repeat(64);
 const baseline = { repository: "/source/baseline", commit: "1".repeat(40), tree: "2".repeat(40), receiptPath: "/outputs/baseline/build-receipt.json", receiptSha256: sha };
-const current = { repository: "/source/current", commit: "3".repeat(40), tree: "4".repeat(40), receiptPath: "/outputs/current/build-receipt.json", receiptSha256: sha };
+const current = { repository: "/source/current", commit: "3".repeat(40), tree: "4".repeat(40), receiptPath: "/prepared/current/busy-output/build-receipt.json", receiptSha256: sha };
 const input = { schema: "direct.todo-busy-native/v1" as const, baseline, current, browser: { driver: "/tools/agent-browser-darwin-arm64", driverSha256: sha,
   executable: "/tools/Chrome", executableSha256: sha, version: "151.0.7922.34" }, artifactParent: "/proofs", port: 52927 };
 const fixturePaths = ["controlled-port.test.ts", "controlled-port.ts", "entry.tsx"].map(path => `examples/todos/native-busy/${path}`);
@@ -31,9 +31,11 @@ function build(role: "baseline" | "current") {
   const complete = { kind: "hraness-stylex-complete-generation", schemaVersion: 2, state: "complete", generationId: "todo-native-busy", compilerSha256: sha, planSha256: sha, unionPolicySha256: sha,
     graphs: [{ id: "client", receiptSha256: hash(graphReceiptSource) }], packages: [], finalCss: { path: "stylex.css", bytes: 1, sha256: sha },
     artifacts: outputRows.filter(item => !["stylex.css", "stylex-complete.json"].includes(item.path)).map(({ path, bytes, sha256 }) => ({ path, bytes, sha256 })) };
-  return { schema: "direct.todo-busy-build/v1", state: "complete", role, output: `/outputs/${role}/generation`,
+  const outputParent = role === "current" ? "/prepared/current/busy-output" : "/outputs/baseline";
+  return { schema: "direct.todo-busy-build/v1", state: "complete", role,
+    output: role === "current" ? `${outputParent}/todo-busy-current-ABC123/todo-native-busy` : `${outputParent}/generation`,
     preparationProvenance: "source commit/tree declared by preparation owner; independently bound source bytes verified here",
-    request: { schema: "direct.todo-busy-build/v1", role, root: `/prepared/${role}`, outputParent: `/outputs/${role}`, receiptPath: identity.receiptPath,
+    request: { schema: "direct.todo-busy-build/v1", role, root: `/prepared/${role}`, outputParent, receiptPath: identity.receiptPath,
       sourceCommit: identity.commit, sourceTree: identity.tree, sourceFiles: files, fixtureFiles: fixtures, originalTemplateSha256: sha,
       node: { path: "/tools/node", version: "24.18.1", sha256: sha },
       packages: Object.entries(versions).map(([name, version]) => ({ name, version, manifest: `node_modules/${name}/package.json`, entry: `node_modules/${name}/index.js`, manifestSha256: sha, entrySha256: sha })),
@@ -95,7 +97,7 @@ test("inventory rejects path escape, duplicate or reordered entries and physical
 test("build admission requires exact source, fixture, toolchain, map and output closure for both roles", () => {
   for (const role of ["baseline", "current"] as const) {
     const receipt = build(role), identity = role === "baseline" ? baseline : current;
-    expect(parseBusyBuildReceipt(receipt, identity, role).directory).toBe(`/outputs/${role}/generation`);
+    expect(parseBusyBuildReceipt(receipt, identity, role).directory).toBe(receipt.output);
     const request = receipt.request, boundary = receipt.boundary;
     for (const changed of [
       { ...receipt, accepted: true }, { ...receipt, state: "pending" }, { ...receipt, role: "other" }, { ...receipt, limits: [] },
@@ -106,6 +108,10 @@ test("build admission requires exact source, fixture, toolchain, map and output 
       { ...receipt, request: { ...request, sourceFiles: sortRows([...request.sourceFiles, row("credentials.json")]) } },
       { ...receipt, request: { ...request, packages: request.packages.map(item => ({ ...item, version: "latest" })) } },
       { ...receipt, request: { ...request, compilerModules: [] } }, { ...receipt, request: { ...request, root: `/outputs/${role}/source` } },
+      { ...receipt, request: { ...request, outputParent: `${request.root}/arbitrary-output` } },
+      ...(role === "current" ? [{ ...receipt, output: `${request.outputParent}/foreign/todo-native-busy` },
+        { ...receipt, output: `${request.outputParent}/todo-busy-current-ABC123/wrong-generation` },
+        { ...receipt, request: { ...request, outputParent: "/outside/current" } }] : []),
       { ...receipt, boundary: { ...boundary, maps: [] } }, { ...receipt, boundary: { ...boundary, maps: [...boundary.maps, ...boundary.maps] } },
       { ...receipt, boundary: { ...boundary, sources: boundary.sources.slice(1) } },
       { ...receipt, boundary: { ...boundary, sources: boundary.sources.map(item => ({ ...item, physicalPath: "../outside" })) } },

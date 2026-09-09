@@ -111,11 +111,12 @@ export function parseBusyInventory(value) {
   assert.ok(rows.reduce((total, item) => total + item.bytes, 0) <= MAX_TOTAL, "inventory exceeds total bound");
   return rows;
 }
-function walk(root, excludeDependencies) {
+function walk(root, excludeDependencies, ownedOutput = null) {
   realDirectory(root);
   const files = [];
   const visit = (logical) => {
     if (excludeDependencies && logical === "node_modules") return;
+    if (ownedOutput !== null && join(root, logical) === ownedOutput) { realDirectory(ownedOutput); return; }
     busyRelativePath(logical);
     // Reject before reading or traversing hidden/provider/session source state.
     if (excludeDependencies) assert.ok(logical.split("/").every((part) => !part.startsWith(".") && !/^(?:credentials|secrets?|sessions?)(?:[._-]|$)/iu.test(part)), "protected state in prepared source");
@@ -134,8 +135,21 @@ function walk(root, excludeDependencies) {
   for (const name of readdirSync(root).sort(compare)) visit(name);
   return files.sort(compare);
 }
-function checkSource(input) {
-  const names = walk(input.root, true);
+export function checkBusyPreparedSource(input, outputLeaf = null) {
+  const ownedOutput = input.role === "current" ? input.outputParent : null;
+  if (ownedOutput !== null) {
+    assert.equal(ownedOutput, join(input.root, "busy-output"), "one reserved in-root output parent required");
+    realDirectory(ownedOutput);
+    assert.deepEqual(readdirSync(ownedOutput).sort(compare), outputLeaf === null ? [] : [basename(outputLeaf)], "unexpected prepared output entry");
+    if (outputLeaf !== null) {
+      assert.equal(dirname(outputLeaf), ownedOutput);
+      assert.match(basename(outputLeaf), /^todo-busy-current-[A-Za-z0-9]+$/u);
+      realDirectory(outputLeaf);
+      assert.deepEqual(readdirSync(outputLeaf), [GENERATION], "only the finalized generation may remain");
+      realDirectory(join(outputLeaf, GENERATION));
+    }
+  }
+  const names = walk(input.root, true, ownedOutput);
   assert.deepEqual(names, input.sourceFiles.map((item) => item.path), "prepared source additions/removals");
   const observed = names.map((path) => row(path, input.root));
   assert.deepEqual(observed, input.sourceFiles, "prepared source byte/mode drift");
@@ -182,10 +196,12 @@ export function parseBusyBuildInput(value) {
   assert.equal(input.schema, BUSY_BUILD_SCHEMA);
   expectedBusyPackages(input.role);
   absolute(input.root); absolute(input.outputParent); absolute(input.receiptPath);
-  assert.ok(!inside(input.root, input.outputParent) && !inside(input.outputParent, input.root) && input.root !== input.outputParent, "output parent must be separate from source");
+  if (input.role === "current") assert.equal(input.outputParent, join(input.root, "busy-output"), "Vite maps require the reserved in-root publication parent");
+  else assert.ok(!inside(input.root, input.outputParent) && !inside(input.outputParent, input.root) && input.root !== input.outputParent, "baseline output parent must be separate from source");
   assert.equal(dirname(input.receiptPath), input.outputParent, "receipt must be a direct child of approved output parent");
   digest(input.sourceCommit, 40); digest(input.sourceTree, 40); digest(input.originalTemplateSha256);
   const sourceFiles = parseBusyInventory(input.sourceFiles), fixtureFiles = parseBusyInventory(input.fixtureFiles);
+  assert.ok(sourceFiles.every(item => item.path !== "busy-output" && !item.path.startsWith("busy-output/")), "output cannot be an authored source");
   assert.deepEqual(fixtureFiles.map((item) => item.path), FIXTURE, "exact three reviewed fixture files required");
   assert.deepEqual(sourceFiles.filter((item) => FIXTURE.includes(item.path)), fixtureFiles, "shared fixture bytes/modes must match prepared source");
   for (const path of ["package.json", "bun.lock", DRIVER, `${PREFIX}index.html`, `${PREFIX}${BUSY_HTML}`, `${PREFIX}src/styles.css`, ...RUNTIME, ...(input.role === "current" ? [RECIPE] : [])]) {
@@ -348,7 +364,7 @@ export async function buildBusy(value) {
   const input = parseBusyBuildInput(value);
   realDirectory(input.root); realDirectory(input.outputParent); missing(input.receiptPath);
   assert.equal(fileURLToPath(import.meta.url), join(input.root, DRIVER), "run the identical copied driver in its prepared snapshot");
-  const before = checkSource(input), toolchain = checkToolchain(input);
+  const before = checkBusyPreparedSource(input), toolchain = checkToolchain(input);
   const original = busyOrdinaryBytes(join(input.root, PREFIX, "index.html")).toString("utf8");
   assert.equal(busySha256(original), input.originalTemplateSha256, "baseline/current original document identity must match");
   const template = busyOrdinaryBytes(join(input.root, PREFIX, BUSY_HTML)).toString("utf8");
@@ -413,7 +429,7 @@ export async function buildBusy(value) {
       .map(({ path, bytes, sha256 }) => ({ path, bytes, sha256 })),
     [...complete.artifacts, complete.finalCss].sort((a, b) => compare(a.path, b.path)), "final complete artifact inventory drift");
   }
-  const after = checkSource(input); assert.deepEqual(after, before);
+  const after = checkBusyPreparedSource(input, outputParent); assert.deepEqual(after, before);
   checkToolchain(input);
   for (const source of boundary.sources) {
     assert.equal(relative(input.root, realpathSync(join(input.root, source.path))), source.physicalPath, "mapped dependency resolution changed");
