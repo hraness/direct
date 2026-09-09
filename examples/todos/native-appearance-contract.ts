@@ -109,6 +109,39 @@ export function assertTodoTabClosed(value: unknown, tabId: string): void {
   assert.equal(record.closed, true);
   assert.ok(record.label === null || (typeof record.label === "string" && record.label.length <= 4096), "bounded nullable closed-tab label required");
 }
+export function assertTodoParkedTabs(before: readonly TodoNativeTab[], after: readonly TodoNativeTab[], tabId: string, contexts: number): void {
+  assert.ok(Number.isSafeInteger(contexts) && contexts >= 1 && contexts <= TODO_APPEARANCE_BATCH_LIMIT);
+  assert.equal(before.length, contexts + 1, "only the inert bootstrap and bounded scenario contexts are admitted");
+  assert.deepEqual(after.map((tab) => tab.tabId), before.map((tab) => tab.tabId), "parking changed the owned tab inventory");
+  assert.deepEqual(before.filter((tab) => tab.active).map((tab) => tab.tabId), [tabId]);
+  assert.deepEqual(after.filter((tab) => tab.active).map((tab) => tab.tabId), [tabId]);
+  assert.ok(after.every((tab) => tab.url === "about:blank"), "all completed contexts must remain parked at inert blank documents");
+}
+/** The pinned driver calls this field origin but reports the complete page URL. */
+export function parseTodoEvaluation(value: unknown, port: number): unknown {
+  const record = exactRecord(value, ["origin", "result"], "agent-browser0.32.3 evaluation");
+  assert.ok(Number.isSafeInteger(port) && port >= 1024 && port <= 65535, "owned evaluation port required");
+  assert.ok(typeof record.origin === "string" && record.origin.length <= 4096, "bounded evaluation URL required");
+  const url = new URL(record.origin);
+  assert.equal(url.origin, `http://127.0.0.1:${port}`, "evaluation left the exact owned loopback origin");
+  assert.equal(url.username, "");
+  assert.equal(url.password, "");
+  assert.equal(url.href, record.origin, "evaluation URL must be canonical");
+  return record.result;
+}
+export function assertTodoConsole(value: unknown): void {
+  const record = exactRecord(value, ["messages"], "agent-browser0.32.3 console");
+  assert.ok(Array.isArray(record.messages) && record.messages.length <= 128, "bounded native console observation required");
+  for (const value of record.messages) {
+    assert.ok(value !== null && typeof value === "object");
+    const message = exactRecord(value, Object.hasOwn(value, "args") ? ["type", "text", "args"] : ["type", "text"], "native console message");
+    assert.ok(typeof message.type === "string" && message.type.length > 0 && message.type.length <= 128);
+    assert.ok(typeof message.text === "string" && message.text.length <= 16_384);
+    // Arguments are retained raw CDP data, never evaluated or used as authority.
+    if (Object.hasOwn(message, "args")) assert.ok(Array.isArray(message.args) && message.args.length > 0 && message.args.length <= 128, "bounded raw CDP console arguments required");
+    assert.notEqual(message.type, "error", "browser console error");
+  }
+}
 function text(value: unknown, label: string): string {
   assert.ok(typeof value === "string" && value.length > 0 && value.length <= 4096 && !/[\0\r\n]/u.test(value), label);
   return value;

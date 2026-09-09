@@ -3,7 +3,7 @@ import fc from "fast-check";
 import {
   TODO_APPEARANCE_SCHEMA, TODO_STYLE_KEYS, admitTodoContext, assertTodoStable, assertTodoStaticCss,
   boundedTodoBatches, compareTodoAppearance, parseTodoAppearanceInput, parseTodoAppearanceSample,
-  todoCasePath, parseTodoDriverResult, parseTodoNativeTabs, assertTodoTabClosed, parseTodoOwnedClose, withTodoCleanup, exactRecord,
+  todoCasePath, parseTodoDriverResult, parseTodoEvaluation, parseTodoNativeTabs, assertTodoTabClosed, assertTodoParkedTabs, assertTodoConsole, parseTodoOwnedClose, withTodoCleanup, exactRecord,
 } from "./native-appearance-contract.js";
 
 const build = { directory: "/tmp/owned-build", inventorySha256: "a".repeat(64) };
@@ -70,16 +70,40 @@ test("lifecycle rejects missing, malformed, restored or restarted driver state",
   expect(() => parseTodoDriverResult(Object.defineProperty({ result: 1 }, "lifecycle", { enumerable: true, get: () => lifecycle }), false)).toThrow();
   expect(() => parseTodoDriverResult({ lifecycle, result: 1, [Symbol("foreign")]: true }, false)).toThrow();
 });
+test("native evaluation binds its full URL to the exact owned loopback origin", () => {
+  const origin = "http://127.0.0.1:5519/direct/?scenario=todos.empty";
+  const result = { width: 390, nested: [null, false, 1] };
+  expect(parseTodoEvaluation(parseTodoDriverResult({ lifecycle, origin, result }, false), 5519)).toBe(result);
+  for (const result of [null, false, 0, "text", [1, 2]]) expect(parseTodoEvaluation({ origin, result }, 5519)).toBe(result);
+  for (const invalid of [null, { result }, { origin }, { origin, result, extra: true },
+    ...["about:blank", "", "https://127.0.0.1:5519/", "http://localhost:5519/", "http://127.0.0.1:5520/", "http://user:pass@127.0.0.1:5519/", "http://127.1:5519/", "http://127.0.0.1:5519/\n", "http://127.0.0.1:5519/" + "x".repeat(4096)].map((origin) => ({ origin, result }))]) {
+    expect(() => parseTodoEvaluation(invalid, 5519)).toThrow();
+  }
+  for (const port of [80, NaN, 5519.5, 65536]) expect(() => parseTodoEvaluation({ origin, result }, port)).toThrow();
+});
 test("tab inventory and close preserve exact identities, shape and bounds", () => {
   for (const tabs of [[], Array.from({ length: 33 }, (_, index) => ({ ...nativeTab, tabId: `t${index}`, active: index === 0 })), [nativeTab, nativeTab], [{ ...nativeTab, active: false }], [{ ...nativeTab, label: 1 }], [{ ...nativeTab, label: "x".repeat(4097) }], [{ ...nativeTab, foreign: true }], [{ ...nativeTab, tabId: "foreign" }], [{ ...nativeTab, title: null }]]) expect(() => parseTodoNativeTabs({ tabs })).toThrow();
   expect(() => parseTodoNativeTabs({ lifecycle, tabs: [nativeTab] })).toThrow();
   for (const label of [null, "scenario"]) expect(() => assertTodoTabClosed({ tabId: "t2", label, closed: true }, "t2")).not.toThrow();
   for (const closed of [{ tabId: "t3", label: null, closed: true }, { tabId: "t2", label: null, closed: false }, { tabId: "t2", closed: true }, { tabId: "t2", label: 1, closed: true }, { tabId: "t2", label: null, closed: true, foreign: true }]) expect(() => assertTodoTabClosed(closed, "t2")).toThrow();
 });
+test("parking preserves the same bounded isolated contexts without claiming disposal", () => {
+  const before = [{ tabId: "t1", active: false, url: "about:blank" }, { tabId: "t2", active: true, url: "http://127.0.0.1:5519/" }];
+  const parked = before.map((tab) => ({ ...tab, url: "about:blank" }));
+  expect(() => assertTodoParkedTabs(before, parked, "t2", 1)).not.toThrow();
+  for (const after of [parked.slice(0, 1), [...parked, { tabId: "t3", active: false, url: "about:blank" }], before,
+    parked.map((tab, index) => index === 0 ? { ...tab, tabId: "t9" } : tab), parked.map((tab) => ({ ...tab, active: !tab.active }))]) expect(() => assertTodoParkedTabs(before, after, "t2", 1)).toThrow();
+  for (const contexts of [0, 2, 9, NaN, 1.5]) expect(() => assertTodoParkedTabs(before, parked, "t2", contexts)).toThrow();
+  expect(() => assertTodoParkedTabs(before, parked, "t1", 1)).toThrow();
+});
 test("runtime CSS observation rejects style injection, adopted sheets and foreign fields", () => {
   const valid = { styleNodes: 0, adoptedSheets: 0, mutations: [] };
   expect(() => assertTodoStaticCss(valid)).not.toThrow();
   for (const invalid of [{ ...valid, styleNodes: 1 }, { ...valid, adoptedSheets: 1 }, { ...valid, mutations: ["STYLE insertion"] }, { ...valid, extra: true }]) expect(() => assertTodoStaticCss(invalid)).toThrow();
+});
+test("native console accepts only its pinned finite payload and rejects errors", () => {
+  for (const messages of [[], [{ type: "log", text: "" }], [{ type: "warning", text: "retained", args: [{ type: "string", value: "retained" }] }]]) expect(() => assertTodoConsole({ messages })).not.toThrow();
+  for (const messages of [null, [null], [{ type: "log" }], [{ type: "log", text: 1 }], [{ type: "error", text: "failure" }], [{ type: "log", text: "", args: {} }], [{ type: "log", text: "", args: [] }], [{ type: "log", text: "", extra: true }], Array.from({ length: 129 }, () => ({ type: "log", text: "" }))]) expect(() => assertTodoConsole({ messages })).toThrow();
 });
 test("canary execution requires an exact separately rebuilt artifact and named expected difference", () => {
   expect(() => parseTodoAppearanceInput({ ...input, mode: "canary" })).toThrow();

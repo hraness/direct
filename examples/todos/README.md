@@ -98,11 +98,16 @@ oracle to reject, then recover by navigation
 from the unchanged generation.
 
 Each case receives a fresh BrowserContext through `window new`. Batches contain
-at most eight contexts; tab-close attempts are retained but are not considered
-proof of per-context disposal. A final close-only request goes to the exact
+at most eight contexts. Completed contexts navigate to `about:blank` and remain
+parked, not disposed, until the batch ends; their complete tab inventory stays
+bound to the original browser. This avoids the pinned driver's stale-target
+network-control failure on tab close without disabling its domain allowlist.
+A final close-only request goes to the exact
 already-owned private daemon socket, without the CLI's respawn path. The final
 receipt requires whole-browser/daemon descendant absence and owned server
 shutdown. Failures, including cleanup failures, remain fatal and retained.
+Native console/error observations are cumulative and sampled while each case
+is active and after parking. They are not continuous background-context monitoring.
 There is no automatic rerun or cleanup of failed evidence.
 
 For a real edit/rebuild canary, prepare and seal a separate current-source

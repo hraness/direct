@@ -17,8 +17,8 @@ import { POPULATED_TODOS } from "./direct/world.js";
 import { TODO_STORAGE_KEY } from "./src/local-storage-todo-port.js";
 import {
   TODO_APPEARANCE_CASES, TODO_APPEARANCE_WIDTHS, TODO_BREAKPOINT_WIDTHS, TODO_STYLE_KEYS,
-  admitTodoContext, assertTodoStable, assertTodoStaticCss, assertTodoTabClosed, boundedTodoBatches, compareTodoAppearance, exactRecord,
-  parseTodoAppearanceInput, parseTodoAppearanceSample, parseTodoDriverResult, parseTodoNativeTabs as parseTabs, parseTodoOwnedClose, todoCasePath, todoFailureText as errorText, withTodoCleanup as withCleanup,
+  admitTodoContext, assertTodoStable, assertTodoStaticCss, assertTodoParkedTabs, assertTodoConsole, boundedTodoBatches, compareTodoAppearance, exactRecord,
+  parseTodoAppearanceInput, parseTodoAppearanceSample, parseTodoDriverResult, parseTodoEvaluation, parseTodoNativeTabs as parseTabs, parseTodoOwnedClose, todoCasePath, todoFailureText as errorText, withTodoCleanup as withCleanup,
   type TodoAppearanceCase, type TodoAppearanceDifference, type TodoAppearanceInput,
   type TodoAppearanceSample, type TodoSourceIdentity,
 } from "./native-appearance-contract.js";
@@ -160,7 +160,7 @@ function ownProcessClosure(all: readonly ProcessIdentity[], roots: readonly Proc
 interface NativeBatch {
   readonly browser: Pick<AgentBrowser, "run" | "evaluate">;
   readonly newContext: (label: string) => Promise<void>;
-  readonly closeContext: () => Promise<void>;
+  readonly parkContext: () => Promise<void>;
   readonly close: () => Promise<void>;
 }
 async function createNativeBatch(input: TodoAppearanceInput, directory: string, record: (label: string, value: unknown) => Promise<void>): Promise<NativeBatch> {
@@ -231,8 +231,7 @@ async function createNativeBatch(input: TodoAppearanceInput, directory: string, 
     return parseTodoDriverResult(value, operations === 1);
   };
   const evaluate = async (expression: string): Promise<unknown> => {
-    const result = exactRecord(await run(["eval", expression]), ["result"], "page evaluation");
-    return result.result;
+    return parseTodoEvaluation(await run(["eval", expression]), input.port);
   };
   async function close(): Promise<void> {
     if (!used) return;
@@ -323,16 +322,25 @@ async function createNativeBatch(input: TodoAppearanceInput, directory: string, 
       assert.ok(scenarioTabs.has(created.tabId));
       assert.ok(after.some((tab) => tab.active && scenarioTabs.has(tab.tabId)));
     },
-    async closeContext() {
-      const tabs = parseTabs(await run(["tab"]));
-      // Every tab created after the inert bootstrap is owned by this sequential batch.
-      for (const tab of tabs) if (tab.tabId !== bootstrap) {
-        const response = await run(["tab", "close", tab.tabId]);
-        await record(`tab-close-${contexts}-${tab.tabId}`, response);
-        assertTodoTabClosed(response, tab.tabId);
-      }
-      await record(`post-tab-attempt-${contexts}`, await run(["tab"]));
-      await census(); // Tab-close success alone does not prove context disposal in0.32.3.
+    async parkContext() {
+      const before = parseTabs(await run(["tab"]));
+      assert.equal(scenarioTabs.size, 1);
+      const [tabId] = scenarioTabs;
+      assert.ok(tabId && tabId !== bootstrap);
+      // v0.32.3 can re-admit a queued target event after tab_close removes its
+      // target, then fail network-control installation against the dead target.
+      // Do not suppress that failure or disable the allowlist. Retain at most
+      // eight genuine isolated contexts, parked inert until whole-browser close.
+      await run(["open", "about:blank"]);
+      const after = parseTabs(await run(["tab"]));
+      assertTodoParkedTabs(before, after, tabId, contexts);
+      await record(`parked-${contexts}`, { tabs: after, disposed: false });
+      const errors = exactRecord(await run(["errors"]), ["errors"], "parked native page errors");
+      const messages = await run(["console"]);
+      await record(`parked-${contexts}-diagnostics`, { errors, messages });
+      assert.deepEqual(errors.errors, [], "browser page errors after parking");
+      assertTodoConsole(messages);
+      await census();
     }, close };
 }
 
@@ -537,12 +545,8 @@ async function checkCase(batch: NativeBatch, baseUrl: string, scenario: TodoAppe
     await record(`${label}-errors`, errors); assert.deepEqual(errors.errors, [], "browser page errors");
     const messages = exactRecord(await browser.run(["console"]), ["messages"], "agent-browser0.32.3 console");
     await record(`${label}-console`, messages);
-    assert.ok(Array.isArray(messages.messages) && messages.messages.length <= 128);
-    for (const message of messages.messages) {
-      assert.ok(message !== null && typeof message === "object" && typeof Reflect.get(message, "type") === "string");
-      assert.notEqual(Reflect.get(message, "type"), "error", "browser console error");
-    }
-  }, () => batch.closeContext());
+    assertTodoConsole(messages);
+  }, () => batch.parkContext());
 }
 
 async function checkNegativeControls(batch: NativeBatch, baseUrl: string, record: (key: string, value: unknown) => Promise<void>): Promise<void> {
@@ -581,7 +585,7 @@ async function checkNegativeControls(batch: NativeBatch, baseUrl: string, record
       assert.deepEqual(compareTodoAppearance(`negative-${control}-recovery`, before, parseTodoAppearanceSample(await browser.evaluate(sampleProgram))), []);
       await keyboardTarget(batch.browser, 'input[type="checkbox"]', undefined, async () => {});
       await record(`negative-${control}-recovered`, { appearance: true, nativeFocus: true });
-    }, () => batch.closeContext());
+    }, () => batch.parkContext());
   }
 }
 
@@ -676,7 +680,7 @@ export async function runTodoAppearance(input: TodoAppearanceInput): Promise<str
     failure = (error instanceof Error ? `${error.name}: ${error.message}` : "Unknown native appearance failure").slice(0, 4096);
     throw error;
   } finally {
-    await writeFile(join(directory, "receipt.json"), `${JSON.stringify({ schema: "direct.todo-native-receipt/v1", accepted, failure, mode: input.mode, browser: { version: input.browser.version, driverSha256: input.browser.driverSha256, executableSha256: input.browser.executableSha256 }, differences, limits: ["fixture browser proof does not establish storage quota, remote services or device behavior", "tab close attempts do not independently prove per-context disposal", "runtime CSS observer starts at initial settled document; transient insertion before observer attachment is not claimed", "screenshots are retained evidence; comparison uses authored named geometry and computed presentation, not a screenshot similarity score", "appearance samples require quiescence; transient loading and busy-state paint is not observed"] })}\n`, { mode: 0o600, flag: "wx" });
+    await writeFile(join(directory, "receipt.json"), `${JSON.stringify({ schema: "direct.todo-native-receipt/v1", accepted, failure, mode: input.mode, browser: { version: input.browser.version, driverSha256: input.browser.driverSha256, executableSha256: input.browser.executableSha256 }, differences, limits: ["fixture browser proof does not establish storage quota, remote services or device behavior", "completed contexts are parked at about:blank and retained until whole-browser close, not individually disposed", "console/error observations sample the active case and parking transition, not continuous background-context monitoring", "runtime CSS observer starts at initial settled document; transient insertion before observer attachment is not claimed", "screenshots are retained evidence; comparison uses authored named geometry and computed presentation, not a screenshot similarity score", "appearance samples require quiescence; transient loading and busy-state paint is not observed"] })}\n`, { mode: 0o600, flag: "wx" });
   }
 }
 if (import.meta.main) {
