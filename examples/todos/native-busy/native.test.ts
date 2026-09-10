@@ -23,7 +23,7 @@ function build(role: "baseline" | "current") {
   const outputRows = sortRows(["assets/index.js", "assets/index.js.map", "assets/index.css", "native-busy/index.html", ...(role === "current" ? ["stylex.css", "stylex-complete.json"] : [])].map(row));
   const common = { react: "19.2.3", "react-dom": "19.2.3" };
   const versions = role === "baseline" ? { ...common, vite: "8.1.5", rolldown: "1.1.5", "@vitejs/plugin-react": "6.0.4" }
-    : { ...common, vite: "8.2.1", rolldown: "1.2.8", "@hraness/ui": "0.5.9", "@stylexjs/stylex": "0.19.0" };
+    : { ...common, vite: "8.2.1", rolldown: "1.2.8", "@hraness/ui": "0.5.12", "@stylexjs/stylex": "0.19.0" };
   const graph = { kind: "hraness-stylex-graph-receipt", schemaVersion: 1, state: "complete", adapter: "vite", target: "client", graphId: "client", generationId: "todo-native-busy",
     entrypoints: ["examples/todos/native-busy/entry.tsx"], inputs: [{ path: recipePath, bytes: 1, sha256: sha }], rules: [["x", { ltr: ".x{color:red}" }, 1]],
     planSha256: sha, compilerSha256: sha, edges: [], outputRoot: "graphs/client", outputs: [], packages: [], rulesSha256: sha };
@@ -110,6 +110,7 @@ test("build admission requires exact source, fixture, toolchain, map and output 
       { ...receipt, request: { ...request, compilerModules: [] } }, { ...receipt, request: { ...request, root: `/outputs/${role}/source` } },
       { ...receipt, request: { ...request, outputParent: `${request.root}/arbitrary-output` } },
       ...(role === "current" ? [{ ...receipt, output: `${request.outputParent}/foreign/todo-native-busy` },
+        { ...receipt, request: { ...request, packages: request.packages.map(item => item.name === "@hraness/ui" ? { ...item, version: "0.5.9" } : item) } },
         { ...receipt, output: `${request.outputParent}/todo-busy-current-ABC123/wrong-generation` },
         { ...receipt, request: { ...request, outputParent: "/outside/current" } }] : []),
       { ...receipt, boundary: { ...boundary, maps: [] } }, { ...receipt, boundary: { ...boundary, maps: [...boundary.maps, ...boundary.maps] } },

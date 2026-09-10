@@ -156,7 +156,7 @@ export function parseBusyBuildReceipt(value: unknown, identity: Source, role: "b
   assert.ok(typeof node.version === "string" && /^24\.\d+\.\d+$/u.test(node.version));
   const common = { react: "19.2.3", "react-dom": "19.2.3" };
   const versions: Readonly<Record<string, string>> = role === "baseline" ? { ...common, vite: "8.1.5", rolldown: "1.1.5", "@vitejs/plugin-react": "6.0.4" }
-    : { ...common, vite: "8.2.1", rolldown: "1.2.8", "@hraness/ui": "0.5.9", "@stylexjs/stylex": "0.19.0" };
+    : { ...common, vite: "8.2.1", rolldown: "1.2.8", "@hraness/ui": "0.5.12", "@stylexjs/stylex": "0.19.0" };
   assert.ok(Array.isArray(request.packages));
   const packages = request.packages.map(value => {
     const item = exactRecord(value, ["name", "version", "manifest", "entry", "manifestSha256", "entrySha256"], "build package");

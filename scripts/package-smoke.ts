@@ -41,7 +41,7 @@ const verificationPackages = [
   "@babel/core@7.29.7",
   "@eslint/js@^9.39.2",
   "@expo/metro-runtime@~57.0.6",
-  "@hraness/ui@github:hraness/ui#v0.5.9",
+  "@hraness/ui@github:hraness/ui#v0.5.12",
   "@stylexjs/babel-plugin@0.19.0",
   "@stylexjs/stylex@0.19.0",
   "@types/babel__core@7.20.5",
