@@ -12,6 +12,8 @@
     "direct/**/*.ts",
     "direct/**/*.tsx",
     "vite.config.ts",
+    "build.ts",
+    "preview.ts",
     "verify.ts"
   ]
 }

@@ -352,8 +352,16 @@ export async function scanTodoDirectOutput(directory: string): Promise<TodoBound
   }, []);
 }
 
+export function parseTodoBoundaryDirectory(args: readonly string[]): string {
+  const paths = args[0] === "--" ? args.slice(1) : args;
+  if (paths.length !== 1 || paths[0] === undefined || !isAbsolute(paths[0]) || paths[0].includes("\0")) {
+    throw new Error("Pass the exact absolute production generation path printed by example:build.");
+  }
+  return paths[0];
+}
+
 if (import.meta.main) {
-  const directory = process.argv[2] ?? resolve(directDirectory, "../dist");
+  const directory = parseTodoBoundaryDirectory(process.argv.slice(2));
   const result = await scanTodoProductionOutput(directory);
   if (result.violations.length > 0) {
     throw new Error([

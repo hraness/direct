@@ -6,11 +6,21 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   TODO_DIRECT_EXECUTABLE_MARKERS,
+  parseTodoBoundaryDirectory,
   scanTodoDirectOutput,
   scanTodoProductionOutput,
 } from "./check-production-boundary";
 
 const exampleRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+test("boundary CLI requires one exact absolute generation instead of implicit or latest output", () => {
+  const exact = resolve("artifacts/todo-production-example/production");
+  expect(parseTodoBoundaryDirectory([exact])).toBe(exact);
+  expect(parseTodoBoundaryDirectory(["--", exact])).toBe(exact);
+  for (const args of [[], ["--"], [""], ["dist"], ["latest"], [exact, exact], [`${exact}\0`]]) {
+    expect(() => parseTodoBoundaryDirectory(args)).toThrow("exact absolute production generation path");
+  }
+});
 const packageRoot = resolve(exampleRoot, "../..");
 const localStorageSource = join(exampleRoot, "src/local-storage-todo-port.ts");
 const productionSources = [

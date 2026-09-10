@@ -5,7 +5,8 @@
 - `deterministic-todo-port.ts` – in-memory implementation of the product port with logical time and activity accounting.
 - `session.ts` – one definition-driven product session, world-free manifest, and probe observation boundary.
 - `workbench.tsx` and `main.tsx` – scenario navigation and the real todo interface.
-- `vite.config.ts` and `index.html` – separate Direct browser entry.
+- `workbench.stylex.ts` – finite workbench presentation recipes.
+- `index.html` – separate authored Direct browser entry; `vite.config.ts` rejects legacy uncompiled invocation.
 - `check-production-boundary.ts` – positive production/Direct source-map graph proof plus emitted production-marker scan.
 - `*.test.ts` – parser, definition, adapter, session, and boundary evidence.
 

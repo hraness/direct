@@ -3,8 +3,9 @@
 - `todo-port.ts` – product-owned todo records, errors, cloning, and persistence contract.
 - `local-storage-todo-port.ts` – strict production implementation over browser local storage.
 - `TodoApp.tsx` – real React interface driven only by the product port.
+- `todo.stylex.ts` – finite compiled presentation for the real interface.
 - `main.tsx` – production composition.
-- `styles.css` – shared product presentation.
+- `styles.css` – document/reset boundary, not component presentation.
 - `*.test.ts` – production-adapter behavior and malformed-storage regressions.
 
 # Guidelines

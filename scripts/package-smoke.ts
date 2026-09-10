@@ -38,24 +38,30 @@ const verificationToolchain = Object.freeze({
 });
 const verificationPackages = [
   "@antithesishq/bombadil@0.7.2",
+  "@babel/core@7.29.7",
   "@eslint/js@^9.39.2",
   "@expo/metro-runtime@~57.0.6",
+  "@hraness/ui@github:hraness/ui#v0.5.12",
+  "@stylexjs/babel-plugin@0.19.0",
+  "@stylexjs/stylex@0.19.0",
+  "@types/babel__core@7.20.5",
   `@types/bun@${verificationToolchain["@types/bun"]}`,
   `@types/node@${verificationToolchain["@types/node"]}`,
   "@types/react@^19.2.14",
   "@types/react-dom@^19.2.3",
-  "@vitejs/plugin-react@^6.0.3",
   "effect@3.22.1",
   "eslint@^9.39.2",
   "expo@~57.0.9",
   `fast-check@${verificationToolchain["fast-check"]}`,
+  "lightningcss@1.33.0",
   "react@19.2.3",
   "react-dom@19.2.3",
   "react-native@0.86.2",
   "react-native-web@~0.21.2",
+  "rolldown@1.2.8",
   `typescript@${verificationToolchain.typescript}`,
   "typescript-eslint@^8.53.0",
-  "vite@^8.1.5",
+  "vite@8.2.1",
 ];
 
 type PackageInput = Readonly<{
