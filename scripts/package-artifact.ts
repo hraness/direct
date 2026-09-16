@@ -8,9 +8,12 @@ const maximumTarBytes = 2_000_000;
 
 const packageBudget = Object.freeze({
   entryCount: { min: 50, max: 120 },
-  // Four optional Effect source files, one entry and one possible split chunk.
-  fileCount: { min: 50, max: 66 },
-  packedBytes: { min: 140_000, max: 260_000 },
+  // The reviewed library/skill tree has 67 files; the standalone helper and
+  // its license add two. The helper stays outside every library entry graph.
+  fileCount: { min: 50, max: 69 },
+  // The reviewed helper/license add 21,748 uncompressed bytes; the complete
+  // candidate is 265,852 packed bytes under Bun 1.3.14.
+  packedBytes: { min: 140_000, max: 270_000 },
   // The optional driver ships its source types plus its external-peer bundle.
   unpackedBytes: { min: 650_000, max: 1_250_000 },
 });

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
+import { verifySupportHelper } from "./support-helper-contract.js";
 
 import {
   inspectPackageArtifact,
@@ -304,6 +305,25 @@ async function verifyPackagedSkill(
   );
   if (!interfaceMetadata.includes("$direct")) {
     throw new Error("Packaged skill UI metadata does not invoke $direct");
+  }
+  if (Bun.semver.order(packageVersion, "0.7.22") >= 0) {
+    await verifySupportHelper(skillRoot);
+    const sourceSkill = join(repository, "skills", "direct");
+    for (const path of ["scripts/support.mjs", "THIRD_PARTY_NOTICES.md"]) {
+      if (!(await readFile(join(skillRoot, path))).equals(await readFile(join(sourceSkill, path)))) {
+        throw new Error(`Packaged support helper differs from reviewed source: ${path}`);
+      }
+    }
+    const dist = join(consumer, "node_modules", "@hraness", "direct", "dist");
+    const files = await readdir(dist, { recursive: true });
+    const executableFiles = files.filter(path => path.endsWith(".js"));
+    if (executableFiles.length === 0) throw new Error("No library output inspected");
+    for (const path of executableFiles) {
+      const code = await readFile(join(dist, path), "utf8");
+      if (/hraness-support-|account\.hraness\.com|support-foundation/u.test(code)) {
+        throw new Error(`Support helper leaked into library output: ${path}`);
+      }
+    }
   }
 }
 
