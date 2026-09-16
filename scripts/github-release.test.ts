@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { required, admitAttempt, admitCanonicalJobs, canonicalJobs, admitExpectedHandoff, admitMirrorAuthority, admitRelease, admitRemoteAssetBytes, authorizeRelease, authorityPaths, admitVerifiedProvenance, checksums, compareVersions, findReleaseForTag, hash, parseManifest, releaseBody, verifyHandoff } from "./github-release.js";
 
 const archive = Buffer.from("exact canonical bytes");
@@ -395,7 +396,7 @@ test("terminal metadata admission retains only the parser's exact named extra-fi
   try {
     await writeFile(archivePath, archiveBytes);
     const execute = async (extraPath: string, additional = false) => {
-      const paths = [...requiredPaths, ...Array.from({ length: 54 }, (_, index) => `src/fixture-${index}.ts`), extraPath, ...(additional ? ["src/unreviewed.ts"] : [])];
+      const paths = [...requiredPaths, ...Array.from({ length: 57 }, (_, index) => `src/fixture-${index}.ts`), extraPath, ...(additional ? ["src/unreviewed.ts"] : [])];
       const packing = Buffer.from(JSON.stringify([{ name: "@hraness/direct", id: "@hraness/direct@0.7.21", version: "0.7.21", filename,
         size: archiveBytes.length, entryCount: paths.length, unpackedSize: paths.length * 10_000,
         files: paths.map(path => ({ path, size: 10_000, mode: 0o644 })), shasum: hash(archiveBytes, "sha1"),
@@ -415,3 +416,42 @@ test("terminal metadata admission retains only the parser's exact named extra-fi
     }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("the actual package passes canonical and terminal publication bounds", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/npm-publish.yml", import.meta.url), "utf8");
+  const marker = '            TARBALL="$tarball" node > "$rebound_output" <<\'NODE\'\n';
+  const start = workflow.indexOf(marker);
+  expect(start).toBeGreaterThan(-1);
+  const code = workflow.slice(start + marker.length, workflow.indexOf("          NODE\n", start)).split("\n").map(line => line.slice(10)).join("\n");
+  const root = await mkdtemp(join(tmpdir(), "direct-current-release-bounds-"));
+  try {
+    const packed = Bun.spawnSync(["npm", "pack", "--json", "--ignore-scripts", "--pack-destination", root], {
+      cwd: fileURLToPath(new URL("../", import.meta.url)),
+      stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 15_000,
+    });
+    expect({ exit: packed.exitCode, stderr: packed.stderr.toString() }).toEqual({ exit: 0, stderr: "" });
+    const records = JSON.parse(packed.stdout.toString()) as Array<{ filename: string; version: string; files: Array<{ path: string }> }>;
+    expect(records).toHaveLength(1);
+    const record = required(records[0]);
+    expect(record.files.map(file => file.path)).toContain("skills/direct/scripts/support.mjs");
+    expect(record.files.map(file => file.path)).toContain("skills/direct/THIRD_PARTY_NOTICES.md");
+    const archivePath = join(root, record.filename);
+    const bytes = await readFile(archivePath);
+    const m = manifest();
+    const candidate = { ...m, version: record.version, tag: `v${record.version}`,
+      archive: { name: record.filename, bytes: bytes.length, sha256: hash(bytes), sha512: hash(bytes, "sha512") } };
+    expect(parseManifest(candidate)).toEqual(candidate);
+    expect(() => parseManifest({ ...candidate, archive: { ...candidate.archive, bytes: 270_001 } })).toThrow();
+    const metadata = join(root, "npm-pack.json"), digest = join(root, "npm-package.sha256");
+    await writeFile(metadata, packed.stdout);
+    await writeFile(digest, `${hash(bytes)}  ${record.filename}\n${hash(packed.stdout)}  npm-pack.json\n`);
+    const result = Bun.spawnSync(["node", "-e", code], { env: {
+      NODE_ENV: "test", PATH: process.env.PATH, EXPECTED_VERSION: record.version, EXPECTED_TARBALL_NAME: record.filename,
+      TARBALL: archivePath, METADATA: metadata, DIGEST: digest,
+      CANONICAL_ARCHIVE_SHA256: hash(bytes), CANONICAL_PACK_SHA256: hash(packed.stdout),
+    }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 2_000 });
+    expect({ exit: result.exitCode, stderr: result.stderr.toString(), stdout: result.stdout.toString() }).toEqual({
+      exit: 0, stderr: "", stdout: expect.stringContaining(hash(bytes)),
+    });
+  } finally { await rm(root, { recursive: true, force: true }); }
+}, 20_000);
