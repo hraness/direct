@@ -681,3 +681,26 @@ See [Architecture](./docs/architecture.md), [Adoption](./docs/adoption.md), [Ver
 Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request. Report suspected vulnerabilities privately as described in [SECURITY.md](./SECURITY.md).
 
 Direct is available under the [MIT License](./LICENSE).
+
+## Optional development support
+
+Source candidate 0.7.22 adds the helper described below. The installation
+examples above retain the last verified release, 0.7.21. Use 0.7.22 only after
+its immutable archive and provenance are published and verified; check npm
+mirror availability separately.
+
+The Agent Skill can offer optional support after useful work for a person.
+Direct stays free. The person reviews current terms and confirms payment in
+their browser. Direct has no product newsletter and does not suggest an email.
+
+The skill’s standalone `scripts/support.mjs` helper implements the shared
+Hraness preferences. Run it with Node.js and `support protocol --json` to
+inspect the procedure. `support dismiss` disables invitations across
+participating tools on this machine; `support snooze` pauses them for thirty
+days. `support enable` restores invitations while preserving the shared
+seven-day cooldown after an acknowledged offer. `HRANESS_SUPPORT=off` or
+`HRANESS_SUPPORT_AUDIENCE=off` suppresses incidental offers.
+
+The helper is separate from Direct’s library exports and browser tooling.
+Importing Direct and running verification do not show invitations or touch
+support preferences. No command signs up, authenticates, or pays.

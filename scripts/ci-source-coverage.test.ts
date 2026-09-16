@@ -28,7 +28,7 @@ const phases = [
 const commands = {
   typecheck: "tsc --noEmit",
   "check:effect": "bun run scripts/effect-policy.ts && bun test scripts/check-effect-architecture.test.ts",
-  build: "bun run build:clean && bun run build:runtime && bun run build:tooling",
+  build: "bun run build:clean && bun run build:runtime && bun run build:tooling && bun run build:support",
   "test:package": "bun run ./scripts/package-smoke.ts",
   test: "bun test ./src",
   lint: "eslint src examples scripts",

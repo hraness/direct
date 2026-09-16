@@ -1,6 +1,6 @@
 {
   "name": "@hraness/direct",
-  "version": "0.7.21",
+  "version": "0.7.22",
   "description": "A TypeScript harness for deterministic frontend testing and development with repeatable scenarios, local fixtures, and browser verification for coding agents.",
   "license": "MIT",
   "type": "module",
@@ -127,7 +127,7 @@
     "src/effect/supervisor.ts"
   ],
   "scripts": {
-    "build": "bun run build:clean && bun run build:runtime && bun run build:tooling",
+    "build": "bun run build:clean && bun run build:runtime && bun run build:tooling && bun run build:support",
     "build:clean": "bun -e 'await (await import(\"node:fs/promises\")).rm(\"./dist\", { recursive: true, force: true })'",
     "build:runtime": "bun build ./src/index.ts ./src/core/index.ts ./src/react.ts ./src/testing/index.ts ./src/web.ts ./src/effect/index.ts --outdir ./dist --root ./src --target browser --format esm --splitting --packages external",
     "build:tooling": "bun build ./src/tooling/browser-verification-entry.ts ./src/tooling/bundle-boundary.ts --outdir ./dist/tooling --root ./src/tooling --target bun --format esm --splitting --packages external && bun build ./src/tooling/bombadil.ts --outdir ./dist/tooling --root ./src/tooling --target bun --format esm --splitting --packages external",
@@ -146,7 +146,7 @@
     "example:typecheck": "tsc -p examples/todos/tsconfig.json --noEmit",
     "example:verify": "bun run examples/todos/verify.ts",
     "lint": "eslint src examples scripts",
-    "test:npm-release": "bun test ./scripts/npm-publish-workflow.test.ts ./scripts/github-release.test.ts ./scripts/ci-source-coverage.test.ts",
+    "test:npm-release": "bun test ./scripts/npm-publish-workflow.test.ts ./scripts/github-release.test.ts ./scripts/ci-source-coverage.test.ts ./scripts/support-helper.test.ts",
     "test:package": "bun run ./scripts/package-smoke.ts",
     "kb:refresh": "bunx --bun github:hraness/kb#v0.15.2 refresh --root kb",
     "kb:check:lane": "bunx --bun github:hraness/kb#v0.15.2 check --root kb --no-catalog",
@@ -154,7 +154,8 @@
     "kb:catalog": "bunx --bun github:hraness/kb#v0.15.2 catalog --root kb",
     "check": "bun run typecheck && bun run check:effect && bun run test:npm-release && bun run build && bun run test:package && bun run test && bun run lint && bun run example:test && bun run example:typecheck && bun run example:verify && bun run example:react-native:test && bun run example:react-native:typecheck && bun run example:react-native:verify",
     "prepack": "bun run check",
-    "check:effect": "bun run scripts/effect-policy.ts && bun test scripts/check-effect-architecture.test.ts"
+    "check:effect": "bun run scripts/effect-policy.ts && bun test scripts/check-effect-architecture.test.ts",
+    "build:support": "bun run scripts/build-support-helper.ts --check"
   },
   "peerDependencies": {
     "@antithesishq/bombadil": "0.7.2",
@@ -201,7 +202,8 @@
     "typescript": "6.0.3",
     "typescript-eslint": "^8.53.0",
     "vite": "8.2.1",
-    "effect": "3.22.1"
+    "effect": "3.22.1",
+    "@hraness/support-foundation": "git+https://github.com/hraness/support-foundation.git#b32c1c81bb2444f50509ed54388758ecfab1f1c0"
   },
   "publishConfig": {
     "access": "public",
