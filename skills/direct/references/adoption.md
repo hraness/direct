@@ -22,7 +22,7 @@ Reject a design that conditionally imports fixtures from a query string, build f
 
 1. Define one bounded JSON world with a literal version.
 2. Parse it from `unknown`; reject unknown keys, unsupported versions, duplicate identifiers, inconsistent states, and exceeded bounds.
-3. Call `defineDirect` with a validated default, stable scenario IDs, and exact `fixture`, `mixed`, or `direct` coverage entries. Authored invalid configuration should fail during startup. Use `tryDefineDirect` for typed configuration assembled dynamically and `parseDirectDefinition` for genuinely unknown configuration.
+3. Call `defineDirect` with a validated default, stable scenario IDs, and exact `fixture`, `mixed`, or `direct` coverage entries. Authored invalid configuration should fail during startup. Use `tryDefineDirect` for typed configuration assembled dynamically and `parseDirectDefinition` for untyped configuration, such as JSON loaded at runtime.
    Keep each definition within the public discovery bounds of 256 scenarios
    and 256 coverage entries.
 4. Implement deterministic adapters for the same product ports. Use logical time for product delays and activity scopes for asynchronous work.

@@ -22,13 +22,16 @@ Use the lowest port that preserves the behavior under review. A task interface s
 
 Direct presents three public abstractions:
 
-- A **definition** validates the product's world parser, named scenarios, default activation, and `fixture`, `mixed`, or `direct` coverage claims. Use `defineDirect` for authored configuration, `tryDefineDirect` for typed configuration assembled dynamically, and `parseDirectDefinition` for a genuinely unknown value.
+- A **definition** validates the product's world parser, named scenarios, default activation, and `fixture`, `mixed`, or `direct` coverage claims. Use `defineDirect` for authored configuration, `tryDefineDirect` for typed configuration assembled dynamically, and `parseDirectDefinition` for untyped input, such as JSON loaded at runtime.
 - A **session** activates one scenario and owns its immutable world seed,
-  logical clock, generation-fenced store, activity scope, product harness,
+  logical clock, store, activity scope, product harness,
   world-free manifest, probe, cancellation signal, and reverse-order cleanup.
+  Each reset starts a new store generation, and the store rejects activity and
+  commits from operations that began in an earlier generation.
 - A **browser installation** publishes the exact `direct.browser-bridge/v2`
   manifest, live probe, and reset surface through `window.__direct` and
-  optionally installs the fail-closed application-`fetch` firewall.
+  installs the fail-closed application-`fetch` firewall unless the caller
+  passes `firewall: false`.
   Installation and rollback are atomic. The session registers its cleanup, and
   one disposable handle can remove both browser hooks earlier.
 

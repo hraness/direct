@@ -94,7 +94,7 @@ change the public package's dependency requirements or historical artifacts.
 After an asset is published and verified, install its exact stable version:
 
 ```sh
-version=0.7.21
+version=0.7.22
 bun add --dev "https://github.com/hraness/direct/releases/download/v$version/hraness-direct-$version.tgz"
 ```
 
