@@ -26,6 +26,12 @@ const bombadilNamedSnapshotUrl = new URL(
   import.meta.url,
 );
 const readmeUrl = new URL("../README.md", import.meta.url);
+const installDocumentUrls = [
+  readmeUrl,
+  new URL("../docs/adoption.md", import.meta.url),
+  new URL("../docs/verification.md", import.meta.url),
+  new URL("../docs/publishing.md", import.meta.url),
+] as const;
 const packageSmokeUrl = new URL("./package-smoke.ts", import.meta.url);
 const packagePreparationUrl = new URL("./prepare-npm-package.ts", import.meta.url);
 const packageArtifactUrl = new URL("./package-artifact.ts", import.meta.url);
@@ -351,7 +357,7 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
     };
     expect(manifest).toEqual(expect.objectContaining({
       version: "0.7.22",
-      description: "A TypeScript harness for deterministic frontend testing and development with repeatable scenarios, local fixtures, and browser verification for coding agents.",
+      description: "Direct gives browser agents repeatable app states for frontend testing. The development-only TypeScript library opens signed-in, empty, and error states by URL.",
       keywords: [
         "frontend-development",
         "frontend-testing",
@@ -395,9 +401,43 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       "| `$direct` Agent Skill |",
       "| TypeScript package |",
       "| Browser driver |",
-      "### One trace connects the URL to the claim",
-      "Local-storage parsing, quota behavior, and persistence stay assigned to a separate `direct` check.",
+      "### Follow one check from URL to result",
+      "Local-storage parsing, quota behavior, and persistence need a separate `direct` check against real browser storage.",
     ]) expect(readme).toContain(proof);
+  });
+
+  test("keeps every reader-facing install example on one released version", async () => {
+    const [manifestSource, ...documents] = await Promise.all([
+      readFile(manifestUrl, "utf8"),
+      ...installDocumentUrls.map(url => readFile(url, "utf8")),
+    ]);
+    const packageVersion = String((JSON.parse(manifestSource) as { readonly version?: unknown }).version);
+    const readme = documents[0] ?? "";
+    const patterns = [
+      /hraness\/direct#v(\d+\.\d+\.\d+)/gu,
+      /releases\/(?:download|tag)\/v(\d+\.\d+\.\d+)/gu,
+      /hraness-direct-(\d+\.\d+\.\d+)\.tgz/gu,
+      /@hraness\/direct@(\d+\.\d+\.\d+)/gu,
+      /--branch v(\d+\.\d+\.\d+)/gu,
+      /immutable v(\d+\.\d+\.\d+) GitHub release/gu,
+      /^version=(\d+\.\d+\.\d+)$/gmu,
+    ];
+    const versions = new Set<string>();
+    for (const document of documents) {
+      for (const pattern of patterns) {
+        for (const match of document.matchAll(pattern)) versions.add(String(match[1]));
+      }
+    }
+    expect(versions.size).toBe(1);
+    const [installVersion] = [...versions];
+    expect(Bun.semver.order(String(installVersion), packageVersion)).toBeLessThanOrEqual(0);
+    for (const example of [
+      `releases/download/v${String(installVersion)}/hraness-direct-${String(installVersion)}.tgz`,
+      `@hraness/direct@${String(installVersion)}`,
+      `npx skills add hraness/direct#v${String(installVersion)}`,
+      `git clone --branch v${String(installVersion)} --depth 1`,
+    ]) expect(readme).toContain(example);
+    expect(readme).not.toMatch(/source candidate/iu);
   });
 
   test("separates read-only verification from the exact terminal OIDC publish", async () => {

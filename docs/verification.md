@@ -10,8 +10,8 @@ definition with `parseDefinitionCoverageSnapshot` so a valid but stale catalog
 cannot be mistaken for the catalog under review.
 
 The repository carries one `$direct` Agent Skill under `skills/direct`.
-Install it with `npx skills add hraness/direct#v0.7.20` or
-`bunx skills add hraness/direct#v0.7.20`, or copy that directory into the runner's
+Install it with `npx skills add hraness/direct#v0.7.22` or
+`bunx skills add hraness/direct#v0.7.22`, or copy that directory into the runner's
 discovery location. Invoke `$direct` for the workflow below. The skill is
 independent from library package installation and structures the audit; it
 does not turn deterministic evidence into proof of a substituted live system.
@@ -187,8 +187,8 @@ reading the bridge alone does not establish those properties. Retain the exact
 agent-browser version, configured backend, allowed hosts, observed browser
 identity, verifier-assigned scenario/context label, fresh `window new` command
 and result, tab inventories and close-attempt results, batch index and size,
-execution mode, and final close result. A user-agent string is descriptive
-metadata, not proof of browser or context custody.
+execution mode, and final close result. A user-agent string describes the
+browser; it does not prove which browser or context ran the check.
 
 Require `bridgeSchema` to equal `direct.browser-bridge/v2`, then parse both
 `manifest` and `probe` from `unknown`. Select only a declared scenario. Add
@@ -237,7 +237,7 @@ Quiescence excludes violation counters by design. A verifier must separately rej
 
 ## Assert product behavior
 
-A quiet probe does not prove the interface is correct. After the join:
+A quiet probe does not prove the interface is correct. After the probe is quiet and stable:
 
 1. Assert the expected route and semantic content.
 2. Perform the scenario's product action.
@@ -781,7 +781,7 @@ boundary. Verify that regression fails before the fix and passes after it.
 Retain a reviewed trace fixture only when replay itself adds durable value;
 otherwise remove the sensitive trace after promotion.
 
-## Report coverage without promotion
+## Report what each run covered
 
 Report each catalog entry against the scenarios and direct gates actually exercised:
 
@@ -828,14 +828,14 @@ source.
 Direct contains no browser-run or performance evidence for this policy.
 Collect such evidence externally in the product verifier only when a process
 or context-policy comparison is explicitly in scope. Report end-to-end wall
-time and local host load as different results. Wall time covers any admission
+time and local host load as different results. Wall time covers any queue
 wait, process launch, context creation, navigation, settlement, interactions,
 assertions, tab-close attempts, and final close. Host load covers the
 local agent-browser client and all local Chromium descendants, with CPU time
 and peak resident memory reported separately.
 
-Use the same preview, scenarios, actions, assertions, batch bound, admitted
-concurrency, context policy, containment, and cold or warm policy for every
+Use the same preview, scenarios, actions, assertions, batch bound, concurrency
+limit, context policy, containment, and cold or warm policy for every
 comparison. Report browser launches and contexts created. Lower CPU or memory
 does not by itself mean lower wall time, and state leakage or incomplete
 cleanup is not a valid performance improvement.

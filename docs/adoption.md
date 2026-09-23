@@ -3,8 +3,8 @@
 Add Direct after identifying the product behavior and external boundary under review. Do not begin by designing fixtures around a provider SDK.
 
 The repository carries one `$direct` Agent Skill under `skills/direct`.
-Install it with `npx skills add hraness/direct#v0.7.20` or
-`bunx skills add hraness/direct#v0.7.20`, or copy that directory into the runner's
+Install it with `npx skills add hraness/direct#v0.7.22` or
+`bunx skills add hraness/direct#v0.7.22`, or copy that directory into the runner's
 discovery location. Invoke `$direct` for installation, adoption, and
 verification work. Skill installation is independent from library package
 installation and does not activate Direct in a product.
@@ -23,7 +23,7 @@ Add example tests for useful worlds and rejected regressions. Add property tests
 
 ## 3. Define scenarios and coverage
 
-Call `defineDirect` once with the world parser, one validated default, stable scenario identifiers, and explicit coverage entries. Authored invalid configuration throws during startup because it is a programming error. Use `tryDefineDirect` for typed configuration assembled dynamically. Use `parseDirectDefinition` for a genuinely unknown value; its result deliberately retains broad JSON-world and string-route types.
+Call `defineDirect` once with the world parser, one validated default, stable scenario identifiers, and explicit coverage entries. Authored invalid configuration throws during startup because it is a programming error. Use `tryDefineDirect` for typed configuration assembled dynamically. Use `parseDirectDefinition` for untyped input, such as JSON loaded at runtime; its result keeps broad JSON-world and string-route types.
 
 One definition may contain at most 256 scenarios and 256 coverage entries.
 These are public discovery limits, not suggestions for one large workbench.

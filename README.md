@@ -2,61 +2,65 @@
 
 [![skills.sh](https://skills.sh/b/hraness/direct)](https://skills.sh/hraness/direct)
 
-A TypeScript harness for deterministic frontend testing and development with
-repeatable scenarios, local fixtures, and browser verification for coding
-agents.
-Direct makes hard-to-reach frontend states addressable by URL. It runs your real
-interface and feature code against named, validated local fixture worlds, so
-signed-in, empty, and error states are repeatable without clicking through setup
-or depending on live systems.
+Direct gives browser agents repeatable app states for frontend testing. The
+development-only TypeScript library opens signed-in, empty, and error states by
+URL.
 
-[Canonical GitHub releases](https://github.com/hraness/direct/releases) ·
+Direct runs your real interface and feature code against named, validated
+fixture data, so a browser agent can reach a hard-to-set-up state without
+clicking through setup or depending on live systems.
+
+[GitHub releases](https://github.com/hraness/direct/releases) ·
 [Install @hraness/direct from npm](https://www.npmjs.com/package/@hraness/direct) ·
 [Direct source on GitHub](https://github.com/hraness/direct) ·
 [Direct overview](https://hraness.com/direct)
 
 ```text
-real interface and feature state
+real interface and feature code
               │
-      product-owned port
+       your app's port
           ┌───┴────┐
-   production   direct
-     adapter     harness
+   production   Direct
+     adapter    fixtures
 ```
 
 ## Why Direct
 
-- **Keep product behavior real.** The interface and feature logic keep using a
-  product-owned port. Only the external adapters needed for the scenario are
-  replaced. Direct does not automate browser actions, and fixture evidence does
-  not prove those live systems.
-- **Know when the page settled.** A versioned browser contract exposes the
-  active scenario, coverage catalog, and deterministic activity probe. A quiet
-  probe says declared work settled; product-owned assertions must still decide
-  whether the result is correct.
-- **Keep the proof attached to its limits.** Each coverage entry says whether a
-  claim used fixtures, mixed evidence, or the real system. The browser sample
-  binds the scenario, product route, coverage catalog, and current probe before
-  a verifier reports a result.
+Your interface and feature logic run unchanged. They reach external systems
+through a port, a small interface your app owns. In a Direct build, only the
+adapters a scenario needs are replaced with deterministic ones that read
+fixture data.
+
+The page tells your verifier when it is ready. A versioned page API,
+`window.__direct`, exposes the active scenario, the coverage claims, and a
+readiness probe. A quiet probe means the work your app reports to Direct has
+settled; your own assertions still decide whether the result is right.
+
+Each coverage claim says what a check exercised: `fixture` (fixture data
+only), `mixed` (fixture data plus a named live check), or `direct` (the real
+system). A verifier reads the scenario, route, coverage claims,
+and probe from the page in one read before it reports a result. Direct doesn't
+click anything, and a fixture run doesn't test the live systems behind the
+replaced adapters.
 
 ## Install
 
-Install the immutable [v0.7.21 GitHub release](https://github.com/hraness/direct/releases/tag/v0.7.21).
-GitHub Releases are canonical, with npm as an optional mirror of the same archive.
-See the [publishing guide](docs/publishing.md#install-and-update-from-github)
-for archive and provenance verification.
+Install the [v0.7.22 release](https://github.com/hraness/direct/releases/tag/v0.7.22)
+from GitHub. Releases there are immutable, and npm mirrors the same archive.
+The [publishing guide](docs/publishing.md#install-and-update-from-github)
+explains how to verify the archive and its provenance.
 
 Pin Direct as a development dependency:
 
 ```sh
-bun add --dev https://github.com/hraness/direct/releases/download/v0.7.21/hraness-direct-0.7.21.tgz
+bun add --dev https://github.com/hraness/direct/releases/download/v0.7.22/hraness-direct-0.7.22.tgz
 # or
-npm install --save-dev https://github.com/hraness/direct/releases/download/v0.7.21/hraness-direct-0.7.21.tgz
+npm install --save-dev https://github.com/hraness/direct/releases/download/v0.7.22/hraness-direct-0.7.22.tgz
 ```
 
-The verified npm mirror is also available as `@hraness/direct@0.7.21`.
-Keep Direct in `devDependencies`. A production entry must not import Direct,
-its fixture worlds, or its workbench.
+The same archive is on npm as `@hraness/direct@0.7.22`. Keep Direct in
+`devDependencies`, and don't import Direct, its fixture worlds, or its
+workbench from a production entry.
 
 ## Open one deterministic state
 
@@ -65,7 +69,7 @@ composition. It requires Git and Bun 1.3.14, then downloads the source and its
 development dependencies:
 
 ```sh
-git clone --branch v0.7.21 --depth 1 https://github.com/hraness/direct.git
+git clone --branch v0.7.22 --depth 1 https://github.com/hraness/direct.git
 cd direct
 bun install --frozen-lockfile --ignore-scripts
 bun run example:direct
@@ -121,40 +125,40 @@ The released Todo composition returns this initial sample:
 ```
 
 The driver can now complete “Write the public guide,” wait for a second stable
-probe, and assert that the real Todo interface changed. The `fixture` mode says
-exactly what that evidence covers: the interface and product port ran, while
-browser local-storage behavior did not. The example keeps that live-adapter
-claim separate as `direct` evidence.
+probe, and assert that the real Todo interface changed. The `fixture` mode
+records what that run covered: the interface and the app's port ran, but
+browser local storage did not. The example tracks local storage as a separate
+`direct` claim, which needs real browser storage.
 
 ## Choose an interface
 
-| Interface | Use it for | Boundary |
+| Interface | Use it for | Limit |
 | --- | --- | --- |
-| `$direct` Agent Skill | Install Direct, design a product-owned port, add scenarios, and audit evidence | Guides repository work; it does not install the package or change a project by itself |
-| TypeScript package | Define worlds, open sessions, install the browser contract, and parse evidence | Development-only; production graphs must exclude Direct |
-| Browser driver | Navigate, interact, inspect semantics, and capture visual evidence | Direct does not provide one or claim that fixture worlds tested replaced systems |
+| `$direct` Agent Skill | Install Direct, design your app's port, add scenarios, and audit coverage claims | Guides an agent's work; it doesn't install the package or change a project on its own |
+| TypeScript package | Define worlds, open sessions, install the `window.__direct` page API, and read results | Development-only; keep it out of production builds |
+| Browser driver | Navigate, interact, inspect semantics, and capture screenshots | Not part of Direct; use agent-browser, Playwright, or another driver |
 
 ## Install the Agent Skill
 
 Install Direct's single bundled skill from the public repository:
 
 ```sh
-npx skills add hraness/direct#v0.7.21
+npx skills add hraness/direct#v0.7.22
 # or
-bunx skills add hraness/direct#v0.7.21
+bunx skills add hraness/direct#v0.7.22
 ```
 
-The skill is invoked as `$direct`. It routes installation, adoption, and
-verification work while keeping the development-only production boundary
-visible. Restart or reload an agent runner that does not discover newly
-installed skills during the current session.
+Invoke the skill as `$direct`. It guides installation, adoption, and
+verification, including a check that production builds exclude Direct. Restart
+or reload an agent runner that does not discover newly installed skills during
+the current session.
 
 ### Tell your coding agent to install it
 
 Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
-Use $direct to install hraness/direct from the immutable v0.7.21 GitHub release
+Use $direct to install hraness/direct from the immutable v0.7.22 GitHub release
 archive. Follow the repository README, add
 `@hraness/direct` to devDependencies only, and verify that the production
 dependency graph excludes Direct. Do not add a fixture composition until I
@@ -162,16 +166,16 @@ ask.
 ```
 
 The repository and tagged package carry the same skill. Installing the skill
-does not add Direct to a consumer project. The skills CLI remains the preferred
-way to let runners discover it; the packaged copy supports runners and tools
+does not add Direct to a consumer project. The skills CLI is the preferred way
+to let runners discover it; the packaged copy supports runners and tools
 that read skills from installed development dependencies.
 
-Pin the canonical archive in the consumer manifest:
+Pin the release archive in your project's manifest:
 
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "https://github.com/hraness/direct/releases/download/v0.7.21/hraness-direct-0.7.21.tgz"
+    "@hraness/direct": "https://github.com/hraness/direct/releases/download/v0.7.22/hraness-direct-0.7.22.tgz"
   }
 }
 ```
@@ -187,17 +191,17 @@ npm install
 ## Agent skills
 
 Packages built from this source include one Agent Skill under
-`node_modules/@hraness/direct/skills/direct/`. `$direct` guides a product-owned
-port and deterministic composition, then audits scenario behavior,
-quiescence, coverage claims, cleanup, and emitted production boundaries. The
+`node_modules/@hraness/direct/skills/direct/`. `$direct` guides an agent
+through adding your app's port and a Direct build, then audits scenario
+behavior, readiness, coverage claims, cleanup, and production build output. The
 package smoke test keeps the packaged copy byte-identical to the tagged
 repository skill.
 
-Prefer `npx skills add hraness/direct#v0.7.21` or
-`bunx skills add hraness/direct#v0.7.21` for runner discovery. You can also copy
+Prefer `npx skills add hraness/direct#v0.7.22` or
+`bunx skills add hraness/direct#v0.7.22` for runner discovery. You can also copy
 or link that one skill directory into a runner's configured location, then
-invoke `$direct`. Package installation leaves the skill inert: it does not run
-a `postinstall` hook or edit repository or user configuration.
+invoke `$direct`. Installing the package doesn't activate the skill. It runs no
+`postinstall` hook and changes no repository or user configuration.
 
 ## A complete browser composition
 
@@ -245,11 +249,12 @@ renderGreeting(session.harness.greeting);
 globalThis.addEventListener("pagehide", session.dispose, { once: true });
 ```
 
-`defineDirect` is the concise authored-config path; scenario defaults and coverage citations are checked against the same scenario tuple. Use `tryDefineDirect` for typed configuration assembled dynamically. Use `parseDirectDefinition` for a genuinely `unknown` value; it returns a `Result` with an intentionally broad JSON world and string route because foreign data cannot supply compile-time refinements.
+`defineDirect` is the concise authored-config path; scenario defaults and coverage citations are checked against the same scenario tuple. Use `tryDefineDirect` for typed configuration assembled dynamically. Use `parseDirectDefinition` for untyped input, such as JSON loaded at runtime; it returns a `Result` with a broad JSON world and string route, because untyped data cannot carry compile-time types.
 
 One definition may contain at most 256 scenarios and 256 coverage entries.
 
-The session supplies the parsed world, generation-safe store, logical clock,
+The session supplies the parsed world, a store that rejects writes left over
+from before a reset, a logical clock,
 activity scope, cancellation signal, world-free manifest, probe, coverage
 value, and reverse-order cleanup. The browser installer publishes that
 manifest with the live probe and reset action, blocks unmapped `fetch` calls
@@ -297,19 +302,19 @@ React workbench, and emitted-graph boundary verifier. The
 platform-resolved Expo composition while keeping native production graphs
 Direct-free.
 
-## Keep evidence honest
+## Coverage modes
 
-Coverage entries have one proof mode:
+Each coverage entry has one mode:
 
 | Mode | Meaning |
 | --- | --- |
 | `fixture` | The real interface and product logic ran through deterministic ports. Replaced adapters and platforms were not exercised. |
-| `mixed` | Fixture evidence is paired with named direct adapter or service evidence. Neither half is sufficient alone. |
+| `mixed` | Fixture evidence is paired with named evidence from the real adapter or service. Neither half is enough alone. |
 | `direct` | The claim requires the real host, service, runtime, filesystem, operating system, or device. |
 
 Coverage cites scenario IDs rather than duplicating a singular route. Each scenario owns its route, so one claim may span scenarios on different routes without inventing a second routing abstraction.
 
-A quiet probe means the declared deterministic work settled. It does not prove that the rendered result is correct. Pair quiescence with product-owned semantic assertions, visual inspection where relevant, and direct tests for every replaced boundary named by the coverage catalog.
+A quiet probe means the declared deterministic work settled. It does not prove that the rendered result is correct. Pair quiescence with your own semantic assertions, visual inspection where relevant, and real-system tests for every replaced adapter the coverage catalog names.
 
 ## Package surfaces
 
@@ -529,48 +534,46 @@ hybrid bridge shape.
 
 ## Repository scope
 
-This repository contains the deterministic kernel, browser bridge, production-exclusion scanner, bounded host-verification helpers, agent skills, a small React example, and an Expo/React Native reference app. It does not bundle a browser driver, shared process coordinator, browser-worker pool, or browser benchmark. The optional agent-browser helper invokes the consumer's local installation. The optional Bombadil helper supervises one explicitly configured local server and native Bombadil process tree, but does not coordinate concurrent repositories or turn diagnostic fuzzing into product-specific proof. The product owns semantic assertions and evidence claims, and external proof remains required for replaced systems, browser custody, or performance.
+This repository contains the core library, the browser bridge, a scanner that checks production builds for Direct code, host-side verification helpers, the `$direct` Agent Skill, a small React example, an Effect workflow example, and an Expo/React Native reference app. It does not include a browser driver, a shared process coordinator, a pool of browser workers, or a browser benchmark. The optional agent-browser helper runs the copy installed in your project. The optional Bombadil helper supervises one local server and one Bombadil process tree that you configure. It doesn't coordinate runs across repositories, and its fuzzing results are diagnostics, not a test of your app's behavior. Your app owns its assertions and coverage claims. The systems Direct replaces, which browser and context produced a result, and performance each need evidence from outside Direct.
 
 <!-- article:direct-a-harness-for-your-frontend:start -->
-## [Direct gives browser agents deterministic app states](<https://hraness.com/direct>)
+## [Direct gives browser agents repeatable app states](<https://hraness.com/direct>)
 
-> Browser tools control a page. Direct makes the state behind it quick to reach and repeatable without claiming to test the external systems it replaces.
+> Direct sets up the state behind a page, such as a signed-in account or a failed save, and gives it a URL your browser agent can open again and again. It stands in for live services with fixture data, so it does not test those services.
 
-A browser agent can open a page, click a control, and inspect the result. It cannot make the state behind that page quick to reach. A signed-in account, a particular database record, a device permission, a model response, or a failure at the right moment may still take longer to arrange than the interface takes to review.
+A browser agent can open a page, click a control, and inspect the result. What it can't do quickly is set up the state behind that page. A signed-in account, a particular database record, a device permission, a model response, or a failure at the right moment can take longer to arrange than the screen takes to review.
 
-[Hraness Direct](<https://hraness.com/direct>) separates those two jobs. A browser tool controls the page. The product connects Direct's named, repeatable states to its existing interface and feature logic through deterministic adapters below a small product-owned boundary. Direct speeds up development and review; it does not drive the browser or prove that replaced systems work.
+Direct handles that setup. Your app reaches each slow or unpredictable dependency through a port, a small interface your app owns. In a Direct build, the port returns fixture data instead of calling the live system, and each state gets a name and a URL. Your browser tool still does the clicking and checking.
 
 ### Browser control and app state are different jobs
 
-[agent-browser](<https://agent-browser.dev/>) gives coding agents a compact command-line interface for opening pages, reading accessibility snapshots, and interacting with elements. Playwright and other browser drivers solve the same broad problem with different APIs. If the state you need is already fast and reliable to reach, a browser tool by itself is the smaller and better choice.
+[agent-browser](<https://agent-browser.dev/>) gives coding agents a compact command-line interface for opening pages, reading accessibility snapshots, and interacting with elements. Playwright and other browser drivers solve the same broad problem with different APIs. If the state you need is already fast and reliable to reach, use a browser tool by itself.
 
-Direct becomes useful when setup dominates the loop: repeated sign-in, slow seed requests, hard-to-create empty or error states, unavailable native modules, paid model calls, or device permissions that automation cannot reset cleanly. Direct does not click the page. It gives the browser tool a stable page state to act on.
+Direct helps when setup dominates the loop: repeated sign-in, slow seed requests, empty or error states that are hard to create, native modules that aren't available, paid model calls, or device permissions that automation can't reset cleanly. Direct doesn't drive the browser. It hands the browser tool a known page state to start from.
 
-### Replace setup below the behavior
+### Swap in fixture data behind your feature code
 
-A product-owned port is a small interface between product behavior and an external system. A task view might ask a task repository to read and update tasks. Production connects that port to a live service. A Direct composition connects the same port to a deterministic implementation. The interface, reducers, parsing, navigation, and feature decisions above the port stay on their normal code paths.
+For example, a task view might read and update tasks through a task repository port. In production, that port connects to a live service. In a Direct build, the same port connects to a deterministic implementation. The interface, reducers, parsing, navigation, and feature logic above the port run the same code either way.
 
-The boundary can be pictured without knowing the package API:
-
-**Conceptual Direct boundary**
+**Where Direct sits**
 
 ```text
 agent-browser or Playwright
             │
    real interface + feature state
             │
-     product-owned port
+     your app's port
         ┌───┴────┐
   live system   Direct world
 ```
 
-A Direct world is validated JSON that describes one starting state. A scenario gives that world a name and route. It does not contain browser actions. The browser check still decides what to click and what outcome to assert.
+A Direct world is validated JSON that describes one starting state. A scenario gives a world a name and a route. Scenarios contain no browser actions; your browser check decides what to click and what to assert.
 
 The [public Todo example](examples/todos) uses one `TodoPort` in both
-compositions. The component receives whichever implementation the entry point
-owns:
+builds. The component receives whichever implementation its entry point
+provides:
 
-**One product port, two compositions**
+**One port, two builds**
 
 ```typescript
 export interface TodoPort {
@@ -586,23 +589,23 @@ const port = isDirect
 <TodoApp port={port} />
 ```
 
-The interface speaks in product terms: todos and completion. It contains no Direct types and does not know whether storage is live or deterministic. Use the lowest port that preserves the behavior under review. If the Direct adapter must copy the logic named by the claim, the boundary is too high and the fixture would imitate its subject instead of testing it.
+The interface speaks in the app's own terms: todos and completion. It contains no Direct types and doesn't know whether storage is live or deterministic. Put the port as low as you can while keeping the behavior under review above it. If the Direct adapter has to copy the logic you're trying to test, the port is too high, and the fixture would imitate that logic instead of testing it.
 
-### Direct owns one deterministic session
+### One session per scenario
 
-Direct gives the development composition one lifecycle instead of a collection of unrelated fixture helpers:
+At runtime, a Direct build has three parts:
 
-- A definition lists the named scenarios, their routes, and which systems each check claims to exercise, then validates that those declarations agree.
+- A definition lists the named scenarios, their routes, and which systems each check claims to exercise, and it checks that those declarations agree.
 - A session activates one scenario and owns its deterministic state, controllable clock, pending work, reset, and cleanup.
-- A small browser-facing manifest identifies the available and active scenarios, exposes readiness and reset controls, and blocks unmapped application requests by default.
+- A browser installation publishes a small manifest of the available and active scenarios, exposes readiness and reset controls, and by default blocks `fetch` calls to URLs your app hasn't allowed.
 
-That default network policy matters. A deterministic page should not silently call a live service when a fixture misses a case. The product can allow exact URLs when needed, but unknown application calls fail visibly. Direct and its fixture worlds also stay outside the production dependency graph.
+The `fetch` block is on by default so that a fixture gap shows up as a failed request instead of a quiet call to a live service. Your app can allow specific URLs. The block covers `fetch` calls in the page where Direct is installed; WebSockets, EventSource, navigation, asset loads, and requests from workers or other frames are not intercepted. Direct and its fixture worlds stay out of the production dependency graph.
 
-The published manifest is a machine-readable description of the deterministic page. An agent can discover valid scenario IDs and routes, confirm that the active session matches the requested scenario and route, and inspect readiness without reading a product-specific source file. The browser tool still owns navigation and interaction; Direct does not turn scenarios into commands.
+An agent can read the manifest to list valid scenario IDs and routes, confirm that the page opened the scenario and route it asked for, and check readiness, all without reading your source files.
 
-### Wait for the app, not a guess
+### Wait until the app is ready
 
-A fixed delay says, “wait 500 milliseconds and hope.” Direct exposes a readiness snapshot: no tracked operation is active, and each product-named pending counter is zero. The product's browser verifier polls until the active scenario, its tracked-work revision, and the counters remain unchanged for a bounded interval before checking the interface.
+A fixed delay says, “wait 500 milliseconds and hope.” Direct exposes a readiness snapshot instead: no tracked operation is active, and every pending counter your app names is zero. Your browser verifier polls until the active scenario, the revision of tracked work, and the counters stay the same for a settle interval you choose, then checks the interface.
 
 **Browser check using a named Direct scenario**
 
@@ -622,37 +625,31 @@ await expect(page.getByRole("checkbox", {
 })).toBeChecked();
 ```
 
-Here, `waitForQuiescence` is product-owned verifier code around Direct's snapshot, not a Direct browser driver. A settled snapshot proves only that the work Direct knows about has stopped changing. It does not prove that the screen is correct. The verifier must still reject relevant console, runtime, and unhandled-request errors, then make product-specific assertions or visual checks.
+`waitForQuiescence` is a helper in your own verifier that reads Direct's snapshot; Direct doesn't ship it. A settled snapshot shows only that the work Direct knows about has stopped changing. It doesn't show that the screen is correct, so the verifier still has to reject relevant console, runtime, and unhandled-request errors, then make its own assertions or visual checks.
 
-### One trace connects the URL to the claim
+### Follow one check from URL to result
 
-The Todo example exposes each part of the check as an inspectable object rather
-than a hidden setup script:
+The Todo example exposes each step of a check as something you can inspect:
 
-| Stage | Observable evidence |
+| Step | What you can see |
 | --- | --- |
-| Select | `?__direct_scenario=todos.populated` names the validated world. |
-| Bind | The manifest reports `todos.populated`, product route `/`, and the `todos.completion` coverage entry. |
-| Join | The probe reports zero `todoOperations`, zero declared violations, and a stable quiescent revision. |
-| Act | The browser driver checks the “Write the public guide” control in the real Todo interface. |
-| Verify | A second stable probe and a checked control show that the interface changed through the product-owned port. |
-| Limit | The claim remains `fixture` evidence. Local-storage parsing, quota behavior, and persistence stay assigned to a separate `direct` check. |
+| Open | `?__direct_scenario=todos.populated` selects the validated world. |
+| Confirm | The manifest reports scenario `todos.populated`, route `/`, and the `todos.completion` coverage entry. |
+| Wait | The probe reports zero `todoOperations`, zero on every declared violation counter, and a quiet revision that stays the same. |
+| Act | The browser driver checks the “Write the public guide” box in the real Todo interface. |
+| Check | A second stable probe and the checked box show that the change went through the app's port. |
+| Limit | The claim stays `fixture` evidence. Local-storage parsing, quota behavior, and persistence need a separate `direct` check against real browser storage. |
 
-That trace is available through the TypeScript package and the driver-neutral
-browser bridge. The `$direct` Agent Skill helps a coding agent add and audit the
-same composition. A browser driver supplies the interaction and visual or
-semantic assertion; Direct supplies no competing driver interface.
+You can read the same trace through the TypeScript package, or from the page itself with any browser driver that can run a script there. The `$direct` Agent Skill helps a coding agent add and audit this setup.
 
 ### Choose the smallest tool that covers the risk
 
 - Use browser automation alone when the required state is already quick to reach, or when the live backend and browser assembly are part of the check.
-- Pair Direct with agent-browser or Playwright when setup and reset dominate the loop and the substituted systems can sit behind a small product-owned port.
-- Use unit or component tests when the subject is isolated logic or rendering that does not need the full application composition.
+- Pair Direct with agent-browser or Playwright when setup and reset dominate the loop and the substituted systems can sit behind a small port your app owns.
+- Use unit or component tests when the subject is isolated logic or rendering that does not need the full application.
 - Keep live integration and end-to-end tests when the backend, native host, browser assembly, filesystem, operating system, or device is the subject.
 
-A coverage claim records which systems a check actually exercised. Direct uses three labels: a fixture claim stops at deterministic ports, a mixed claim combines fixture evidence with a named live check, and a direct claim requires the real system. The labels do not create evidence; they keep a fast development check from being reported as proof of a system it never touched.
-
-Use Direct when the state behind the interface is the bottleneck and a small product-owned port can replace that setup without copying the behavior under review. Use the browser tool alone when it can already reach the state cheaply. In either case, the browser driver supplies the actions and assertions. Direct never exercises the systems behind replaced ports; cover those boundaries separately with live integration or end-to-end tests when their risk requires it.
+Each coverage claim records which systems a check exercised, using one of three labels. A `fixture` claim stops at the deterministic ports. A `mixed` claim pairs fixture evidence with a named live check. A `direct` claim requires the real system. The labels keep a fast development check from being reported as a test of a system it never touched. Direct never exercises the systems behind the ports it replaces, so cover those with live integration or end-to-end tests when their risk warrants it.
 <!-- article:direct-a-harness-for-your-frontend:end -->
 
 ## Develop
@@ -672,7 +669,7 @@ bun run example:react-native:verify
 
 Run the compiled production app with `bun run example:dev`. Run the compiled deterministic workbench with `bun run example:direct`, then select `empty`, `populated`, or `write failure` from its scenario navigation. Both require Node 24, build a fresh StyleX generation, and serve one loopback preview; after edits, stop, rebuild/restart, and refresh. They do not provide HMR. Each build performs its source-map and marker scan; to recheck a retained production generation, run `bun run example:check-boundary -- /absolute/path/printed/by/example:build`.
 
-Run the Expo workbench with `bun run example:react-native`. Its verification command exports iOS and Android production bundles plus the deterministic React Native Web composition with paired source maps, proves the expected shared and platform-specific modules were selected, and rejects native/web cross-contamination. It does not replace browser-driven semantic assertions or direct device evidence.
+Run the Expo workbench with `bun run example:react-native`. Its verification command exports iOS and Android production bundles plus the deterministic React Native Web composition with paired source maps, proves the expected shared and platform-specific modules were selected, and rejects native/web cross-contamination. It does not replace browser-driven semantic assertions or evidence from a real device.
 
 See [Architecture](./docs/architecture.md), [Adoption](./docs/adoption.md), [Verification](./docs/verification.md), and [Wire formats](./docs/wire-formats.md) for durable contracts.
 
@@ -682,25 +679,10 @@ Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request. Report 
 
 Direct is available under the [MIT License](./LICENSE).
 
-## Optional development support
+## Support Direct
 
-Source candidate 0.7.22 adds the helper described below. The installation
-examples above retain the last verified release, 0.7.21. Use 0.7.22 only after
-its immutable archive and provenance are published and verified; check npm
-mirror availability separately.
-
-The Agent Skill can offer optional support after useful work for a person.
-Direct stays free. The person reviews current terms and confirms payment in
-their browser. Direct has no product newsletter and does not suggest an email.
-
-The skill’s standalone `scripts/support.mjs` helper implements the shared
-Hraness preferences. Run it with Node.js and `support protocol --json` to
-inspect the procedure. `support dismiss` disables invitations across
-participating tools on this machine; `support snooze` pauses them for thirty
-days. `support enable` restores invitations while preserving the shared
-seven-day cooldown after an acknowledged offer. `HRANESS_SUPPORT=off` or
-`HRANESS_SUPPORT_AUDIENCE=off` suppresses incidental offers.
-
-The helper is separate from Direct’s library exports and browser tooling.
-Importing Direct and running verification do not show invitations or touch
-support preferences. No command signs up, authenticates, or pays.
+Direct is free, and the library never shows support invitations. After useful
+work, the `$direct` Agent Skill may show one short invitation to
+[support Direct](https://account.hraness.com/support?product=direct#support);
+run `node <skill-directory>/scripts/support.mjs support dismiss` to turn these
+invitations off for every participating Hraness tool on your machine.
