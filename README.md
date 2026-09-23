@@ -599,7 +599,7 @@ At runtime, a Direct build has three parts:
 - A session activates one scenario and owns its deterministic state, controllable clock, pending work, reset, and cleanup.
 - A browser installation publishes a small manifest of the available and active scenarios, exposes readiness and reset controls, and by default blocks `fetch` calls to URLs your app hasn't allowed.
 
-The `fetch` block is on by default so that a fixture gap shows up as a failed request instead of a quiet call to a live service. Your app can allow specific URLs. The block covers `fetch` calls in the page where Direct is installed; WebSockets, EventSource, navigation, asset loads, and requests from workers or other frames are not intercepted. Direct and its fixture worlds stay out of the production dependency graph.
+The `fetch` block is on by default so that a fixture gap shows up as a failed request instead of a quiet call to a live service. Your app can allow specific URLs. The block covers only `fetch` calls made in the page where Direct is installed. Other traffic, such as XMLHttpRequest, WebSockets, EventSource, beacons, navigation, asset loads, and requests from workers or other frames, is not intercepted. Direct and its fixture worlds stay out of the production dependency graph.
 
 An agent can read the manifest to list valid scenario IDs and routes, confirm that the page opened the scenario and route it asked for, and check readiness, all without reading your source files.
 
