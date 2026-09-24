@@ -43,6 +43,13 @@ and probe from the page in one read before it reports a result. Direct doesn't
 click anything, and a fixture run doesn't test the live systems behind the
 replaced adapters.
 
+Direct is built on the design every Hraness project shares: your app keeps its
+own port, only the adapters a scenario needs are replaced, and each run leaves
+coverage claims a verifier can check.
+[The thread through hraness](https://hraness.com/writing/the-thread-through-hraness)
+follows that design across the projects, and the
+[ALGAL vision](https://algal.computer/docs/vision/) states the bet behind it.
+
 ## Install
 
 Install the [v0.7.22 release](https://github.com/hraness/direct/releases/tag/v0.7.22)
