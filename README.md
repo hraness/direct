@@ -2,9 +2,10 @@
 
 [![skills.sh](https://skills.sh/b/hraness/direct)](https://skills.sh/hraness/direct)
 
-Direct gives browser agents repeatable app states for frontend testing. The
-development-only TypeScript library opens signed-in, empty, and error states by
-URL.
+Direct gives browser agents repeatable app states that open by URL, with your
+real interface running on fixture data. This development-only TypeScript
+library serves signed-in, empty, and edge-case states for frontend testing,
+each at its own URL.
 
 Direct runs your real interface and feature code against named, validated
 fixture data, so a browser agent can reach a hard-to-set-up state without
@@ -43,12 +44,9 @@ and probe from the page in one read before it reports a result. Direct doesn't
 click anything, and a fixture run doesn't test the live systems behind the
 replaced adapters.
 
-Direct is built on the design every Hraness project shares: your app keeps its
-own port, only the adapters a scenario needs are replaced, and each run leaves
-coverage claims a verifier can check.
+Hraness develops Soundfish, Slopcamera, and Rough Day with Direct.
 [The thread through hraness](https://hraness.com/writing/the-thread-through-hraness)
-follows that design across the projects, and the
-[ALGAL vision](https://algal.computer/docs/vision/) states the bet behind it.
+describes the ideas behind the studio's projects.
 
 ## Install
 
@@ -72,8 +70,8 @@ workbench from a production entry.
 ## Open one deterministic state
 
 The repository's Todo example runs the same React interface against a Direct
-composition. It requires Git and Bun 1.3.14, then downloads the source and its
-development dependencies:
+composition. It requires Git, Bun 1.3.14, and Node 24, then downloads the
+source and its development dependencies:
 
 ```sh
 git clone --branch v0.7.22 --depth 1 https://github.com/hraness/direct.git
@@ -89,7 +87,7 @@ inspection. The example reserves that exact local address and exits instead of
 silently choosing another port when it is occupied. Stop the development server
 when the review is complete.
 
-## Inspect one complete browser trace
+## Read the page's state in one call
 
 Read the active scenario and its current probe from the page in one synchronous
 evaluation. A browser driver can run this expression after it opens the URL
@@ -544,9 +542,9 @@ hybrid bridge shape.
 This repository contains the core library, the browser bridge, a scanner that checks production builds for Direct code, host-side verification helpers, the `$direct` Agent Skill, a small React example, an Effect workflow example, and an Expo/React Native reference app. It does not include a browser driver, a shared process coordinator, a pool of browser workers, or a browser benchmark. The optional agent-browser helper runs the copy installed in your project. The optional Bombadil helper supervises one local server and one Bombadil process tree that you configure. It doesn't coordinate runs across repositories, and its fuzzing results are diagnostics, not a test of your app's behavior. Your app owns its assertions and coverage claims. The systems Direct replaces, which browser and context produced a result, and performance each need evidence from outside Direct.
 
 <!-- article:direct-a-harness-for-your-frontend:start -->
-## [Direct gives browser agents repeatable app states](<https://hraness.com/direct>)
+## [Give each app state you test its own URL.](<https://hraness.com/direct>)
 
-> Direct sets up the state behind a page, such as a signed-in account or a failed save, and gives it a URL your browser agent can open again and again. It stands in for live services with fixture data, so it does not test those services.
+> Repeatable states for browser agents: your real interface on fixture data, at a URL you can open, test, and share.
 
 A browser agent can open a page, click a control, and inspect the result. What it can't do quickly is set up the state behind that page. A signed-in account, a particular database record, a device permission, a model response, or a failure at the right moment can take longer to arrange than the screen takes to review.
 

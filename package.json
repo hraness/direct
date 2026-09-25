@@ -1,7 +1,7 @@
 {
   "name": "@hraness/direct",
   "version": "0.7.22",
-  "description": "Direct gives browser agents repeatable app states for frontend testing. The development-only TypeScript library opens signed-in, empty, and error states by URL.",
+  "description": "Direct gives browser agents repeatable app states that open by URL, with your real interface running on fixture data.",
   "license": "MIT",
   "type": "module",
   "sideEffects": [
