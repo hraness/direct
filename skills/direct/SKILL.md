@@ -1,14 +1,14 @@
 ---
 name: direct
-description: Use Hraness Direct to give web, React, React Native, and Expo apps repeatable UI states for testing, and to install, adopt, verify, or troubleshoot it. Trigger for repeatable signed-in, empty, loading, and error states; frontend fixtures and scenario URLs; strict JSON worlds; product-owned ports and adapters; logical time; fail-closed network boundaries; agent-browser, Playwright, or Bombadil verification; quiescence probes; coverage claims; property tests; and proving @hraness/direct stays out of production bundles.
+description: Use Direct to give web, React, React Native, and Expo apps repeatable app states for testing, and to install, adopt, verify, or troubleshoot it. Trigger for repeatable signed-in, empty, loading, and error states; frontend fixtures and scenario URLs; strict JSON worlds; product-owned ports and adapters; logical time; fail-closed network boundaries; agent-browser, Playwright, or Bombadil verification; quiescence probes; coverage claims; property tests; and proving @hraness/direct stays out of production bundles.
 ---
 
 # Direct
 
-Direct is a development-only harness for repeatable application states. It
-runs the real interface and feature code against product-owned deterministic
-ports. It does not drive the browser or prove the live systems, hosts,
-platforms, or devices that those ports replace.
+Direct is a development-only TypeScript library that gives browser agents
+repeatable app states. It runs your real interface and feature code against
+deterministic ports your app owns. It does not drive the browser or prove the
+live systems, hosts, platforms, or devices that those ports replace.
 
 ## Choose the workflow
 

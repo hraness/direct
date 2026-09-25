@@ -357,7 +357,7 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
     };
     expect(manifest).toEqual(expect.objectContaining({
       version: "0.7.22",
-      description: "Direct gives browser agents repeatable app states for frontend testing. The development-only TypeScript library opens signed-in, empty, and error states by URL.",
+      description: "Direct gives browser agents repeatable app states that open by URL, with your real interface running on fixture data.",
       keywords: [
         "frontend-development",
         "frontend-testing",
@@ -381,7 +381,7 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
   test("keeps the first browser proof complete and ahead of reference depth", async () => {
     const readme = await readFile(readmeUrl, "utf8");
     const openState = readme.indexOf("## Open one deterministic state");
-    const trace = readme.indexOf("## Inspect one complete browser trace");
+    const trace = readme.indexOf("## Read the page's state in one call");
     const interfaces = readme.indexOf("## Choose an interface");
     const skill = readme.indexOf("## Install the Agent Skill");
     const composition = readme.indexOf("## A complete browser composition");

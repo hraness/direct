@@ -10,7 +10,7 @@ if (args[0] !== "support") {
     id: "direct",
     name: "Direct",
     updates: false,
-    valueProposition: "Support Direct, which gives browser agents repeatable app states.",
+    valueProposition: "Support Direct, which gives browser agents repeatable app states that open by URL.",
   }, args.slice(1), {
     command: [process.execPath, fileURLToPath(import.meta.url)],
     gitEmail: false,
