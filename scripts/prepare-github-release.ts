@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { required, checksums, hash, packageName, parseManifest, record, repository, repositoryId, stableVersion, verifyHandoff, workflow } from "./github-release.js";
+import { required, changelogSection, checksums, hash, packageName, parseManifest, record, releaseNotes, repository, repositoryId, stableVersion, verifyHandoff, workflow } from "./github-release.js";
 import { inspectPackageArtifact } from "./package-artifact.js";
 
 const [directoryArgument, ...extra] = process.argv.slice(2);
@@ -9,6 +9,8 @@ const directory = resolve(directoryArgument);
 const source = record(JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8")) as unknown, "Source package");
 const version = stableVersion(source.version);
 if (source.name !== packageName) throw new Error("Unexpected package identity.");
+// Fail before attestation or publication when the version has no publishable changelog section.
+const section = changelogSection(await readFile(join(process.cwd(), "CHANGELOG.md"), "utf8"), version);
 const archiveName = `hraness-direct-${version}.tgz`;
 await inspectPackageArtifact(join(directory, archiveName));
 const archive = await readFile(join(directory, archiveName));
@@ -16,6 +18,7 @@ const manifest = parseManifest({ schema: "hraness-github-release-v1", repository
   version, tag: `v${version}`, sourceSha: process.env.GITHUB_SHA, workflow, workflowSha: process.env.CURRENT_AUTHORITY_SHA,
   runId: Number(process.env.GITHUB_RUN_ID), runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
   archive: { name: archiveName, bytes: archive.length, sha256: hash(archive), sha512: hash(archive, "sha512") } });
+releaseNotes(manifest, section);
 await writeFile(join(directory, "release-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx" });
 const files = new Map<string, Buffer>();
 for (const name of [archiveName, "npm-pack.json", "release-manifest.json"]) files.set(name, await readFile(join(directory, name)));

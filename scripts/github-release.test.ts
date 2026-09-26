@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { required, admitAttempt, admitCanonicalJobs, canonicalJobs, admitExpectedHandoff, admitMirrorAuthority, admitRelease, admitRemoteAssetBytes, authorizeRelease, authorityPaths, admitVerifiedProvenance, checksums, compareVersions, findReleaseForTag, hash, parseManifest, releaseBody, verifyHandoff } from "./github-release.js";
+import { required, admitAttempt, admitCanonicalJobs, canonicalJobs, admitExpectedHandoff, admitMirrorAuthority, admitRelease, admitRemoteAssetBytes, authorizeRelease, authorityPaths, admitVerifiedProvenance, checksums, compareVersions, findReleaseForTag, hash, parseManifest, releaseBody, verifyHandoff,
+  admitReleaseBody, changelogSection, lastUnnotedVersion, legacyReleaseBody, parseReleaseIdentity, releaseIdentity, releaseNotes } from "./github-release.js";
 
 const archive = Buffer.from("exact canonical bytes");
 function manifest() {
@@ -21,6 +22,30 @@ function files() {
   result.set("SHA256SUMS", Buffer.from(checksums(result)));
   return result;
 }
+const standardChangelog = `# Changelog
+
+Intro text outside any version section.
+
+## 0.7.23 - 2026-10-01
+
+A newer section that 0.7.21 must ignore.
+
+- Newer change.
+
+## v0.7.21 - 2026-09-10
+
+Direct now does one visible thing differently.
+
+- The first change a user notices.
+- A second change, with a wrapped
+  continuation line.
+
+## 0.7.20
+
+Older summary.
+
+- Older change.
+`;
 function attempt() {
   const m = manifest();
   return { id: m.runId, run_attempt: m.runAttempt, head_sha: m.sourceSha, head_branch: m.tag,
@@ -118,19 +143,19 @@ test("draft reconciliation admits only matching state and never substitutes hist
   const m = manifest();
   const inputs = files(); inputs.set("provenance.jsonl", Buffer.from("signed bundle"));
   const draft = { id: 5, tag_name: m.tag, name: `Direct ${m.tag}`, target_commitish: m.sourceSha, draft: true,
-    prerelease: false, immutable: false, body: releaseBody(m), author: { id: 41898282, login: "github-actions[bot]", type: "Bot" },
+    prerelease: false, immutable: false, body: legacyReleaseBody(m), author: { id: 41898282, login: "github-actions[bot]", type: "Bot" },
     assets: [...inputs].map(([name, bytes], index) => ({ id: index + 1, name, browser_download_url: `https://github.com/hraness/direct/releases/download/${m.tag}/${name}`, state: "uploaded", size: bytes.length, digest: `sha256:${hash(bytes)}` })) };
-  expect(() => admitRelease({ ...draft, id: 6 }, m, inputs, true, 5)).toThrow("Release ID changed");
-  expect(() => admitRelease({ ...draft, id: 6, draft: false, immutable: true }, m, inputs, false, 5)).toThrow("Release ID changed");
-  expect(admitRelease({ ...draft, assets: draft.assets.slice(0, 1) }, m, inputs, true).present.size).toBe(1);
-  expect(() => admitRelease({ ...draft, assets: [] }, m, inputs, false)).toThrow("missing");
-  expect(() => admitRelease({ ...draft, author: { id: 123, login: "other" } }, m, inputs, true)).toThrow();
-  expect(() => admitRelease({ ...draft, body: releaseBody({ ...m, runAttempt: 2 }) }, m, inputs, true)).toThrow();
-  expect(() => admitRelease({ ...draft, draft: false }, m, inputs, false)).toThrow();
-  expect(admitRelease({ ...draft, draft: false, immutable: true }, m, inputs, false).draft).toBe(false);
-  expect(() => admitRelease({ ...draft, assets: [{ ...required(draft.assets[0]), digest: `sha256:${"0".repeat(64)}` }] }, m, inputs, true)).toThrow("differs");
-  expect(() => admitRelease({ ...draft, assets: [{ ...required(draft.assets[0]), id: 0 }] }, m, inputs, true)).toThrow("positive");
-  expect(() => admitRelease({ ...draft, assets: [draft.assets[0], { ...required(draft.assets[1]), id: required(draft.assets[0]).id }] }, m, inputs, true)).toThrow("duplicated");
+  expect(() => admitRelease({ ...draft, id: 6 }, m, null, inputs, true, 5)).toThrow("Release ID changed");
+  expect(() => admitRelease({ ...draft, id: 6, draft: false, immutable: true }, m, null, inputs, false, 5)).toThrow("Release ID changed");
+  expect(admitRelease({ ...draft, assets: draft.assets.slice(0, 1) }, m, null, inputs, true).present.size).toBe(1);
+  expect(() => admitRelease({ ...draft, assets: [] }, m, null, inputs, false)).toThrow("missing");
+  expect(() => admitRelease({ ...draft, author: { id: 123, login: "other" } }, m, null, inputs, true)).toThrow();
+  expect(() => admitRelease({ ...draft, body: legacyReleaseBody({ ...m, runAttempt: 2 }) }, m, null, inputs, true)).toThrow();
+  expect(() => admitRelease({ ...draft, draft: false }, m, null, inputs, false)).toThrow();
+  expect(admitRelease({ ...draft, draft: false, immutable: true }, m, null, inputs, false).draft).toBe(false);
+  expect(() => admitRelease({ ...draft, assets: [{ ...required(draft.assets[0]), digest: `sha256:${"0".repeat(64)}` }] }, m, null, inputs, true)).toThrow("differs");
+  expect(() => admitRelease({ ...draft, assets: [{ ...required(draft.assets[0]), id: 0 }] }, m, null, inputs, true)).toThrow("positive");
+  expect(() => admitRelease({ ...draft, assets: [draft.assets[0], { ...required(draft.assets[1]), id: required(draft.assets[0]).id }] }, m, null, inputs, true)).toThrow("duplicated");
   const downloaded = new Map(draft.assets.map(asset => [asset.id, required(inputs.get(asset.name))]));
   expect(() => admitRemoteAssetBytes(draft, inputs, downloaded)).not.toThrow();
   expect(() => admitRemoteAssetBytes(draft, inputs, new Map(downloaded).set(1, Buffer.from("changed after digest response")))).toThrow("bytes differ");
@@ -224,18 +249,18 @@ test("draft display URLs do not grant authority and published assets require the
   const m = manifest(), inputs = files();
   inputs.set("provenance.jsonl", Buffer.from("signed bundle"));
   const release = { id: 5, tag_name: m.tag, name: `Direct ${m.tag}`, target_commitish: m.sourceSha, draft: true,
-    prerelease: false, immutable: false, body: releaseBody(m), author: { id: 41898282, login: "github-actions[bot]", type: "Bot" },
+    prerelease: false, immutable: false, body: legacyReleaseBody(m), author: { id: 41898282, login: "github-actions[bot]", type: "Bot" },
     assets: [...inputs].map(([name, bytes], index) => ({ id: index + 1, name, state: "uploaded", size: bytes.length, digest: `sha256:${hash(bytes)}`,
       browser_download_url: `https://github.com/hraness/direct/releases/download/untagged-ef6c1bd779e9dd4032bb/${name}` })) };
-  expect(() => admitRelease(release, m, inputs, false)).not.toThrow();
+  expect(() => admitRelease(release, m, null, inputs, false)).not.toThrow();
   expect(() => admitRemoteAssetBytes(release, inputs, new Map(release.assets.map(asset => [asset.id, required(inputs.get(asset.name))])))).not.toThrow();
   const published = { ...release, draft: false, immutable: true, assets: release.assets.map(asset => ({ ...asset,
     browser_download_url: `https://github.com/hraness/direct/releases/download/${m.tag}/${asset.name}` })) };
-  expect(() => admitRelease(published, m, inputs, false)).not.toThrow();
+  expect(() => admitRelease(published, m, null, inputs, false)).not.toThrow();
   for (const url of [required(release.assets[0]).browser_download_url,
     `https://github.com/other/direct/releases/download/${m.tag}/${m.archive.name}`,
     `https://github.com/hraness/direct/releases/download/${m.tag}/wrong.tgz`]) {
-    expect(() => admitRelease({ ...published, assets: published.assets.map((asset, index) => index ? asset : { ...asset, browser_download_url: url }) }, m, inputs, false)).toThrow("Published asset URL");
+    expect(() => admitRelease({ ...published, assets: published.assets.map((asset, index) => index ? asset : { ...asset, browser_download_url: url }) }, m, null, inputs, false)).toThrow("Published asset URL");
   }
 });
 test("mirror admission binds all canonical jobs without making downstream npm success a prerequisite", () => {
@@ -313,7 +338,7 @@ test("mirror and mirror-verify CLI rebind provider proof and emit exact canonica
   const m = manifest(), current = "b".repeat(40), inputs = files();
   inputs.set("provenance.jsonl", Buffer.from("fixture cryptographic verifier input"));
   const release = { id: 55, tag_name: m.tag, name: `Direct ${m.tag}`, target_commitish: m.sourceSha,
-    draft: false, prerelease: false, immutable: true, body: releaseBody(m), author: { id: 41898282, login: "github-actions[bot]", type: "Bot" },
+    draft: false, prerelease: false, immutable: true, body: legacyReleaseBody(m), author: { id: 41898282, login: "github-actions[bot]", type: "Bot" },
     assets: [...inputs].map(([name, bytes], index) => ({ id: index + 1, name, state: "uploaded", size: bytes.length,
       digest: `sha256:${hash(bytes)}`, browser_download_url: `https://github.com/hraness/direct/releases/download/${m.tag}/${name}` })) };
   const run = { ...attempt(), id: 456, head_sha: current, head_branch: "main", event: "workflow_dispatch" };
@@ -354,7 +379,10 @@ globalThis.fetch = async input => {
   else if (p.endsWith('/git/ref/heads/main')) value = { object: { type: 'commit', sha: f.current } };
   else if (p.endsWith('/branches/main')) value = { protected: true, commit: { sha: f.current } };
   else if (p.includes('/compare/')) value = { status: 'ahead' };
-  else if (p.includes('/contents/')) value = { type: 'file', encoding: 'base64', content: Buffer.from('reviewed authority').toString('base64') };
+  else if (p.endsWith('/contents/CHANGELOG.md')) {
+    if (f.changelog === null) return new Response('Not Found', { status: 404 });
+    value = { type: 'file', encoding: 'base64', content: Buffer.from(f.changelog).toString('base64') };
+  } else if (p.includes('/contents/')) value = { type: 'file', encoding: 'base64', content: Buffer.from('reviewed authority').toString('base64') };
   else throw new Error('Unexpected fixture API route: ' + p);
   return Response.json(value);
 };
@@ -362,8 +390,15 @@ const [helper, mode, directory] = process.argv.slice(2);
 process.argv = [process.execPath, helper, mode, directory];
 await import(helper);
 `);
-    for (const mode of ["mirror", "mirror-verify"]) {
-      const directory = join(root, mode), output = join(root, `${mode}.output`);
+    const section = changelogSection(standardChangelog, m.version);
+    const variants = [
+      { name: "legacy", changelog: null, body: legacyReleaseBody(m), ok: true },
+      { name: "standard", changelog: standardChangelog, body: releaseBody(m, section), ok: true },
+      { name: "tampered", changelog: standardChangelog, body: releaseBody(m, section).replace("## Changes", "## Changed"), ok: false },
+    ];
+    for (const variant of variants) for (const mode of ["mirror", "mirror-verify"]) {
+      await writeFile(fixturePath, JSON.stringify({ ...fixture, changelog: variant.changelog, release: { ...release, body: variant.body } }));
+      const directory = join(root, `${variant.name}-${mode}`), output = join(root, `${variant.name}-${mode}.output`);
       if (mode === "mirror-verify") {
         await mkdir(directory);
         for (const [name, bytes] of inputs) await writeFile(join(directory, name), bytes);
@@ -376,11 +411,16 @@ await import(helper);
         GITHUB_REPOSITORY_ID: "1306913032", GITHUB_ACTOR_ID: "894119", GITHUB_RUN_ID: "456", GITHUB_RUN_ATTEMPT: "1", GITHUB_OUTPUT: output,
       }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 10_000 });
       const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+      if (!variant.ok) {
+        expect(exitCode).not.toBe(0);
+        expect(stderr).toContain("Release notes differ from the rendered changelog section.");
+        continue;
+      }
       expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
       expect(await readFile(output, "utf8")).toBe(`canonical_source_sha=${m.sourceSha}\npackage_version=${m.version}\ncanonical_release_id=55\ncanonical_run_id=123\ncanonical_run_attempt=1\narchive_sha256=${m.archive.sha256}\npack_sha256=${hash(required(inputs.get("npm-pack.json")))}\n`);
     }
   } finally { await rm(root, { recursive: true, force: true }); }
-}, 30_000);
+}, 60_000);
 
 test("terminal metadata admission retains only the parser's exact named extra-file allowance", async () => {
   const workflow = await readFile(new URL("../.github/workflows/npm-publish.yml", import.meta.url), "utf8");
@@ -455,3 +495,81 @@ test("the actual package passes canonical and terminal publication bounds", asyn
     });
   } finally { await rm(root, { recursive: true, force: true }); }
 }, 20_000);
+
+test("changelog sections fail closed when missing, empty, duplicated, malformed or unreleased", () => {
+  expect(changelogSection(standardChangelog, "0.7.21")).toEqual({ summary: "Direct now does one visible thing differently.",
+    changes: "- The first change a user notices.\n- A second change, with a wrapped\n  continuation line." });
+  expect(changelogSection(standardChangelog, "0.7.20")).toEqual({ summary: "Older summary.", changes: "- Older change." });
+  expect(() => changelogSection(standardChangelog, "0.7.19")).toThrow("no section");
+  expect(() => changelogSection("## 0.7.21\n\n## 0.7.20\n\nOld.\n\n- Old.\n", "0.7.21")).toThrow("empty");
+  expect(() => changelogSection("## 0.7.21\n", "0.7.21")).toThrow("empty");
+  expect(() => changelogSection("## 0.7.21 - Unreleased\n\nSummary.\n\n- Change.\n", "0.7.21")).toThrow("Unreleased");
+  expect(() => changelogSection("## 0.7.21\n\nUnreleased work.\n\n- Change.\n", "0.7.21")).toThrow("Unreleased");
+  expect(() => changelogSection("## Unreleased\n\n- Pending.\n\n## 0.7.21 - 2026-09-10\n\nSummary.\n\n- Change.\n", "0.7.21")).not.toThrow();
+  expect(() => changelogSection("## 0.7.21 (soon)\n\nSummary.\n\n- Change.\n", "0.7.21")).toThrow("malformed");
+  expect(() => changelogSection("## 0.7.21\n\nA.\n\n- B.\n\n## v0.7.21\n\nC.\n\n- D.\n", "0.7.21")).toThrow("more than one");
+  expect(() => changelogSection("## 0.7.21\n\nSummary only.\n", "0.7.21")).toThrow("bullet");
+  expect(() => changelogSection("## 0.7.21\n\n- Bullet only.\n", "0.7.21")).toThrow("summary");
+  expect(() => changelogSection("## 0.7.21\n\nSummary.\n\n### Changes\n\n- Change.\n", "0.7.21")).toThrow("only a summary");
+  expect(() => changelogSection("## 0.7.21\n\nSummary.\n\n- Change.\n\nTrailing prose.\n", "0.7.21")).toThrow("prose after");
+  expect(() => changelogSection("## 0.7.21\n\nSummary <!-- x -->.\n\n- Change.\n", "0.7.21")).toThrow("only a summary");
+  expect(() => changelogSection("## 0.7.21\r\n\r\nSummary.\r\n\r\n- Change.\r\n", "0.7.21")).toThrow("LF");
+});
+
+test("the repository changelog carries a publishable section for the package version", async () => {
+  const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
+  const changelog = await readFile(new URL("../CHANGELOG.md", import.meta.url), "utf8");
+  const section = changelogSection(changelog, pkg.version);
+  expect(section.summary.length).toBeGreaterThan(0);
+  expect(section.changes.startsWith("- ")).toBe(true);
+});
+
+test("release body renders summary, changes, install, verify, then the identity record as its final bytes", () => {
+  const m = manifest(), section = changelogSection(standardChangelog, m.version), body = releaseBody(m, section);
+  expect(body).toBe(`${releaseNotes(m, section)}\n${releaseIdentity(m)}`);
+  expect(body.endsWith("\n-->")).toBe(true);
+  const order = [section.summary, "\n## Changes\n", section.changes, "\n## Install\n",
+    `bun add --dev https://github.com/hraness/direct/releases/download/${m.tag}/${m.archive.name}`, `bun add --dev @hraness/direct@${m.version}`,
+    "\n## Verify\n", "`SHA256SUMS`", m.archive.sha256, `https://github.com/hraness/direct/commit/${m.sourceSha}`,
+    `https://github.com/hraness/direct/blob/${m.tag}/docs/publishing.md#install-and-update-from-github`, "<!-- hraness-github-release-v1\n"];
+  let cursor = 0;
+  for (const part of order) { const next = body.indexOf(part, cursor); expect({ part, found: next >= cursor }).toEqual({ part, found: true }); cursor = next + part.length; }
+  expect(body.startsWith(section.summary)).toBe(true);
+  for (const banned of ["latest", "What's Changed", "Full Changelog", "Generated with", "Automated release", "Canonical GitHub release for"]) expect(body).not.toContain(banned);
+  expect(releaseNotes(m, section)).not.toContain("<!--");
+  expect(releaseNotes(m, section)).not.toContain("run-id");
+});
+
+test("identity record still parses from the last marker and admits only exact notes", () => {
+  const m = manifest(), section = changelogSection(standardChangelog, m.version);
+  const notes = releaseNotes(m, section), body = releaseBody(m, section);
+  const parsed = parseReleaseIdentity(body);
+  expect(parsed.notes).toBe(`${notes}\n`);
+  expect(parsed.identity).toBe(releaseIdentity(m));
+  expect(parsed.fields).toEqual({ repository: "hraness/direct", tag: m.tag, "source-sha": m.sourceSha, workflow: ".github/workflows/release.yml",
+    "workflow-sha": m.workflowSha, "run-id": String(m.runId), "run-attempt": String(m.runAttempt), "archive-sha256": m.archive.sha256 });
+  expect(parseReleaseIdentity(legacyReleaseBody(m).replace(/\n\nInstall[\s\S]*$/u, "")).fields["run-id"]).toBe("123");
+  expect(() => admitReleaseBody(body, m, notes)).not.toThrow();
+  expect(() => admitReleaseBody(`${body}\n`, m, notes)).toThrow("must end");
+  expect(() => admitReleaseBody(body.replace("The first change", "The first edited change"), m, notes)).toThrow("Release notes differ");
+  expect(() => admitReleaseBody(`Prepended.\n${body}`, m, notes)).toThrow("Release notes differ");
+  expect(() => admitReleaseBody(body, m, null)).toThrow("Release notes differ");
+  expect(() => admitReleaseBody(body, { ...m, runAttempt: 2 }, notes)).toThrow("identity record differs");
+  expect(() => admitReleaseBody(body.replace("run-attempt=1", "run-attempt=1\nextra=1"), m, notes)).toThrow("unexpected fields");
+  expect(() => admitReleaseBody(`${body} <!-- trailing -->`, m, notes)).toThrow();
+  expect(() => admitReleaseBody(body.replace("<!-- hraness-github-release-v1\n", "<!-- other\n"), m, notes)).toThrow("no identity");
+  const decoy = `${notes}\n${releaseIdentity({ ...m, runId: 999 })}\n${releaseIdentity(m)}`;
+  expect(() => admitReleaseBody(decoy, m, notes)).toThrow("Release notes differ");
+  expect(parseReleaseIdentity(decoy).fields["run-id"]).toBe("123");
+});
+
+test("the original body is admitted only for versions released before changelog notes", () => {
+  const m = manifest();
+  expect(lastUnnotedVersion).toBe("0.7.22");
+  expect(() => admitReleaseBody(legacyReleaseBody(m), m, null)).not.toThrow();
+  expect(() => admitReleaseBody(legacyReleaseBody(m), m, "notes")).not.toThrow();
+  const next = { ...m, version: "0.7.23", tag: "v0.7.23", archive: { ...m.archive, name: "hraness-direct-0.7.23.tgz" } };
+  expect(() => admitReleaseBody(legacyReleaseBody(next), next, null)).toThrow();
+  const section = changelogSection("## 0.7.23\n\nSummary.\n\n- Change.\n", "0.7.23");
+  expect(() => admitReleaseBody(releaseBody(next, section), next, releaseNotes(next, section))).not.toThrow();
+});
