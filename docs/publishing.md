@@ -89,6 +89,32 @@ package identities and records their manifest hashes and the consumer lock hash
 before compiling the original type fixtures. These verifier selectors do not
 change the public package's dependency requirements or historical artifacts.
 
+## Write the release notes
+
+The release page text comes from `CHANGELOG.md` in the tagged commit. In the
+version bump pull request, add a section headed `## X.Y.Z` (optionally
+`## X.Y.Z - YYYY-MM-DD`) with one summary paragraph followed by a bulleted list
+of the changes a user would notice. Follow the Hraness
+[release page guide](https://github.com/hraness/.github/blob/main/RELEASES.md).
+A root test fails when the package version has no such section.
+
+The verification job rejects a missing, empty, duplicated, or `Unreleased`
+section before attestation, and the publisher renders the notes again from the
+tagged `CHANGELOG.md` before it creates the draft. The page is titled
+`Direct vX.Y.Z`. Its body is the summary, `## Changes`, a generated `## Install`
+with the exact archive and npm commands, a generated `## Verify` with the
+archive digest, full source commit, and a link to this guide at the tag, and
+then the `hraness-github-release-v1` identity comment as the final bytes.
+
+Admission reads the identity from the last `<!-- hraness-github-release-v1`
+marker, requires the body to end with `-->`, requires that record to match the
+manifest exactly, and requires the notes above it to match the rendered
+changelog section and generated sections byte for byte. A hand edit to a
+published page therefore fails a mirror retry like any other change. Releases
+up to 0.7.22 were tagged before `CHANGELOG.md` existed: admission also accepts
+their original body, and their notes render from the changelog on current
+`main`. Keep published changelog sections as they shipped.
+
 ## Install and update from GitHub
 
 After an asset is published and verified, install its exact stable version:

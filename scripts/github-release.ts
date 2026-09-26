@@ -171,6 +171,30 @@ async function content(path: string, ref: string): Promise<Buffer> {
   if (result.type !== "file" || result.encoding !== "base64" || typeof result.content !== "string" || result.content.length > 300_000) throw new Error("Authority helper is not a bounded file.");
   return Buffer.from(result.content, "base64");
 }
+async function changelogAt(ref: string): Promise<string | null> {
+  if (!sha.test(ref)) throw new Error("Changelog lookup requires an exact commit.");
+  const value = await request(`/repos/${repository}/contents/CHANGELOG.md?ref=${ref}`, "GET", undefined, true);
+  if (value === null) return null;
+  const result = record(value, "Changelog source");
+  if (result.type !== "file" || result.encoding !== "base64" || typeof result.content !== "string" || result.content.length > 300_000) throw new Error("CHANGELOG.md is not a bounded file.");
+  return Buffer.from(result.content, "base64").toString("utf8");
+}
+/** Renders the notes for a new release from CHANGELOG.md in its tagged source; fails before any release write. */
+export async function sourceReleaseNotes(manifest: ReleaseManifest): Promise<string> {
+  const changelog = await changelogAt(manifest.sourceSha);
+  if (changelog === null) throw new Error("CHANGELOG.md is missing from the release source.");
+  return releaseNotes(manifest, changelogSection(changelog, manifest.version));
+}
+/**
+ * Notes an existing release must carry. Versions up to lastUnnotedVersion were tagged before CHANGELOG.md
+ * existed; their backfilled notes come from current main, and null admits only their original body.
+ */
+export async function publishedReleaseNotes(manifest: ReleaseManifest, currentMain: string): Promise<string | null> {
+  if (compareVersions(manifest.version, lastUnnotedVersion) > 0) return sourceReleaseNotes(manifest);
+  const changelog = await changelogAt(manifest.sourceSha) ?? await changelogAt(currentMain);
+  if (changelog === null) return null;
+  try { return releaseNotes(manifest, changelogSection(changelog, manifest.version)); } catch { return null; }
+}
 export async function authorizeRelease(environment: ReleaseEnvironment = process.env): Promise<string> {
   const sourceSha = environment.GITHUB_SHA ?? "";
   const tag = environment.GITHUB_REF_NAME ?? "";
@@ -256,16 +280,91 @@ function verifyAttestations(directory: string, handoff: Handoff): void {
     admitVerifiedProvenance(JSON.parse(result.stdout) as unknown, m, subjects);
   }
 }
-export function releaseBody(manifest: ReleaseManifest): string {
-  return `<!-- hraness-github-release-v1\nrepository=${repository}\ntag=${manifest.tag}\nsource-sha=${manifest.sourceSha}\nworkflow=${workflow}\nworkflow-sha=${manifest.workflowSha}\nrun-id=${manifest.runId}\nrun-attempt=${manifest.runAttempt}\narchive-sha256=${manifest.archive.sha256}\n-->\n\nInstall the immutable development package with Bun:\n\n\`\`\`sh\nbun add --dev https://github.com/${repository}/releases/download/${manifest.tag}/${manifest.archive.name}\n\`\`\`\n\nGitHub Releases are canonical. npm is an optional downstream mirror. See the tagged publishing guide for archive and provenance verification.\n`;
+/** Versions published before release notes came from CHANGELOG.md may keep their original body. */
+export const lastUnnotedVersion = "0.7.22";
+const identityOpen = "<!-- hraness-github-release-v1\n";
+const identityKeys = ["repository", "tag", "source-sha", "workflow", "workflow-sha", "run-id", "run-attempt", "archive-sha256"] as const;
+const maximumChangelogBytes = 200_000;
+export function releaseIdentity(manifest: ReleaseManifest): string {
+  return `${identityOpen}repository=${repository}\ntag=${manifest.tag}\nsource-sha=${manifest.sourceSha}\nworkflow=${workflow}\nworkflow-sha=${manifest.workflowSha}\nrun-id=${manifest.runId}\nrun-attempt=${manifest.runAttempt}\narchive-sha256=${manifest.archive.sha256}\n-->`;
 }
-export function admitRelease(value: unknown, manifest: ReleaseManifest, files: ReadonlyMap<string, Buffer>, allowMissing: boolean, expectedId?: number): { id: number; draft: boolean; present: Set<string> } {
+/** The body every release up to lastUnnotedVersion was published with. Admission only; never written. */
+export function legacyReleaseBody(manifest: ReleaseManifest): string {
+  return `${releaseIdentity(manifest)}\n\nInstall the immutable development package with Bun:\n\n\`\`\`sh\nbun add --dev https://github.com/${repository}/releases/download/${manifest.tag}/${manifest.archive.name}\n\`\`\`\n\nGitHub Releases are canonical. npm is an optional downstream mirror. See the tagged publishing guide for archive and provenance verification.\n`;
+}
+export interface ChangelogSection { summary: string; changes: string }
+/** Reads the version's section from CHANGELOG.md: `## X.Y.Z` or `## vX.Y.Z`, optionally ` - YYYY-MM-DD`. */
+export function changelogSection(changelog: string, version: string): ChangelogSection {
+  stableVersion(version);
+  if (typeof changelog !== "string" || Buffer.byteLength(changelog) > maximumChangelogBytes || changelog.includes("\r")) throw new Error("CHANGELOG.md must be bounded LF text.");
+  const lines = changelog.split("\n");
+  let start = -1;
+  for (const [index, line] of lines.entries()) {
+    const heading = /^## v?([0-9]+\.[0-9]+\.[0-9]+)(.*)$/u.exec(line);
+    if (!heading || heading[1] !== version) continue;
+    const suffix = required(heading[2]);
+    if (/unreleased/iu.test(suffix)) throw new Error(`CHANGELOG.md section ${version} still says Unreleased.`);
+    if (suffix !== "" && !/^ - [0-9]{4}-[0-9]{2}-[0-9]{2}$/u.test(suffix)) throw new Error(`CHANGELOG.md heading for ${version} is malformed.`);
+    if (start !== -1) throw new Error(`CHANGELOG.md has more than one section for ${version}.`);
+    start = index;
+  }
+  if (start === -1) throw new Error(`CHANGELOG.md has no section for ${version}.`);
+  let end = lines.findIndex((line, index) => index > start && /^#{1,2} /u.test(line));
+  if (end === -1) end = lines.length;
+  const body = lines.slice(start + 1, end);
+  while (body.length > 0 && required(body[0]).trim() === "") body.shift();
+  while (body.length > 0 && required(body.at(-1)).trim() === "") body.pop();
+  if (body.length === 0) throw new Error(`CHANGELOG.md section ${version} is empty.`);
+  const text = body.join("\n");
+  if (/unreleased/iu.test(text)) throw new Error(`CHANGELOG.md section ${version} still says Unreleased.`);
+  if (body.some(line => /^\s*#/u.test(line)) || text.includes("<!--") || text.includes("-->")) throw new Error(`CHANGELOG.md section ${version} may hold only a summary and a bulleted list.`);
+  const firstBullet = body.findIndex(line => line.startsWith("- "));
+  const summary = body.slice(0, Math.max(firstBullet, 0)).join("\n").trim();
+  const changes = firstBullet === -1 ? "" : body.slice(firstBullet).join("\n").trim();
+  if (summary === "" || changes === "") throw new Error(`CHANGELOG.md section ${version} needs a summary paragraph and at least one change bullet.`);
+  if (body.slice(firstBullet).some(line => line.trim() !== "" && !line.startsWith("- ") && !line.startsWith("  "))) throw new Error(`CHANGELOG.md section ${version} has prose after its change list.`);
+  return { summary, changes };
+}
+/** Everything above the identity record: the changelog section plus generated Install and Verify. */
+export function releaseNotes(manifest: ReleaseManifest, section: ChangelogSection): string {
+  const tag = manifest.tag;
+  return `${section.summary}\n\n## Changes\n\n${section.changes}\n\n## Install\n\nInstall this version from its GitHub Release archive with Bun:\n\n\`\`\`sh\nbun add --dev https://github.com/${repository}/releases/download/${tag}/${manifest.archive.name}\n\`\`\`\n\nOr install the same package from the npm mirror:\n\n\`\`\`sh\nbun add --dev ${packageName}@${manifest.version}\n\`\`\`\n\n## Verify\n\n\`SHA256SUMS\` lists the SHA-256 of \`${manifest.archive.name}\`, \`npm-pack.json\`, and \`release-manifest.json\`. \`provenance.jsonl\` holds the signed build provenance for those files and \`SHA256SUMS\`.\n\n- Archive SHA-256: \`${manifest.archive.sha256}\`\n- Source commit: [\`${manifest.sourceSha}\`](https://github.com/${repository}/commit/${manifest.sourceSha})\n\nTo check the checksums and provenance, follow the [publishing guide for ${tag}](https://github.com/${repository}/blob/${tag}/docs/publishing.md#install-and-update-from-github).\n`;
+}
+export function releaseBody(manifest: ReleaseManifest, section: ChangelogSection): string {
+  return `${releaseNotes(manifest, section)}\n${releaseIdentity(manifest)}`;
+}
+/** Splits a body at the last identity marker. The identity comment must be the final bytes. */
+export function parseReleaseIdentity(body: unknown): { notes: string; identity: string; fields: Record<string, string> } {
+  if (typeof body !== "string" || !body.endsWith("-->")) throw new Error("Release body must end with its identity record.");
+  const start = body.lastIndexOf(identityOpen);
+  if (start === -1) throw new Error("Release body has no identity record.");
+  const identity = body.slice(start);
+  if (identity.indexOf("-->") !== identity.length - 3) throw new Error("Release identity record is not the final comment.");
+  const lines = identity.slice(identityOpen.length, -3).split("\n");
+  if (lines.pop() !== "" || lines.length !== identityKeys.length) throw new Error("Release identity record has unexpected fields.");
+  const fields: Record<string, string> = {};
+  for (const [index, line] of lines.entries()) {
+    const separator = line.indexOf("=");
+    if (separator <= 0 || line.slice(0, separator) !== identityKeys[index]) throw new Error("Release identity record has unexpected fields.");
+    fields[line.slice(0, separator)] = line.slice(separator + 1);
+  }
+  return { notes: body.slice(0, start), identity, fields };
+}
+/** Admits the standard body, whose notes must byte-match `notes`, or a pre-changelog release's original body. */
+export function admitReleaseBody(body: unknown, manifest: ReleaseManifest, notes: string | null): void {
+  if (compareVersions(manifest.version, lastUnnotedVersion) <= 0 && body === legacyReleaseBody(manifest)) return;
+  const parsed = parseReleaseIdentity(body);
+  if (parsed.identity !== releaseIdentity(manifest)) throw new Error("Release identity record differs from the exact manifest.");
+  if (notes === null || parsed.notes !== `${notes}\n`) throw new Error("Release notes differ from the rendered changelog section.");
+}
+export function admitRelease(value: unknown, manifest: ReleaseManifest, notes: string | null, files: ReadonlyMap<string, Buffer>, allowMissing: boolean, expectedId?: number): { id: number; draft: boolean; present: Set<string> } {
   const release = record(value, "GitHub release");
   if (expectedId !== undefined && positive(release.id, "Release ID") !== expectedId) throw new Error("Release ID changed during reconciliation; preserve the original record.");
   const author = record(release.author, "Release author");
   if (release.tag_name !== manifest.tag || release.name !== `Direct ${manifest.tag}` || release.target_commitish !== manifest.sourceSha
     || release.prerelease !== false || typeof release.draft !== "boolean" || author.id !== authorId || author.login !== "github-actions[bot]" || author.type !== "Bot"
-    || release.body !== releaseBody(manifest) || (!release.draft && release.immutable !== true)) throw new Error("Existing release is not the exact Actions-authored immutable artifact.");
+    || (!release.draft && release.immutable !== true)) throw new Error("Existing release is not the exact Actions-authored immutable artifact.");
+  admitReleaseBody(release.body, manifest, notes);
   if (!Array.isArray(release.assets) || release.assets.length > files.size) throw new Error("Release asset inventory is invalid.");
   const present = new Set<string>();
   const ids = new Set<number>();
@@ -372,15 +471,16 @@ async function publish(directory: string): Promise<void> {
   admitExpectedHandoff(handoff, process.env);
   verifyAttestations(directory, handoff);
   const m = handoff.manifest;
+  const notes = await sourceReleaseNotes(m);
   await requireMonotonic(m.version);
   let existing: unknown = await findReleaseForTag(m.tag);
   if (existing === null) {
     await authorizeRelease();
     // A failed response may represent a successful write. A rerun reads it first.
     existing = await request(`/repos/${repository}/releases`, "POST", { tag_name: m.tag, target_commitish: m.sourceSha,
-      name: `Direct ${m.tag}`, body: releaseBody(m), draft: true, prerelease: false, make_latest: "false" });
+      name: `Direct ${m.tag}`, body: `${notes}\n${releaseIdentity(m)}`, draft: true, prerelease: false, make_latest: "false" });
   }
-  let state = admitRelease(existing, m, handoff.files, true);
+  let state = admitRelease(existing, m, notes, handoff.files, true);
   const releaseId = state.id;
   verifyRemoteBytes(existing, handoff.files);
   if (state.draft) {
@@ -395,15 +495,15 @@ async function publish(directory: string): Promise<void> {
       await boundedResponse(response);
     }
     existing = await request(`/repos/${repository}/releases/${releaseId}`);
-    state = admitRelease(existing, m, handoff.files, false, releaseId);
+    state = admitRelease(existing, m, notes, handoff.files, false, releaseId);
     verifyRemoteBytes(existing, handoff.files);
     await authorizeRelease();
     await requireMonotonic(m.version);
     existing = await request(`/repos/${repository}/releases/${releaseId}`, "PATCH", { draft: false, make_latest: "true" });
   }
-  admitRelease(existing, m, handoff.files, false, releaseId);
+  admitRelease(existing, m, notes, handoff.files, false, releaseId);
   const readback = await request(`/repos/${repository}/releases/${releaseId}`);
-  const final = admitRelease(readback, m, handoff.files, false, releaseId);
+  const final = admitRelease(readback, m, notes, handoff.files, false, releaseId);
   verifyRemoteBytes(readback, handoff.files);
   const latest = record(await request(`/repos/${repository}/releases/latest`), "Latest release");
   if (final.draft || final.id !== releaseId || latest.id !== final.id || latest.tag_name !== m.tag) throw new Error("Published release is not immutable Latest.");
@@ -463,14 +563,16 @@ export function admitMirrorAuthority(manifest: ReleaseManifest, expectedWorkflow
     throw new Error("Mirror is not the exact owner-authorized workflow on protected current main.");
   }
 }
-export async function verifyMirror(directory: string, version: string, expectedWorkflow: string): Promise<Handoff> {
+export async function verifyMirror(directory: string, version: string, expectedWorkflow: string): Promise<Handoff & { notes: string | null }> {
   stableVersion(version);
   const handoff = await verifyHandoff(directory, true);
   const manifest = handoff.manifest;
   if (manifest.version !== version) throw new Error("Canonical mirror version differs from the request.");
   verifyAttestations(directory, handoff);
+  if (!sha.test(expectedWorkflow)) throw new Error("Mirror requires the exact current workflow commit.");
+  const notes = await publishedReleaseNotes(manifest, expectedWorkflow);
   const existing = await request(`/repos/${repository}/releases/tags/${manifest.tag}`);
-  const release = admitRelease(existing, manifest, handoff.files, false);
+  const release = admitRelease(existing, manifest, notes, handoff.files, false);
   if (release.draft) throw new Error("npm requires a published immutable canonical artifact.");
   verifyRemoteBytes(existing, handoff.files);
   await verifyCanonicalRun(manifest);
@@ -486,9 +588,9 @@ export async function verifyMirror(directory: string, version: string, expectedW
   for (const path of [workflow, ".github/workflows/npm-publish.yml", "scripts/github-release.ts", "scripts/package-smoke.ts", "scripts/package-artifact.ts", "scripts/npm-package-identity.ts"]) {
     if (!(await content(path, dispatchSource)).equals(await content(path, expectedWorkflow))) throw new Error(`Current mirror helper changed at ${path}.`);
   }
-  return handoff;
+  return { ...handoff, notes };
 }
-export async function downloadMirror(directory: string, version: string, expectedWorkflow: string): Promise<Handoff> {
+export async function downloadMirror(directory: string, version: string, expectedWorkflow: string): Promise<Handoff & { notes: string | null }> {
   stableVersion(version);
   await mkdir(directory, { mode: 0o700 });
   const download = spawnSync("gh", ["release", "download", `v${version}`, "--repo", repository, "--dir", directory,
@@ -518,7 +620,7 @@ async function main(): Promise<void> {
     const operation = mode === "mirror" ? downloadMirror : verifyMirror;
     const handoff = await operation(resolve(directory), process.env.EXPECTED_VERSION ?? "", process.env.EXPECTED_WORKFLOW_SHA ?? "");
     const release = record(await request(`/repos/${repository}/releases/tags/${handoff.manifest.tag}`), "Mirror release output");
-    const admitted = admitRelease(release, handoff.manifest, handoff.files, false);
+    const admitted = admitRelease(release, handoff.manifest, handoff.notes, handoff.files, false);
     if (admitted.draft) throw new Error("Canonical release returned to draft before mirror output.");
     if (process.env.GITHUB_OUTPUT) await writeFile(process.env.GITHUB_OUTPUT,
       `canonical_source_sha=${handoff.manifest.sourceSha}\npackage_version=${handoff.manifest.version}\ncanonical_release_id=${positive(release.id, "Release ID")}\ncanonical_run_id=${handoff.manifest.runId}\ncanonical_run_attempt=${handoff.manifest.runAttempt}\narchive_sha256=${handoff.manifest.archive.sha256}\npack_sha256=${hash(required(handoff.files.get("npm-pack.json")))}\n`, { flag: "a" });
