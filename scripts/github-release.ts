@@ -339,7 +339,7 @@ export function parseReleaseIdentity(body: unknown): { notes: string; identity: 
   const start = body.lastIndexOf(identityOpen);
   if (start === -1) throw new Error("Release body has no identity record.");
   const identity = body.slice(start);
-  if (identity.indexOf("-->") !== identity.length - 3) throw new Error("Release identity record is not the final comment.");
+  if (identity.slice(0, -3).includes("-->")) throw new Error("Release identity record is not the final comment.");
   const lines = identity.slice(identityOpen.length, -3).split("\n");
   if (lines.pop() !== "" || lines.length !== identityKeys.length) throw new Error("Release identity record has unexpected fields.");
   const fields: Record<string, string> = {};
