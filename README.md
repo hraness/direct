@@ -546,71 +546,13 @@ This repository contains the core library, the browser bridge, a scanner that ch
 
 > Repeatable states for browser agents: your real interface on fixture data, at a URL you can open, test, and share.
 
-A browser agent can open a page, click a control, and inspect the result. What it can't do quickly is set up the state behind that page. A signed-in account, a particular database record, a device permission, a model response, or a failure at the right moment can take longer to arrange than the screen takes to review.
+A browser agent can open a page, click a control, and inspect the result. What slows it down is setting up the state behind that page. A signed-in account, a particular database record, a device permission, a model response, or a failure at the right moment can take longer to arrange than the screen takes to review.
 
-Direct handles that setup. Your app reaches each slow or unpredictable dependency through a port, a small interface your app owns. In a Direct build, the port returns fixture data instead of calling the live system, and each state gets a name and a URL. Your browser tool still does the clicking and checking.
+Direct handles that setup. Your app reaches each slow or unpredictable dependency through a port, a small interface your app defines. In a Direct build, the port returns fixture data instead of calling the live system, and each starting state gets a name and a URL. Your browser tool still does the clicking and checking.
 
-### Browser control and app state are different jobs
+### Open a named state from a browser check
 
-[agent-browser](<https://agent-browser.dev/>) gives coding agents a compact command-line interface for opening pages, reading accessibility snapshots, and interacting with elements. Playwright and other browser drivers solve the same broad problem with different APIs. If the state you need is already fast and reliable to reach, use a browser tool by itself.
-
-Direct helps when setup dominates the loop: repeated sign-in, slow seed requests, empty or error states that are hard to create, native modules that aren't available, paid model calls, or device permissions that automation can't reset cleanly. Direct doesn't drive the browser. It hands the browser tool a known page state to start from.
-
-### Swap in fixture data behind your feature code
-
-For example, a task view might read and update tasks through a task repository port. In production, that port connects to a live service. In a Direct build, the same port connects to a deterministic implementation. The interface, reducers, parsing, navigation, and feature logic above the port run the same code either way.
-
-**Where Direct sits**
-
-```text
-agent-browser or Playwright
-            │
-   real interface + feature state
-            │
-     your app's port
-        ┌───┴────┐
-  live system   Direct world
-```
-
-A Direct world is validated JSON that describes one starting state. A scenario gives a world a name and a route. Scenarios contain no browser actions; your browser check decides what to click and what to assert.
-
-The [public Todo example](examples/todos) uses one `TodoPort` in both
-builds. The component receives whichever implementation its entry point
-provides:
-
-**One port, two builds**
-
-```typescript
-export interface TodoPort {
-  readTodos(): Promise<readonly TodoItem[]>;
-  setCompleted(id: string, completed: boolean):
-    Promise<readonly TodoItem[]>;
-}
-
-const port = isDirect
-  ? createDeterministicTodoPort(world)
-  : createLiveTodoPort();
-
-<TodoApp port={port} />
-```
-
-The interface speaks in the app's own terms: todos and completion. It contains no Direct types and doesn't know whether storage is live or deterministic. Put the port as low as you can while keeping the behavior under review above it. If the Direct adapter has to copy the logic you're trying to test, the port is too high, and the fixture would imitate that logic instead of testing it.
-
-### One session per scenario
-
-At runtime, a Direct build has three parts:
-
-- A definition lists the named scenarios, their routes, and which systems each check claims to exercise, and it checks that those declarations agree.
-- A session activates one scenario and owns its deterministic state, controllable clock, pending work, reset, and cleanup.
-- A browser installation publishes a small manifest of the available and active scenarios, exposes readiness and reset controls, and by default blocks `fetch` calls to URLs your app hasn't allowed.
-
-The `fetch` block is on by default so that a fixture gap shows up as a failed request instead of a quiet call to a live service. Your app can allow specific URLs. The block covers only `fetch` calls made in the page where Direct is installed. Other traffic, such as XMLHttpRequest, WebSockets, EventSource, beacons, navigation, asset loads, and requests from workers or other frames, is not intercepted. Direct and its fixture worlds stay out of the production dependency graph.
-
-An agent can read the manifest to list valid scenario IDs and routes, confirm that the page opened the scenario and route it asked for, and check readiness, all without reading your source files.
-
-### Wait until the app is ready
-
-A fixed delay says, “wait 500 milliseconds and hope.” Direct exposes a readiness snapshot instead: no tracked operation is active, and every pending counter your app names is zero. Your browser verifier polls until the active scenario, the revision of tracked work, and the counters stay the same for a settle interval you choose, then checks the interface.
+This Playwright check opens the populated state of the [Todo example](examples/todos), completes one todo, and confirms that the real interface updated. It needs no sign-in, seed request, or stored data from an earlier run.
 
 **Browser check using a named Direct scenario**
 
@@ -630,31 +572,109 @@ await expect(page.getByRole("checkbox", {
 })).toBeChecked();
 ```
 
-`waitForQuiescence` is a helper in your own verifier that reads Direct's snapshot; Direct doesn't ship it. A settled snapshot shows only that the work Direct knows about has stopped changing. It doesn't show that the screen is correct, so the verifier still has to reject relevant console, runtime, and unhandled-request errors, then make its own assertions or visual checks.
+`waitForQuiescence` is a helper in your own check that waits for Direct's readiness snapshot, described below. Direct doesn't ship it.
+
+### Put a port under your feature code
+
+The interface, reducers, parsing, navigation, and feature logic above the port run the same code in both builds. Only the implementation behind the port changes.
+
+**Where Direct sits**
+
+```text
+agent-browser or Playwright
+            │
+   real interface + feature state
+            │
+     your app's port
+        ┌───┴────┐
+  live system   Direct world
+```
+
+The Todo example defines one `TodoPort`. Its production entry passes a port that reads and writes browser local storage. Its Direct entry passes an in-memory port built from a fixture world. The production entry never imports Direct.
+
+**One port, two entries**
+
+```typescript
+// src/todo-port.ts
+export interface TodoPort {
+  readonly readTodos: () =>
+    Promise<readonly TodoItem[]>;
+  readonly setCompleted: (id: string, completed: boolean) =>
+    Promise<readonly TodoItem[]>;
+}
+
+// src/main.tsx (production entry)
+<TodoApp
+  port={createLocalStorageTodoPort(globalThis.localStorage)}
+/>
+
+// direct/workbench.tsx (Direct entry)
+<TodoApp port={props.harness.port} />
+```
+
+The port speaks in the app's own terms: todos and completion. It contains no Direct types. Put the port as low as you can while keeping the behavior you want to review above it. If the Direct side has to copy the logic you're trying to test, the port is too high, and the fixture would imitate that logic instead of testing it.
+
+### Name each starting state
+
+A Direct world is validated JSON that describes one starting state. A scenario gives a world a name and a route. Scenarios contain no browser actions; your browser check decides what to click and what to assert.
+
+At runtime, a Direct build has three parts:
+
+- A definition lists the named scenarios, their routes, and which systems each check claims to exercise, and it checks that those declarations agree.
+- A session opens one scenario and holds its fixture state, a controllable clock, pending work, reset, and cleanup.
+- A browser installation publishes the available and active scenarios on `window.__direct`, exposes readiness and reset controls, and by default blocks `fetch` calls to URLs your app hasn't allowed.
+
+An agent can read `window.__direct` to list valid scenario IDs and routes and to confirm that the page opened the scenario and route it asked for, without reading your source files.
+
+The `fetch` block is on by default so that a missing fixture shows up as a failed request instead of a quiet call to a live service. Your app can allow specific URLs. The block covers only `fetch` calls made in the page where Direct is installed. Other traffic, such as XMLHttpRequest, WebSockets, EventSource, beacons, navigation, asset loads, and requests from workers or other frames, is not intercepted.
+
+### Wait until the app is ready
+
+A fixed delay says, “wait 500 milliseconds and hope.” Direct exposes a readiness snapshot instead: no tracked operation is active, and every pending counter your app names is zero. Your browser check polls until the active scenario, the fixture state's revision number, and those counters stay the same for a settle interval you choose, then checks the interface.
+
+A settled snapshot shows only that the work Direct knows about has stopped changing. It doesn't show that the screen is correct, so your check still has to reject relevant console, runtime, and unhandled-request errors, then make its own assertions or visual checks.
 
 ### Follow one check from URL to result
 
-The Todo example exposes each step of a check as something you can inspect:
+Each check carries one of three coverage labels that record which systems it exercised. A `fixture` check stops at the fixture ports. A `mixed` check pairs fixture data with a named live check. A `direct` check needs the real system. The labels keep a fast development check from being reported as a test of a system it never touched.
+
+In the Todo example, each step of the check above is something you can inspect:
 
 | Step | What you can see |
 | --- | --- |
 | Open | `?__direct_scenario=todos.populated` selects the validated world. |
-| Confirm | The manifest reports scenario `todos.populated`, route `/`, and the `todos.completion` coverage entry. |
-| Wait | The probe reports zero `todoOperations`, zero on every declared violation counter, and a quiet revision that stays the same. |
+| Confirm | `window.__direct` reports scenario `todos.populated`, route `/`, and the `todos.completion` coverage entry. |
+| Wait | The readiness snapshot reports zero `todoOperations`, zero on every declared error counter, and no change across the settle interval. |
 | Act | The browser driver checks the “Write the public guide” box in the real Todo interface. |
-| Check | A second stable probe and the checked box show that the change went through the app's port. |
-| Limit | The claim stays `fixture` evidence. Local-storage parsing, quota behavior, and persistence need a separate `direct` check against real browser storage. |
+| Check | A second stable snapshot and the checked box show that the change went through the app's port. |
+| Limit | The run is labeled `fixture`. Local-storage parsing, quota behavior, and persistence need a separate `direct` check against real browser storage. |
 
-You can read the same trace through the TypeScript package, or from the page itself with any browser driver that can run a script there. The `$direct` Agent Skill helps a coding agent add and audit this setup.
+You can read the same results through the TypeScript package, or from the page itself with any browser driver that can run a script there.
 
-### Choose the smallest tool that covers the risk
+### When to use Direct
 
-- Use browser automation alone when the required state is already quick to reach, or when the live backend and browser assembly are part of the check.
-- Pair Direct with agent-browser or Playwright when setup and reset dominate the loop and the substituted systems can sit behind a small port your app owns.
-- Use unit or component tests when the subject is isolated logic or rendering that does not need the full application.
-- Keep live integration and end-to-end tests when the backend, native host, browser assembly, filesystem, operating system, or device is the subject.
+[agent-browser](<https://agent-browser.dev/>) gives coding agents a compact command-line interface for opening pages, reading accessibility snapshots, and interacting with elements. Playwright and other browser drivers do the same job with different APIs. Direct doesn't drive the browser; it hands the browser tool a known page state to start from.
 
-Each coverage claim records which systems a check exercised, using one of three labels. A `fixture` claim stops at the deterministic ports. A `mixed` claim pairs fixture evidence with a named live check. A `direct` claim requires the real system. The labels keep a fast development check from being reported as a test of a system it never touched. Direct never exercises the systems behind the ports it replaces, so cover those with live integration or end-to-end tests when their risk warrants it.
+- Use browser automation alone when the state you need is already quick to reach, or when the live backend and browser assembly are part of the check.
+- Pair Direct with agent-browser or Playwright when setup and reset dominate the loop: repeated sign-in, slow seed requests, empty or error states that are hard to create, native modules that aren't available, paid model calls, or device permissions that automation can't reset cleanly.
+- Use unit or component tests when the subject is isolated logic or rendering that doesn't need the full app.
+- Keep live integration and end-to-end tests when the backend, native host, browser assembly, filesystem, operating system, or device is the subject. Direct never exercises the systems behind the ports it replaces.
+
+### Add Direct to a project
+
+Direct is a development dependency. Install the `$direct` Agent Skill so your coding agent can add a port, scenarios, and a check that production builds exclude Direct:
+
+```sh
+npx skills add hraness/direct#v0.7.22
+```
+
+Or add the package yourself from the GitHub release:
+
+```sh
+bun add --dev https://github.com/hraness/direct/releases/download/v0.7.22/hraness-direct-0.7.22.tgz
+```
+
+The [Direct README](<https://github.com/hraness/direct#install>) covers npm, archive verification, and running the Todo example locally.
 <!-- article:direct-a-harness-for-your-frontend:end -->
 
 ## Develop
