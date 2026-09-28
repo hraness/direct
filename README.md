@@ -660,7 +660,7 @@ Other tools already cover many fast-setup cases (checked 2026-09-28):
 | Tool | What it replaces | App changes | Best when |
 | --- | --- | --- | --- |
 | Playwright [route mocking](https://playwright.dev/docs/mock), [saved auth state](https://playwright.dev/docs/auth), and [clock](https://playwright.dev/docs/clock) | Network responses, sign-in, and the browser clock | None | Those already reach the state quickly |
-| [Mock Service Worker](https://mswjs.io) | HTTP and GraphQL responses, in the browser or Node | A worker file and a start call in development | Network responses are the only setup to replace |
+| [Mock Service Worker](https://mswjs.io) | HTTP and GraphQL responses, in the browser or Node | A start call in development, plus a worker file in the browser | Network responses are the only setup to replace |
 | [Storybook](https://storybook.js.org) | A component's props and context | One story per state | The subject is one component, not the whole app |
 | Direct | Product-owned ports such as sign-in, records, device permissions, native modules, and model calls | A small port for each replaced system | Setup sits below the network or in native code, and the agent needs a named app state with a readiness signal |
 
