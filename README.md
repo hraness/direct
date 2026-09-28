@@ -655,6 +655,15 @@ You can read the same results through the TypeScript package, or from the page i
 
 [agent-browser](<https://agent-browser.dev/>) gives coding agents a compact command-line interface for opening pages, reading accessibility snapshots, and interacting with elements. Playwright and other browser drivers do the same job with different APIs. Direct doesn't drive the browser; it hands the browser tool a known page state to start from.
 
+Other tools already cover many fast-setup cases (checked 2026-09-28):
+
+| Tool | What it replaces | App changes | Best when |
+| --- | --- | --- | --- |
+| Playwright [route mocking](https://playwright.dev/docs/mock), [saved auth state](https://playwright.dev/docs/auth), and [clock](https://playwright.dev/docs/clock) | Network responses, sign-in, and the browser clock | None | Those already reach the state quickly |
+| [Mock Service Worker](https://mswjs.io) | HTTP and GraphQL responses, in the browser or Node | A worker file and a start call in development | Network responses are the only setup to replace |
+| [Storybook](https://storybook.js.org) | A component's props and context | One story per state | The subject is one component, not the whole app |
+| Direct | Product-owned ports such as sign-in, records, device permissions, native modules, and model calls | A small port for each replaced system | Setup sits below the network or in native code, and the agent needs a named app state with a readiness signal |
+
 - Use browser automation alone when the state you need is already quick to reach, or when the live backend and browser assembly are part of the check.
 - Pair Direct with agent-browser or Playwright when setup and reset dominate the loop: repeated sign-in, slow seed requests, empty or error states that are hard to create, native modules that aren't available, paid model calls, or device permissions that automation can't reset cleanly.
 - Use unit or component tests when the subject is isolated logic or rendering that doesn't need the full app.
