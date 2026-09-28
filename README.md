@@ -12,7 +12,7 @@ responses. Direct runs your whole app against fixture data behind a port your
 app owns, so it also covers setup that isn't HTTP, such as device permissions
 and native modules. Your browser tool, such as agent-browser or Playwright,
 still does the clicking. See
-[how Direct compares](#direct-compared-with-storybook-msw-and-playwright).
+[how Direct compares](#when-to-use-direct).
 
 [GitHub releases](https://github.com/hraness/direct/releases) ·
 [Install @hraness/direct from npm](https://www.npmjs.com/package/@hraness/direct) ·
@@ -655,23 +655,12 @@ Other tools already cover many fast-setup cases (checked 2026-09-28):
 | [Storybook](https://storybook.js.org) | A component's props and context | One story per state | The subject is one component, not the whole app |
 | Direct | Product-owned ports such as sign-in, records, device permissions, native modules, and model calls | A small port for each replaced system | Setup sits below the network or in native code, and the agent needs a named app state with a readiness signal |
 
+Direct asks more of you up front: a port and a separate Direct entry. Storybook and MSW are older, more widely used, and support more frameworks; Direct's core is plain TypeScript with React and React Native bindings.
+
 - Use browser automation alone when the state you need is already quick to reach, or when the live backend and browser assembly are part of the check.
 - Pair Direct with agent-browser or Playwright when setup and reset dominate the loop: repeated sign-in, slow seed requests, empty or error states that are hard to create, native modules that aren't available, paid model calls, or device permissions that automation can't reset cleanly.
 - Use unit or component tests when the subject is isolated logic or rendering that doesn't need the full app.
 - Keep live integration and end-to-end tests when the backend, native host, browser assembly, filesystem, operating system, or device is the subject. Direct never exercises the systems behind the ports it replaces.
-
-### Direct compared with Storybook, MSW, and Playwright
-
-Choose Storybook to review components in isolation, Mock Service Worker when every dependency you need to control is an HTTP call, and Playwright's saved sign-in when signing in is the only slow step. Choose Direct when a whole app route needs a named starting state that any browser tool, person, or agent can open by URL.
-
-| Tool | What runs | Where test data comes in | Opens by URL |
-| --- | --- | --- | --- |
-| [Storybook](<https://storybook.js.org/docs/writing-stories>) | A component or composed page, one story at a time | Story args, decorators, and loaders | Yes, one URL per story |
-| [Mock Service Worker](<https://mswjs.io/docs/>) | Your whole app, unchanged | Request handlers at the network layer | No |
-| Playwright [`storageState`](<https://playwright.dev/docs/auth>) and [`page.route`](<https://playwright.dev/docs/mock>) | Your whole app, inside one test run | A saved sign-in and per-test network stubs | No |
-| Direct | Your whole app entry, with routing, reducers, and feature logic | A validated JSON world behind a port your app owns | Yes, `?__direct_scenario=<id>` |
-
-Direct asks more of you up front: you add a port and a separate Direct entry. Storybook and MSW are older, more widely used, and support more frameworks; Direct's core is plain TypeScript with React and React Native bindings. Checked against each project's documentation on 2026-09-28.
 
 ### Add Direct to a project
 
