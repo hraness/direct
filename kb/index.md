@@ -9,10 +9,10 @@ kb_catalog: authored
 
 This Git-backed Markdown vault is durable memory for Direct. Open `kb/` itself as the vault. Markdown and Git are authoritative. Catalogs, backlinks, graph views, semantic indexes, repository context, and Git projections are derived.
 
-Start repository work with the pinned KB release, then expand through bounded links, exact metadata, text search, or history only when needed:
+Start repository work with the pinned Wordcell release, then expand through bounded links, exact metadata, text search, or history only when needed:
 
 ```sh
-bunx --bun github:hraness/kb#v0.15.2 context <repository-path> --root kb --repo .
+bunx --bun --package https://github.com/hraness/wordcell/releases/download/v0.24.0/hraness-wordcell-0.24.0.tgz wordcell context <repository-path> --root kb --repo .
 ```
 
 ## Record boundaries
