@@ -7,9 +7,12 @@ real interface running on fixture data. This development-only TypeScript
 library serves signed-in, empty, and edge-case states for frontend testing,
 each at its own URL.
 
-Direct runs your real interface and feature code against named, validated
-fixture data, so a browser agent can reach a hard-to-set-up state without
-clicking through setup or depending on live systems.
+Storybook renders components in isolation, and Mock Service Worker mocks HTTP
+responses. Direct runs your whole app against fixture data behind a port your
+app owns, so it also covers setup that isn't HTTP, such as device permissions
+and native modules. Your browser tool, such as agent-browser or Playwright,
+still does the clicking. See
+[how Direct compares](#when-to-use-direct).
 
 [GitHub releases](https://github.com/hraness/direct/releases) ·
 [Install @hraness/direct from npm](https://www.npmjs.com/package/@hraness/direct) ·
@@ -170,10 +173,11 @@ dependency graph excludes Direct. Do not add a fixture composition until I
 ask.
 ```
 
-The repository and tagged package carry the same skill. Installing the skill
-does not add Direct to a consumer project. The skills CLI is the preferred way
-to let runners discover it; the packaged copy supports runners and tools
-that read skills from installed development dependencies.
+Installing the skill doesn't add Direct to a project. The package carries a
+byte-identical copy under `node_modules/@hraness/direct/skills/direct/` for
+runners that read skills from development dependencies. Installing the package
+doesn't activate that copy; it runs no `postinstall` hook and changes no
+configuration.
 
 Pin the release archive in your project's manifest:
 
@@ -192,21 +196,6 @@ bun install
 # or, in an npm project
 npm install
 ```
-
-## Agent skills
-
-Packages built from this source include one Agent Skill under
-`node_modules/@hraness/direct/skills/direct/`. `$direct` guides an agent
-through adding your app's port and a Direct build, then audits scenario
-behavior, readiness, coverage claims, cleanup, and production build output. The
-package smoke test keeps the packaged copy byte-identical to the tagged
-repository skill.
-
-Prefer `npx skills add hraness/direct#v0.7.22` or
-`bunx skills add hraness/direct#v0.7.22` for runner discovery. You can also copy
-or link that one skill directory into a runner's configured location, then
-invoke `$direct`. Installing the package doesn't activate the skill. It runs no
-`postinstall` hook and changes no repository or user configuration.
 
 ## A complete browser composition
 
@@ -544,7 +533,7 @@ This repository contains the core library, the browser bridge, a scanner that ch
 <!-- article:direct-a-harness-for-your-frontend:start -->
 ## [Give each app state you test its own URL.](<https://hraness.com/direct>)
 
-> Repeatable states for browser agents: your real interface on fixture data, at a URL you can open, test, and share.
+> A development-only TypeScript library for frontend testing: your real interface on fixture data, in a named state that a browser agent or Playwright check opens by URL.
 
 A browser agent can open a page, click a control, and inspect the result. What slows it down is setting up the state behind that page. A signed-in account, a particular database record, a device permission, a model response, or a failure at the right moment can take longer to arrange than the screen takes to review.
 
@@ -573,6 +562,8 @@ await expect(page.getByRole("checkbox", {
 ```
 
 `waitForQuiescence` is a helper in your own check that waits for Direct's readiness snapshot, described below. Direct doesn't ship it.
+
+The example declares two more states the same way. `?__direct_scenario=todos.empty` opens the empty list, and `?__direct_scenario=todos.write-failure` opens the list with a save that fails, so a check can confirm the error message without breaking a real store.
 
 ### Put a port under your feature code
 
@@ -664,6 +655,8 @@ Other tools already cover many fast-setup cases (checked 2026-09-28):
 | [Storybook](https://storybook.js.org) | A component's props and context | One story per state | The subject is one component, not the whole app |
 | Direct | Product-owned ports such as sign-in, records, device permissions, native modules, and model calls | A small port for each replaced system | Setup sits below the network or in native code, and the agent needs a named app state with a readiness signal |
 
+Direct asks more of you up front: a port and a separate Direct entry. Storybook and MSW are older, more widely used, and support more frameworks; Direct's core is plain TypeScript with React and React Native bindings.
+
 - Use browser automation alone when the state you need is already quick to reach, or when the live backend and browser assembly are part of the check.
 - Pair Direct with agent-browser or Playwright when setup and reset dominate the loop: repeated sign-in, slow seed requests, empty or error states that are hard to create, native modules that aren't available, paid model calls, or device permissions that automation can't reset cleanly.
 - Use unit or component tests when the subject is isolated logic or rendering that doesn't need the full app.
@@ -671,19 +664,7 @@ Other tools already cover many fast-setup cases (checked 2026-09-28):
 
 ### Add Direct to a project
 
-Direct is a development dependency. Install the `$direct` Agent Skill so your coding agent can add a port, scenarios, and a check that production builds exclude Direct:
-
-```sh
-npx skills add hraness/direct#v0.7.22
-```
-
-Or add the package yourself from the GitHub release:
-
-```sh
-bun add --dev https://github.com/hraness/direct/releases/download/v0.7.22/hraness-direct-0.7.22.tgz
-```
-
-The [Direct README](<https://github.com/hraness/direct#install>) covers npm, archive verification, and running the Todo example locally.
+Direct is a development dependency. Install the `$direct` Agent Skill so your coding agent can add a port, scenarios, and a check that production builds exclude Direct. The [Direct README](<https://github.com/hraness/direct#install>) has the current release commands for the skill, Bun, and npm, plus archive verification and the Todo example.
 <!-- article:direct-a-harness-for-your-frontend:end -->
 
 ## Develop
