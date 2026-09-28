@@ -1,6 +1,6 @@
 {
   "name": "@hraness/direct",
-  "version": "0.7.22",
+  "version": "0.7.23",
   "description": "Direct gives browser agents repeatable app states that open by URL, with your real interface running on fixture data.",
   "license": "MIT",
   "type": "module",
