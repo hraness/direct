@@ -145,9 +145,12 @@ job failed remains usable only when all four canonical jobs succeeded.
 The read-only mirror job verifies the immutable GitHub record, all five assets,
 actual bytes, and cryptographic provenance. It keeps the canonical source `C`
 separate from protected current workflow `W`, checks out `C` in an isolated tree,
-and retains the frozen install, complete `bun run check`, generated cleanliness,
-and exact-archive isolated installation. Current helpers are bound to `W` before
-running against `C`. It copies exactly the tarball, `npm-pack.json`, and
+and retains the frozen install, generated cleanliness, and exact-archive isolated
+installation. A current-main mirror retry also reruns the complete `bun run check`
+on `C`. A canonical tag run instead reuses the complete check its own **Verify**
+job ran on the same tag commit; the mirror job requires that the release manifest
+names this run and that `C` is the pushed tag commit before it skips the rerun.
+Current helpers are bound to `W` before running against `C`. It copies exactly the tarball, `npm-pack.json`, and
 `npm-package.sha256` into the privileged handoff; it never repacks the mirror.
 
 Within the npm workflow, the only job with OIDC authority checks out no source
@@ -159,8 +162,9 @@ The candidate must remain the newest remote stable tag and be newer than every
 published stable npm version. Fresh main/tag reads immediately precede the exact
 `npm publish --ignore-scripts --provenance` to `https://registry.npmjs.org`.
 
-The read-only registry job compares the canonical archive with the public npm
-package by complete extracted safe path, entry type, mode, size, and regular-file
+The read-only registry job first waits up to five minutes, reading past the npm
+metadata cache, for the new version to become visible. It then compares the
+canonical archive with the public npm package by complete extracted safe path, entry type, mode, size, and regular-file
 SHA-256/SHA-512. Each transport must independently match its npm SHA-1/SHA-512 and
 registry metadata, since registry compression can differ. It then installs that
 registry archive in clean Bun/npm consumers. An existing npm version is left

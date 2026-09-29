@@ -105,6 +105,27 @@ const historicalRecoverySources = [
   },
 ] as const;
 
+// Each historical recovery test is an isolated mkdtemp tree whose cost is mostly
+// single-threaded child processes (bun add, tsc, npm pack). Run them concurrently,
+// but cap in-flight work so a 4 vCPU runner is not oversubscribed. The per-test
+// timeout covers the queue wait as well as the recovery itself.
+const historicalRecoveryConcurrency = 4;
+const historicalRecoveryTimeoutMs = 600_000;
+let historicalRecoverySlots = historicalRecoveryConcurrency;
+const historicalRecoveryWaiters: Array<() => void> = [];
+
+async function withHistoricalRecoverySlot(work: () => Promise<void>): Promise<void> {
+  if (historicalRecoverySlots > 0) historicalRecoverySlots -= 1;
+  else await new Promise<void>((resolve) => { historicalRecoveryWaiters.push(resolve); });
+  try {
+    await work();
+  } finally {
+    const next = historicalRecoveryWaiters.shift();
+    if (next === undefined) historicalRecoverySlots += 1;
+    else next();
+  }
+}
+
 function workflowStepScript(workflow: string, name: string): string {
   const stepMarker = `      - name: ${name}\n`;
   const stepStart = workflow.indexOf(stepMarker);
@@ -438,6 +459,33 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       `git clone --branch v${String(installVersion)} --depth 1`,
     ]) expect(readme).toContain(example);
     expect(readme).not.toMatch(/source candidate/iu);
+  });
+
+  test("reuses the canonical source check only from the same Release run and waits for registry propagation", async () => {
+    const [workflow, releaseWorkflow] = await Promise.all([
+      readFile(publishWorkflowUrl, "utf8"),
+      readFile(releaseWorkflowUrl, "utf8"),
+    ]);
+    const verifyJob = workflow.slice(workflow.indexOf("\n  verify:\n"), workflow.indexOf("\n  publish:\n"));
+    const registryJob = workflow.slice(workflow.indexOf("\n  registry:\n"));
+
+    expect(workflow).toContain("      mode:\n");
+    expect(workflow).toContain("        default: mirror\n");
+    expect(releaseWorkflow).toContain("      tag: ${{ needs.authorize.outputs.tag }}\n      mode: ${{ needs.authorize.outputs.mode }}\n");
+    expect(verifyJob).toContain('[[ "$RELEASE_MODE" == canonical || "$RELEASE_MODE" == mirror ]]');
+    expect(verifyJob).toContain('[[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == "refs/tags/$REQUESTED_TAG" && "$GITHUB_SHA" == "$source_sha" ]]');
+    expect(verifyJob).toContain('.runId)\' "$canonical_directory/release-manifest.json")" == "$GITHUB_RUN_ID" ]]');
+    const guard = verifyJob.indexOf('if [[ "$RELEASE_MODE" == canonical ]]; then');
+    expect(guard).toBeGreaterThan(verifyJob.indexOf("github-release.ts\" mirror"));
+    expect(verifyJob.match(/^ {8}if: .*$/gmu) ?? []).toEqual(["        if: inputs.mode != 'canonical'"]);
+    expect(verifyJob).toContain("        if: inputs.mode != 'canonical'\n        run: bun run check\n");
+
+    const poll = registryJob.indexOf('npm view "$package_spec" version --prefer-online');
+    expect(poll).toBeGreaterThan(registryJob.indexOf("mirror-verify"));
+    expect(poll).toBeLessThan(registryJob.indexOf('npm pack "$package_spec"'));
+    expect(registryJob).toContain('npm pack "$package_spec" \\\n            --prefer-online');
+    expect(registryJob).toContain('npm view "$package_spec" name version dist \\\n            --prefer-online');
+    expect(registryJob).toContain('if [[ "$attempt" == 20 ]]; then');
   });
 
   test("separates read-only verification from the exact terminal OIDC publish", async () => {
@@ -1093,9 +1141,9 @@ describe("canonical npm package identity", () => {
     }
   });
 
-  for (const release of historicalRecoverySources) test(
+  for (const release of historicalRecoverySources) test.concurrent(
     `current tools prepare and smoke exact v${release.version} source without tagged helpers`,
-    async () => {
+    () => withHistoricalRecoverySlot(async () => {
       const work = await mkdtemp(join(tmpdir(), "direct-release-recovery-test-"));
       try {
         const sourceArchive = join(work, `v${release.version}-source.tar`);
@@ -1168,7 +1216,7 @@ describe("canonical npm package identity", () => {
       } finally {
         await rm(work, { force: true, recursive: true });
       }
-    },
-    180_000,
+    }),
+    historicalRecoveryTimeoutMs,
   );
 });

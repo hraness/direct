@@ -22,7 +22,7 @@ bun run example:dev
 bun run example:direct
 ```
 
-Use Node 24 and the frozen repository dependencies. Each command compiles one immutable StyleX generation with the pinned Vite 8.2.1/Rolldown 1.2.8 toolchain, then serves it on `127.0.0.1:5173`. Run only one preview at a time. Production opens at `/`; the workbench opens at `/direct/`. After editing a recipe or component, stop the command, rebuild/restart it, and refresh the browser. This compiled preview does not claim HMR or React-plugin support. Ctrl-C closes the owned Vite preview server.
+Use Node 24 and the frozen repository dependencies. Each command compiles one immutable StyleX generation with the pinned Vite 8.2.1/Rolldown 1.2.8 toolchain, then serves it on `127.0.0.1:5173`. Set `DIRECT_EXAMPLE_PORT` to serve on another port, or to `0` for a free one; the command prints the address it bound. Run only one preview per port. Production opens at `/`; the workbench opens at `/direct/`. After editing a recipe or component, stop the command, rebuild/restart it, and refresh the browser. This compiled preview does not claim HMR or React-plugin support. Ctrl-C closes the owned Vite preview server.
 
 The workbench provides three stable scenarios:
 
