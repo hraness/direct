@@ -775,13 +775,17 @@ jobs:
           mkdir -p "$registry_directory"
           # A fresh version can take a minute to reach every registry replica, and
           # npm caches packuments, so poll with --prefer-online for up to 5 minutes.
+          # Replace this poll with the shared npm-visible action once it exists.
+          registry_poll_err="$RUNNER_TEMP/registry-poll.err"
           for attempt in $(seq 1 20); do
             if [[ "$(npm view "$package_spec" version --prefer-online \
-              --registry=https://registry.npmjs.org 2>/dev/null)" == "$package_version" ]]; then
+              --registry=https://registry.npmjs.org 2>"$registry_poll_err")" == "$package_version" ]]; then
               break
             fi
             if [[ "$attempt" == 20 ]]; then
               echo "::error::$package_spec did not become visible on the npm registry"
+              echo "Last npm view stderr:"
+              cat "$registry_poll_err" || true
               exit 1
             fi
             sleep 15
