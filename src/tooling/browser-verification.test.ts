@@ -231,7 +231,10 @@ if (typeof childPidPath !== 'string' || childPidPath.length > 4096
 }
 const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 5000); setInterval(() => {}, 1000);"], { stdio: 'ignore' });
 child.unref();
-fs.writeFileSync(childPidPath, String(child.pid));
+if (!Number.isSafeInteger(child.pid) || child.pid <= 0) throw new Error('Invalid descendant fixture PID');
+// Publish complete PID contents before the parent observes readiness.
+fs.writeFileSync(childPidPath + '.pending', String(child.pid), { flag: 'wx' });
+fs.renameSync(childPidPath + '.pending', childPidPath);
 `;
 
 describe("verification output diagnostics", () => {

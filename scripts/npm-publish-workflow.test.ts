@@ -655,6 +655,8 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
     }
   });
 
+  // Eleven stubbed workflow runs include repeated CLI startup; bound the whole
+  // matrix separately from Bun's five-second unit-test default.
   test("rechecks the immutable release tag at the terminal publishing boundary", async () => {
     const workflow = await readFile(publishWorkflowUrl, "utf8");
     const script = workflowStepScript(workflow, "Revalidate release tag and publish exact package");
@@ -827,7 +829,7 @@ process.stdout.write(args.includes('--jq') ? value.object.sha + '\\n' : JSON.str
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
-  });
+  }, 30_000);
 
   test("gates immutable releases on canonical package content and supports bounded recovery", async () => {
     const [workflow, artifact, identity] = await Promise.all([
