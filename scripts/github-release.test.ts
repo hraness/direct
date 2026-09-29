@@ -435,11 +435,11 @@ test("terminal metadata admission retains only the parser's exact named extra-fi
   const archivePath = join(root, filename), metadata = join(root, "npm-pack.json"), digest = join(root, "npm-package.sha256");
   try {
     await writeFile(archivePath, archiveBytes);
-    const execute = async (extraPath: string, additional = false) => {
+    const execute = async (extraPath: string, additional = false, unpackedBytes = 700_000) => {
       const paths = [...requiredPaths, ...Array.from({ length: 57 }, (_, index) => `src/fixture-${index}.ts`), extraPath, ...(additional ? ["src/unreviewed.ts"] : [])];
       const packing = Buffer.from(JSON.stringify([{ name: "@hraness/direct", id: "@hraness/direct@0.7.21", version: "0.7.21", filename,
-        size: archiveBytes.length, entryCount: paths.length, unpackedSize: paths.length * 10_000,
-        files: paths.map(path => ({ path, size: 10_000, mode: 0o644 })), shasum: hash(archiveBytes, "sha1"),
+        size: archiveBytes.length, entryCount: paths.length, unpackedSize: unpackedBytes,
+        files: paths.map((path, index) => ({ path, size: index === 0 ? unpackedBytes - (paths.length - 1) * 10_000 : 10_000, mode: 0o644 })), shasum: hash(archiveBytes, "sha1"),
         integrity: `sha512-${createHash("sha512").update(archiveBytes).digest("base64")}` }]));
       await writeFile(metadata, packing);
       await writeFile(digest, `${hash(archiveBytes)}  ${filename}\n${hash(packing)}  npm-pack.json\n`);
@@ -449,6 +449,11 @@ test("terminal metadata admission retains only the parser's exact named extra-fi
     };
     const valid = await execute("src/tooling/verification-output.ts");
     expect({ exit: valid.exitCode, stderr: valid.stderr.toString(), stdout: valid.stdout.toString() }).toEqual({ exit: 0, stderr: "", stdout: expect.stringContaining(hash(archiveBytes)) });
+    const atLimit = await execute("src/tooling/verification-output.ts", false, 1_280_000);
+    expect({ exit: atLimit.exitCode, stderr: atLimit.stderr.toString() }).toEqual({ exit: 0, stderr: "" });
+    const overLimit = await execute("src/tooling/verification-output.ts", false, 1_280_001);
+    expect(overLimit.exitCode).toBe(1);
+    expect(overLimit.stderr.toString()).toContain("unpackedSize");
     for (const [path, additional] of [["src/other.ts", false], ["src/tooling/verification-output.ts", true]] as const) {
       const result = await execute(path, additional);
       expect({ path, additional, exit: result.exitCode, stderr: result.stderr.toString(), stdout: result.stdout.toString() }).toMatchObject({ exit: 1 });
@@ -481,7 +486,8 @@ test("the actual package passes canonical and terminal publication bounds", asyn
     const candidate = { ...m, version: record.version, tag: `v${record.version}`,
       archive: { name: record.filename, bytes: bytes.length, sha256: hash(bytes), sha512: hash(bytes, "sha512") } };
     expect(parseManifest(candidate)).toEqual(candidate);
-    expect(() => parseManifest({ ...candidate, archive: { ...candidate.archive, bytes: 270_001 } })).toThrow();
+    expect(parseManifest({ ...candidate, archive: { ...candidate.archive, bytes: 280_000 } }).archive.bytes).toBe(280_000);
+    expect(() => parseManifest({ ...candidate, archive: { ...candidate.archive, bytes: 280_001 } })).toThrow();
     const metadata = join(root, "npm-pack.json"), digest = join(root, "npm-package.sha256");
     await writeFile(metadata, packed.stdout);
     await writeFile(digest, `${hash(bytes)}  ${record.filename}\n${hash(packed.stdout)}  npm-pack.json\n`);

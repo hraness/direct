@@ -377,7 +377,7 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       readonly version?: unknown;
     };
     expect(manifest).toEqual(expect.objectContaining({
-      version: "0.7.23",
+      version: "0.7.24",
       description: "Direct gives browser agents repeatable app states that open by URL, with your real interface running on fixture data.",
       keywords: [
         "frontend-development",
@@ -569,9 +569,9 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       "const minimumFiles = 50",
       "const maximumFiles = 69",
       "const minimumPackedBytes = 140_000",
-      "const maximumPackedBytes = 270_000",
+      "const maximumPackedBytes = 280_000",
       "const minimumUnpackedBytes = 650_000",
-      "const maximumUnpackedBytes = 1_250_000",
+      "const maximumUnpackedBytes = 1_280_000",
       "record.files.length !== record.entryCount",
       "unpackedSize !== record.unpackedSize",
       'createHash("sha1")',

@@ -11,11 +11,12 @@ const packageBudget = Object.freeze({
   // The reviewed library/skill tree has 67 files; the standalone helper and
   // its license add two. The helper stays outside every library entry graph.
   fileCount: { min: 50, max: 69 },
-  // The reviewed helper/license add 21,748 uncompressed bytes; the complete
-  // candidate is 265,852 packed bytes under Bun 1.3.14.
-  packedBytes: { min: 140_000, max: 270_000 },
+  // 0.7.24 browser admission adds 9,754 unpacked bytes to 0.7.23 (1,249,782).
+  // Reviewed candidate: 1,259,536 unpacked; Bun 1.3.14 packs 269,291 bytes,
+  // npm 11.19.0 packs 269,869. Allow bounded toolchain compression variation.
+  packedBytes: { min: 140_000, max: 280_000 },
   // The optional driver ships its source types plus its external-peer bundle.
-  unpackedBytes: { min: 650_000, max: 1_250_000 },
+  unpackedBytes: { min: 650_000, max: 1_280_000 },
 });
 
 const requiredPaths = Object.freeze([
