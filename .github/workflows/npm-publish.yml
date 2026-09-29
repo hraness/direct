@@ -6,6 +6,13 @@ on:
       tag:
         required: true
         type: string
+      mode:
+        description: >-
+          canonical when the calling Release run verified this exact tag with the
+          complete source check; mirror for a current-main retry, which reruns it.
+        required: false
+        default: mirror
+        type: string
 
 permissions:
   contents: read
@@ -63,8 +70,10 @@ jobs:
         id: identity
         env:
           REQUESTED_TAG: ${{ inputs.tag }}
+          RELEASE_MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
+          [[ "$RELEASE_MODE" == canonical || "$RELEASE_MODE" == mirror ]]
           [[ "$GITHUB_REPOSITORY" == hraness/direct && "$GITHUB_REPOSITORY_ID" == 1306913032 && "$GITHUB_ACTOR_ID" == 894119 ]]
           [[ "$REQUESTED_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           git fetch --no-tags --unshallow origin "refs/heads/main:refs/remotes/origin/main"
@@ -79,6 +88,12 @@ jobs:
           EXPECTED_VERSION="${REQUESTED_TAG#v}" EXPECTED_WORKFLOW_SHA="$workflow_sha" \
             node "$GITHUB_WORKSPACE/scripts/github-release.ts" mirror "$canonical_directory"
           [[ "$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).sourceSha' "$canonical_directory/release-manifest.json")" == "$source_sha" ]]
+          if [[ "$RELEASE_MODE" == canonical ]]; then
+            # The complete source check below is reused only from this exact Release
+            # run: its Verify job checked the same tag commit before attestation.
+            [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == "refs/tags/$REQUESTED_TAG" && "$GITHUB_SHA" == "$source_sha" ]]
+            [[ "$(node -p 'String(JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).runId)' "$canonical_directory/release-manifest.json")" == "$GITHUB_RUN_ID" ]]
+          fi
           source_tree="$RUNNER_TEMP/direct-mirror-source"
           git worktree add --detach "$source_tree" "$source_sha"
           printf 'source_sha=%s\nworkflow_sha=%s\nsource_tree=%s\ncanonical_directory=%s\n' \
@@ -118,7 +133,9 @@ jobs:
           printf 'already_public=%s\n' "$already_public" >> "$GITHUB_OUTPUT"
       - run: bun install --frozen-lockfile --ignore-scripts
         working-directory: ${{ steps.identity.outputs.source_tree }}
-      - run: bun run check
+      - name: Complete source check (mirror retries only)
+        if: inputs.mode != 'canonical'
+        run: bun run check
         working-directory: ${{ steps.identity.outputs.source_tree }}
       - name: Verify generated tree
         working-directory: ${{ steps.identity.outputs.source_tree }}
@@ -756,13 +773,32 @@ jobs:
           EXPECTED_VERSION="$package_version" EXPECTED_WORKFLOW_SHA="$WORKFLOW_SHA" \
             node "$GITHUB_WORKSPACE/scripts/github-release.ts" mirror-verify "$source_directory"
           mkdir -p "$registry_directory"
+          # A fresh version can take a minute to reach every registry replica, and
+          # npm caches packuments, so poll with --prefer-online for up to 5 minutes.
+          # Replace this poll with the shared npm-visible action once it exists.
+          registry_poll_err="$RUNNER_TEMP/registry-poll.err"
+          for attempt in $(seq 1 20); do
+            if [[ "$(npm view "$package_spec" version --prefer-online \
+              --registry=https://registry.npmjs.org 2>"$registry_poll_err")" == "$package_version" ]]; then
+              break
+            fi
+            if [[ "$attempt" == 20 ]]; then
+              echo "::error::$package_spec did not become visible on the npm registry"
+              echo "Last npm view stderr:"
+              cat "$registry_poll_err" || true
+              exit 1
+            fi
+            sleep 15
+          done
           npm pack "$package_spec" \
+            --prefer-online \
             --ignore-scripts \
             --json \
             --pack-destination "$registry_directory" \
             --registry=https://registry.npmjs.org \
             > "$registry_pack_json"
           npm view "$package_spec" name version dist \
+            --prefer-online \
             --json \
             --registry=https://registry.npmjs.org \
             > "$registry_view_json"

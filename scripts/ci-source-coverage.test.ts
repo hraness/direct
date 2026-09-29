@@ -20,6 +20,8 @@ const releaseWorkflow = record(Bun.YAML.parse(readFileSync(new URL("../.github/w
 const canonicalPackScript = 'set -euo pipefail\npackage_directory="$(mktemp -d "$RUNNER_TEMP/direct-canonical-ci.XXXXXX")"\nbun --no-env-file --config=/dev/null run ./scripts/prepare-npm-package.ts "$package_directory"\ncat "$package_directory/npm-pack.json"\n';
 const canonicalPackStep = "      - name: Verify canonical npm archive\n        run: |\n"
   + canonicalPackScript.trimEnd().split("\n").map((line) => `          ${line}\n`).join("");
+const perCommitConcurrency = "concurrency:\n  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}\n  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n";
+const priorConcurrency = "concurrency:\n  group: ci-${{ github.ref }}\n  cancel-in-progress: true\n";
 const phases = [
   "typecheck", "check:effect", "test:npm-release", "build", "test:package", "test", "lint",
   "example:test", "example:typecheck", "example:verify", "example:react-native:test",
@@ -101,8 +103,11 @@ function assertSourceCoverage(packageValue: RecordValue, workflowValue: RecordVa
 
 test("complete CI retains the root aggregate, release-contract discovery, and committed-output checks", () => {
   const current = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-  // Removing only this additive pack gate and its Node patch pin must recover all prior CI bytes.
-  const prior = current.replace(canonicalPackStep, "").replace('node-version: "24.18.1"', 'node-version: "24"');
+  // Removing only this additive pack gate, its Node patch pin, and the per-commit main
+  // concurrency (PR runs still cancel superseded heads) must recover all prior CI bytes.
+  expect(current).toContain(perCommitConcurrency);
+  const prior = current.replace(canonicalPackStep, "").replace('node-version: "24.18.1"', 'node-version: "24"')
+    .replace(perCommitConcurrency, priorConcurrency);
   expect(createHash("sha256").update(prior).digest("hex")).toBe("b47f2d0ead76414025eddf15dedbd940ba8114a53fc93b9efecc78554015aaa0");
   assertSourceCoverage(manifest, workflow);
 });

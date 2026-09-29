@@ -318,6 +318,7 @@ jobs:
     uses: ./.github/workflows/npm-publish.yml
     with:
       tag: ${{ needs.authorize.outputs.tag }}
+      mode: ${{ needs.authorize.outputs.mode }}
 
   legacy:
     name: Recover historical GitHub Release
