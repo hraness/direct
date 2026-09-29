@@ -377,7 +377,7 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       readonly version?: unknown;
     };
     expect(manifest).toEqual(expect.objectContaining({
-      version: "0.7.23",
+      version: "0.7.24",
       description: "Direct gives browser agents repeatable app states that open by URL, with your real interface running on fixture data.",
       keywords: [
         "frontend-development",
@@ -569,9 +569,9 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       "const minimumFiles = 50",
       "const maximumFiles = 69",
       "const minimumPackedBytes = 140_000",
-      "const maximumPackedBytes = 270_000",
+      "const maximumPackedBytes = 280_000",
       "const minimumUnpackedBytes = 650_000",
-      "const maximumUnpackedBytes = 1_250_000",
+      "const maximumUnpackedBytes = 1_280_000",
       "record.files.length !== record.entryCount",
       "unpackedSize !== record.unpackedSize",
       'createHash("sha1")',
@@ -655,6 +655,8 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
     }
   });
 
+  // Eleven stubbed workflow runs include repeated CLI startup; bound the whole
+  // matrix separately from Bun's five-second unit-test default.
   test("rechecks the immutable release tag at the terminal publishing boundary", async () => {
     const workflow = await readFile(publishWorkflowUrl, "utf8");
     const script = workflowStepScript(workflow, "Revalidate release tag and publish exact package");
@@ -827,7 +829,7 @@ process.stdout.write(args.includes('--jq') ? value.object.sha + '\\n' : JSON.str
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
-  });
+  }, 30_000);
 
   test("gates immutable releases on canonical package content and supports bounded recovery", async () => {
     const [workflow, artifact, identity] = await Promise.all([

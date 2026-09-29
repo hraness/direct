@@ -70,6 +70,36 @@ deadlines, and rotates a namespace after an unresponsive process. The product
 still supplies allowed-domain launch flags, commands, semantic assertions,
 context inventory, and the final close decision.
 
+### Select an automation browser
+
+Provision Chrome for Testing with your pinned local `agent-browser install`,
+or provision Chromium with your pinned Playwright installation. Set the absolute
+executable path in `scripts/direct/agent-browser.verify.json`:
+
+```json
+{
+  "executablePath": "/absolute/path/to/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+}
+```
+
+Generate this machine-specific path during setup alongside your existing browser
+configuration. Keep the provisioned browser version in the setup record.
+`createAgentBrowser` resolves symlinks, checks executable access, and reads
+`--version` with a five-second deadline and a 4 KiB output limit before starting
+the driver. It accepts Chrome for Testing and Chromium, reports the selected
+path and version, and rejects ordinary Google Chrome, missing selections, and
+command-level executable or config overrides. `run()` takes the command first;
+the helper owns global options. Batches accept plain unquoted command strings
+and optional `--bail`. Use separate `run()` calls for quoted or escaped arguments,
+JSON input, and evaluation payloads. Nested batches and connection commands are
+rejected. This check identifies the browser
+distribution; it does not authenticate downloaded artifacts.
+
+agent-browser's automatic discovery can select installed Chrome. Direct disables
+that path by requiring the explicit selection and passing its resolved path to
+the driver. Shell `AGENT_BROWSER_*` settings remain isolated. Keep the task's
+final `close()` and external process cleanup requirements in place.
+
 ### Inspect bounded server output
 
 `spawnVerificationServer` continuously drains stdout and stderr. Its `output`
@@ -111,7 +141,9 @@ independent process and descriptor evidence when diagnosing a timeout.
 
 ### Isolate and run the session
 
-This command path uses an empty task-owned config, a fresh socket directory, a
+Set `DIRECT_BROWSER_EXECUTABLE` to the absolute path of your provisioned Chrome
+for Testing or Playwright Chromium executable before running this recipe.
+This command path uses an explicit task-owned browser config, a fresh socket directory, a
 sanitized environment, an exact allowlist, and a one-minute idle timeout. A
 no-URL `open` launches Chromium on its inert internal `about:blank` tab while
 installing the allowlist. Do not pass `about:blank` as an explicit URL;
@@ -121,6 +153,8 @@ agent-browser 0.32.3 rejects that hostname-free navigation under the allowlist.
 set -eu
 DIRECT_AGENT_BROWSER_BIN="$(command -v agent-browser)"
 test -x "$DIRECT_AGENT_BROWSER_BIN"
+: "${DIRECT_BROWSER_EXECUTABLE:?Set the absolute provisioned automation browser path}"
+test -x "$DIRECT_BROWSER_EXECUTABLE"
 DIRECT_BROWSER_SESSION='direct-chromium'
 DIRECT_BROWSER_BACKEND='local-chromium'
 DIRECT_BROWSER_ALLOWED_DOMAINS='127.0.0.1'
@@ -129,8 +163,24 @@ DIRECT_BROWSER_IDLE_TIMEOUT_MS=60000
 DIRECT_BROWSER_CONFIG_DIRECTORY="$(mktemp -d "${TMPDIR:-/tmp}/direct-browser-config.XXXXXX")"
 DIRECT_BROWSER_SOCKET_DIRECTORY="$(mktemp -d "${TMPDIR:-/tmp}/direct-browser-socket.XXXXXX")"
 DIRECT_BROWSER_CONFIG="$DIRECT_BROWSER_CONFIG_DIRECTORY/agent-browser.json"
-printf '%s\n' '{}' > "$DIRECT_BROWSER_CONFIG"
-test "$(tr -d '[:space:]' < "$DIRECT_BROWSER_CONFIG")" = '{}'
+node --input-type=module - "$DIRECT_BROWSER_EXECUTABLE" "$DIRECT_BROWSER_CONFIG" <<'JS'
+import { execFileSync } from 'node:child_process';
+import { realpathSync, writeFileSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
+if (!isAbsolute(process.argv[2])) throw new Error('Browser path must be absolute');
+const executablePath = realpathSync(process.argv[2]);
+if (/Google Chrome(?: Beta| Dev| Canary)?\.app\//i.test(executablePath)) {
+  throw new Error('Installed Chrome is not an automation browser');
+}
+const version = execFileSync(executablePath, ['--version'], {
+  encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL', maxBuffer: 4096,
+}).trim();
+if (!/^(Google Chrome for Testing|Chromium) \d+\.\d+\.\d+\.\d+$/.test(version)) {
+  throw new Error(`Unsupported browser: ${version}`);
+}
+console.error(`Browser: ${version} (${executablePath})`);
+writeFileSync(process.argv[3], JSON.stringify({ executablePath }));
+JS
 
 direct_agent_browser() {
   env -i \

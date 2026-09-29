@@ -315,9 +315,9 @@ jobs:
           const minimumFiles = 50;
           const maximumFiles = 69;
           const minimumPackedBytes = 140_000;
-          const maximumPackedBytes = 270_000;
+          const maximumPackedBytes = 280_000;
           const minimumUnpackedBytes = 650_000;
-          const maximumUnpackedBytes = 1_250_000;
+          const maximumUnpackedBytes = 1_280_000;
           const maximumMetadataBytes = 250_000;
           const expectedName = "@hraness/direct";
           const expectedVersion = process.env.EXPECTED_VERSION;

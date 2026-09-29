@@ -4146,7 +4146,14 @@ describe("Direct Bombadil process lifecycle", () => {
       wallClockTimeoutMs: 5_000,
     }));
     expect(error.name).toBe("BombadilArtifactPolicyError");
-    expect(error.message).toContain("outside the artifact allowlist");
+    // The live scan can refuse the unproven completion before the final scan.
+    expect(error.message).toMatch(/outside the artifact allowlist|lacks live partial provenance/);
+    const stoppedError = await rejection(inspectBombadilArtifactTreeForTest({
+      hashFiles: false,
+      policy: { maxDepth: 4, maxEntries: 8, maxFileBytes: 1_024, maxFiles: 4, maxPathBytes: 256, maxTotalBytes: 2_048 },
+      root: directory,
+    }));
+    expect(stoppedError.message).toContain("outside the artifact allowlist");
   });
 
   test("tolerates only live-scan entry disappearance and fails final proof closed", async () => {

@@ -99,7 +99,9 @@ cleanup claims require an external supervisor that owns both the agent-browser
 daemon and Chromium roots, or one containing job. The roots can occupy
 different process groups, so daemon exit alone is not cleanup proof.
 
-Create an empty task-owned config and fresh socket directory. Remove inherited
+Set `DIRECT_BROWSER_EXECUTABLE` to the absolute path of provisioned Chrome for
+Testing or Playwright Chromium. Create a task-owned config with that selection
+and a fresh socket directory. Remove inherited
 agent-browser and proxy settings, set a bounded idle timeout, and use the same
 wrapper and session for every batch command:
 
@@ -107,6 +109,8 @@ wrapper and session for every batch command:
 set -eu
 DIRECT_AGENT_BROWSER_BIN="$(command -v agent-browser)"
 test -x "$DIRECT_AGENT_BROWSER_BIN"
+: "${DIRECT_BROWSER_EXECUTABLE:?Set the absolute provisioned automation browser path}"
+test -x "$DIRECT_BROWSER_EXECUTABLE"
 DIRECT_BROWSER_SESSION='direct-chromium'
 DIRECT_BROWSER_BACKEND='local-chromium'
 DIRECT_BROWSER_ALLOWED_DOMAINS='127.0.0.1'
@@ -115,8 +119,24 @@ DIRECT_BROWSER_IDLE_TIMEOUT_MS=60000
 DIRECT_BROWSER_CONFIG_DIRECTORY="$(mktemp -d "${TMPDIR:-/tmp}/direct-browser-config.XXXXXX")"
 DIRECT_BROWSER_SOCKET_DIRECTORY="$(mktemp -d "${TMPDIR:-/tmp}/direct-browser-socket.XXXXXX")"
 DIRECT_BROWSER_CONFIG="$DIRECT_BROWSER_CONFIG_DIRECTORY/agent-browser.json"
-printf '%s\n' '{}' > "$DIRECT_BROWSER_CONFIG"
-test "$(tr -d '[:space:]' < "$DIRECT_BROWSER_CONFIG")" = '{}'
+node --input-type=module - "$DIRECT_BROWSER_EXECUTABLE" "$DIRECT_BROWSER_CONFIG" <<'JS'
+import { execFileSync } from 'node:child_process';
+import { realpathSync, writeFileSync } from 'node:fs';
+import { isAbsolute } from 'node:path';
+if (!isAbsolute(process.argv[2])) throw new Error('Browser path must be absolute');
+const executablePath = realpathSync(process.argv[2]);
+if (/Google Chrome(?: Beta| Dev| Canary)?\.app\//i.test(executablePath)) {
+  throw new Error('Installed Chrome is not an automation browser');
+}
+const version = execFileSync(executablePath, ['--version'], {
+  encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL', maxBuffer: 4096,
+}).trim();
+if (!/^(Google Chrome for Testing|Chromium) \d+\.\d+\.\d+\.\d+$/.test(version)) {
+  throw new Error(`Unsupported browser: ${version}`);
+}
+console.error(`Browser: ${version} (${executablePath})`);
+writeFileSync(process.argv[3], JSON.stringify({ executablePath }));
+JS
 
 direct_agent_browser() {
   env -i \

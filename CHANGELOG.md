@@ -2,6 +2,14 @@
 
 Each section below is the release page text for one Direct version: a summary, then the changes. The release workflow copies the section whose heading matches the tagged version and adds the install and verification steps itself.
 
+## 0.7.24 - 2026-09-29
+
+Direct's browser verification helper now requires an explicitly provisioned automation browser, preventing agent-browser from silently selecting installed, auto-updating Chrome.
+
+- Set `executablePath` in `scripts/direct/agent-browser.verify.json` to Chrome for Testing or provisioned Chromium. The helper resolves the path, rejects installed Chrome bundles, checks the browser version with bounded output and execution time, and reports the selected executable and version.
+- Browser attachment, alternate providers, and executable overrides are rejected by the owned-browser helper. `run()` requires the command first; batches support plain unquoted command strings and `--bail`. Use individual calls for complex payloads.
+- The verification guide and Agent Skill recipe select and check the automation browser explicitly. Existing session isolation and browser cleanup requirements remain in place.
+
 ## 0.7.23 - 2026-09-28
 
 This release updates Direct's package description, README, and Agent Skill guidance. The library's exports and browser tooling are unchanged.

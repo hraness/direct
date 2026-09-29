@@ -6,15 +6,15 @@ import {
   mkdir as mkdir2,
   open,
   opendir,
-  readFile,
-  realpath,
+  readFile as readFile2,
+  realpath as realpath2,
   rename as rename2,
   rmdir,
   rm as rm2,
-  stat,
+  stat as stat2,
   unlink
 } from "fs/promises";
-import { extname, isAbsolute, join as join2, relative, resolve } from "path";
+import { extname, isAbsolute as isAbsolute2, join as join2, relative, resolve } from "path";
 import process2 from "process";
 import { createHash, randomUUID as randomUUID2 } from "crypto";
 
@@ -901,8 +901,8 @@ var SCENARIO_QUERY_KEY2 = "__direct_scenario";
 
 // src/tooling/browser-verification.ts
 import { randomUUID } from "crypto";
-import { mkdir, rename, rm, writeFile } from "fs/promises";
-import { dirname, join } from "path";
+import { access, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "fs/promises";
+import { dirname, isAbsolute, join } from "path";
 
 // src/tooling/verification-output.ts
 var VERIFICATION_OUTPUT_TAIL_LIMIT = 12000;
@@ -1712,7 +1712,7 @@ function validateBombadilToolchainConfig(value, repositoryRoot) {
   const sourceRevision = Reflect.get(value, "sourceRevision");
   const version = Reflect.get(value, "version");
   const buildContract = Reflect.get(value, "buildContract");
-  if (typeof executablePath !== "string" || !isAbsolute(executablePath) || resolve(executablePath) !== executablePath || !isWithin(repositoryRoot, executablePath)) {
+  if (typeof executablePath !== "string" || !isAbsolute2(executablePath) || resolve(executablePath) !== executablePath || !isWithin(repositoryRoot, executablePath)) {
     throw new Error("bombadilToolchain.executablePath must be an absolute normalized path inside repositoryRoot");
   }
   if (typeof sha256 !== "string" || !SHA256_PATTERN.test(sha256)) {
@@ -1857,7 +1857,7 @@ function normalizeFuzzRunOptions(input) {
 }
 function validateArtifactRunPlan(input) {
   const repositoryRoot = resolve(input.repositoryRoot);
-  if (!isAbsolute(input.repositoryRoot) || repositoryRoot !== input.repositoryRoot) {
+  if (!isAbsolute2(input.repositoryRoot) || repositoryRoot !== input.repositoryRoot) {
     throw new Error("artifactRun.repositoryRoot must be an absolute normalized path");
   }
   if (!UUID_PATTERN.test(input.runId)) {
@@ -2233,7 +2233,7 @@ async function ensureSafeDirectoryChain(repositoryRoot, parts) {
         throw error;
     }
     await requireSafeDirectory(current, `Artifact directory ${part}`);
-    const resolved = await realpath(current);
+    const resolved = await realpath2(current);
     if (!isWithin(repositoryRoot, resolved) || resolved !== current) {
       throw new BombadilArtifactPolicyError("Artifact directory escaped repositoryRoot");
     }
@@ -2272,7 +2272,7 @@ async function prepareArtifactUploadSession(planInput) {
   const plan = validateArtifactRunPlan(planInput);
   let repositoryRoot;
   try {
-    repositoryRoot = await realpath(plan.repositoryRoot);
+    repositoryRoot = await realpath2(plan.repositoryRoot);
   } catch (error) {
     if (!isRecord2(error) || error.code !== "ENOENT") {
       throw new BombadilArtifactPolicyError(`artifactRun.repositoryRoot could not be proven safe: ${renderUnknown(error)}`);
@@ -3005,7 +3005,7 @@ async function ensureSafeChildDirectories(root, parts) {
         throw error;
     }
     await requireSafeDirectory(current, "Bombadil upload directory");
-    const resolved = await realpath(current);
+    const resolved = await realpath2(current);
     if (!isWithin(root, resolved) || resolved !== current) {
       throw new BombadilArtifactPolicyError("Bombadil upload directory escaped staging root");
     }
@@ -4230,7 +4230,7 @@ function parseDirectBombadilFuzzArguments(arguments_, defaultBaseUrl) {
 }
 function isWithin(root, candidate) {
   const path = relative(root, candidate);
-  return path === "" || !path.startsWith("..") && !isAbsolute(path);
+  return path === "" || !path.startsWith("..") && !isAbsolute2(path);
 }
 function validateReadinessPath(value) {
   if (!value.startsWith("/") || value.startsWith("//")) {
@@ -4415,7 +4415,7 @@ function validateExplorationPolicy(value) {
 }
 function validateDirectBombadilFuzzConfig(config, baseUrlOverride) {
   const repositoryRoot = resolve(config.repositoryRoot);
-  if (!isAbsolute(config.repositoryRoot) || repositoryRoot !== config.repositoryRoot) {
+  if (!isAbsolute2(config.repositoryRoot) || repositoryRoot !== config.repositoryRoot) {
     throw new Error("repositoryRoot must be an absolute normalized path");
   }
   if (!isBoundedArtifactIdentifier(config.artifactName)) {
@@ -4432,13 +4432,13 @@ function validateDirectBombadilFuzzConfig(config, baseUrlOverride) {
   }
   const specificationPath = resolve(config.specificationPath);
   const serverCwd = resolve(config.server.cwd);
-  if (!isAbsolute(config.specificationPath) || !isWithin(repositoryRoot, specificationPath)) {
+  if (!isAbsolute2(config.specificationPath) || !isWithin(repositoryRoot, specificationPath)) {
     throw new Error("specificationPath must be an absolute path inside repositoryRoot");
   }
   if (!/\.[cm]?[jt]sx?$/u.test(specificationPath)) {
     throw new Error("specificationPath must name a JavaScript or TypeScript specification");
   }
-  if (!isAbsolute(config.server.cwd) || !isWithin(repositoryRoot, serverCwd)) {
+  if (!isAbsolute2(config.server.cwd) || !isWithin(repositoryRoot, serverCwd)) {
     throw new Error("server.cwd must be an absolute path inside repositoryRoot");
   }
   if (config.server.command.length === 0) {
@@ -4931,7 +4931,7 @@ async function readServerOutputBounded(server, timeoutMs) {
 async function requireRegularFile(path, label) {
   let metadata;
   try {
-    metadata = await stat(path);
+    metadata = await stat2(path);
   } catch {
     throw new Error(`${label} does not exist at its configured path`);
   }
@@ -4939,7 +4939,7 @@ async function requireRegularFile(path, label) {
     throw new Error(`${label} must be a regular file`);
 }
 async function resolveBombadilExecutablePath(candidate, repositoryRoot) {
-  if (!isAbsolute(candidate) || resolve(candidate) !== candidate || !isWithin(repositoryRoot, candidate)) {
+  if (!isAbsolute2(candidate) || resolve(candidate) !== candidate || !isWithin(repositoryRoot, candidate)) {
     throw new Error("The root Bombadil executable must be an absolute normalized path inside repositoryRoot");
   }
   let metadata;
@@ -5252,7 +5252,7 @@ function assertSameBombadilExecutableAttestation(before, after) {
 async function requireDirectory(path, label) {
   let metadata;
   try {
-    metadata = await stat(path);
+    metadata = await stat2(path);
   } catch {
     throw new Error(`${label} does not exist at its configured path`);
   }
@@ -5261,7 +5261,7 @@ async function requireDirectory(path, label) {
 }
 async function resolveExistingRealPath(path, label) {
   try {
-    return await realpath(path);
+    return await realpath2(path);
   } catch {
     throw new Error(`${label} does not exist at its configured path`);
   }
@@ -5322,7 +5322,7 @@ async function readExactBombadilVersion(repositoryRoot, toolchain, executablePat
   const packagePath = join2(repositoryRoot, "node_modules", "@antithesishq", "bombadil", "package.json");
   let input;
   try {
-    input = JSON.parse(await readFile(packagePath, "utf8"));
+    input = JSON.parse(await readFile2(packagePath, "utf8"));
   } catch {
     throw new Error("The root Bombadil package metadata is missing or malformed");
   }
@@ -5425,7 +5425,7 @@ async function runDirectBombadilFuzzMatrix(campaignsInput, input = process2.argv
       throw new Error(`Bombadil campaign matrix must contain 1-${String(MAX_MATRIX_CAMPAIGNS)} campaigns`);
     }
     const requestedMatrixPlan = normalizedOptions.artifactRun ?? {
-      repositoryRoot: await realpath(resolve(firstRepositoryRoot ?? "")),
+      repositoryRoot: await realpath2(resolve(firstRepositoryRoot ?? "")),
       runId: dependencies.createRunId(),
       uploadMode: "public-summary"
     };
@@ -5659,7 +5659,7 @@ async function runDirectBombadilFuzzInternal(config, input = process2.argv.slice
   try {
     const generatedAt = dependencies.now();
     const artifactPlan = preparedUpload?.plan ?? normalizedOptions.artifactRun ?? {
-      repositoryRoot: await realpath(resolve(config.repositoryRoot)),
+      repositoryRoot: await realpath2(resolve(config.repositoryRoot)),
       runId: dependencies.createRunId(),
       uploadMode: "public-summary"
     };

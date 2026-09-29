@@ -1,6 +1,9 @@
+import { execFile } from "node:child_process";
+import { constants } from "node:fs";
+import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { access, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join } from "node:path";
 
 import {
   captureVerificationOutput,
@@ -576,6 +579,83 @@ export function parseAgentBrowserBatchEnvelope(source: string): readonly unknown
   });
 }
 
+async function managedAgentBrowserExecutable(configPath: string): Promise<string> {
+  const guidance = "Set executablePath in scripts/direct/agent-browser.verify.json to a provisioned Chrome for Testing or Playwright Chromium executable; run agent-browser install or playwright install chromium first. Installed auto-updating Chrome and automatic discovery are not supported.";
+  let config: unknown;
+  try {
+    config = JSON.parse(await readFile(configPath, "utf8")) as unknown;
+  } catch (error) {
+    throw new Error(`Cannot read browser configuration. ${guidance}`, { cause: error });
+  }
+  if (isNonArrayObject(config)) {
+    for (const key of ["autoConnect", "cdp", "provider"]) {
+      const value: unknown = Reflect.get(config, key);
+      if (value !== undefined && value !== false && value !== null && value !== "") {
+        throw new Error(`Owned browser configuration cannot select ${key}; browser attachment requires a separate explicit workflow.`);
+      }
+    }
+    const engine: unknown = Reflect.get(config, "engine");
+    if (engine !== undefined && engine !== "chrome") {
+      throw new Error("Owned browser configuration requires the chrome engine");
+    }
+  }
+  const selected = isNonArrayObject(config) ? Reflect.get(config, "executablePath") : undefined;
+  if (typeof selected !== "string" || !isAbsolute(selected)) {
+    throw new Error(guidance);
+  }
+  let executable: string;
+  try {
+    executable = await realpath(selected);
+    if (!(await stat(executable)).isFile()) throw new Error("not a file");
+    await access(executable, constants.X_OK);
+  } catch (error) {
+    throw new Error(`Browser executable is unavailable: ${selected}. ${guidance}`, { cause: error });
+  }
+  if (/(?:^|[/\\])Google Chrome(?: Beta| Dev| Canary)?\.app(?:[/\\]|$)/i.test(executable)) {
+    throw new Error(`Installed Google Chrome cannot be used for automation: ${executable}. ${guidance}`);
+  }
+  let version: string;
+  try {
+    const result = await promisify(execFile)(executable, ["--version"], {
+      timeout: 5_000,
+      killSignal: "SIGKILL",
+      maxBuffer: 4_096,
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    version = result.stdout.trim();
+  } catch (error) {
+    throw new Error(`Cannot identify browser executable: ${executable}. ${guidance}`, { cause: error });
+  }
+  // This identifies the automation distribution, not artifact provenance.
+  if (!/^(?:Google Chrome for Testing|Chromium) \d+\.\d+\.\d+\.\d+(?:[ \t]+[^\r\n]+)?$/.test(version)) {
+    throw new Error(`Unsupported browser ${JSON.stringify(version)} at ${executable}. ${guidance}`);
+  }
+  console.error(`Direct browser: ${version} (${executable})`);
+  return executable;
+}
+
+function validateOwnedBrowserCommand(arguments_: readonly string[], nested = false): void {
+  const command = arguments_[0];
+  if (command === "connect" || arguments_.some((argument) => /^(?:--(?:executable-path|config|auto-connect|cdp|provider|engine)(?:=|$)|-p(?:=|$))/.test(argument))) {
+    throw new Error("Owned browser selection must be selected through scripts/direct/agent-browser.verify.json; attachment requires a separate explicit workflow");
+  }
+  if (command === undefined || command.startsWith("-")) {
+    throw new Error("run() requires a command first; the helper owns global browser options");
+  }
+  if (command === "batch") {
+    if (nested) throw new Error("Nested browser batches are not supported; use separate run() calls");
+    const commands = arguments_.slice(1).filter((argument) => argument !== "--bail");
+    if (commands.length === 0) throw new Error("batch requires plain command strings");
+    for (const entry of commands) {
+      if (/["'\\]/.test(entry) || entry.trim().startsWith("[")) {
+        throw new Error("batch accepts plain command strings only; use separate run() calls for quoted, escaped, JSON, or evaluation payloads");
+      }
+      validateOwnedBrowserCommand(entry.trim().split(/\s+/), true);
+    }
+  }
+}
+
 export function createAgentBrowser(options: {
   readonly repositoryRoot: string;
   readonly sessionPrefix: string;
@@ -605,8 +685,12 @@ export function createAgentBrowser(options: {
   };
   let environment = createEnvironment();
   let used = false;
+  let executable: Promise<string> | undefined;
 
   async function run(arguments_: readonly string[]): Promise<unknown> {
+    validateOwnedBrowserCommand(arguments_);
+    executable ??= managedAgentBrowserExecutable(join(options.repositoryRoot, "scripts/direct/agent-browser.verify.json"));
+    environment.AGENT_BROWSER_EXECUTABLE_PATH = await executable;
     used = true;
     const defaultTimeoutMs = options.defaultTimeoutMs ?? 35_000;
     const commandArguments = arguments_[0] === "wait" && !arguments_.includes("--timeout")
