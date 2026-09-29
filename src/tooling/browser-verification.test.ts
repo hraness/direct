@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -583,6 +583,83 @@ describe("agent-browser envelopes", () => {
       .toBe("open https://example.com");
   });
 
+  async function configureBrowser(repositoryRoot: string, version = "Google Chrome for Testing 152.0.7977.83"): Promise<string> {
+    const executable = join(repositoryRoot, "managed-browser");
+    await writeFile(executable, `#!/bin/sh\nprintf '%s\\n' '${version}'\n`);
+    await chmod(executable, 0o755);
+    const directory = join(repositoryRoot, "scripts/direct");
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, "agent-browser.verify.json"), JSON.stringify({ executablePath: executable }));
+    return executable;
+  }
+
+  test("requires an explicit available automation browser before spawning agent-browser", async () => {
+    const repositoryRoot = await temporaryDirectory();
+    const run = () => createAgentBrowser({ repositoryRoot, sessionPrefix: "test" }).run(["open", "about:blank"]);
+    await expect(run()).rejects.toThrow("Cannot read browser configuration");
+    const configDirectory = join(repositoryRoot, "scripts/direct");
+    await mkdir(configDirectory, { recursive: true });
+    const configPath = join(configDirectory, "agent-browser.verify.json");
+    for (const config of [{}, { executablePath: "relative/chrome" }, { executablePath: "/missing/chrome" }]) {
+      await writeFile(configPath, JSON.stringify(config));
+      await expect(run()).rejects.toThrow("provisioned Chrome for Testing");
+    }
+    await configureBrowser(repositoryRoot, "Google Chrome 152.0.7977.83");
+    await expect(run()).rejects.toThrow('Unsupported browser "Google Chrome 152.0.7977.83"');
+  });
+
+  test("rejects configuration that bypasses the owned browser", async () => {
+    const repositoryRoot = await temporaryDirectory();
+    const executablePath = await configureBrowser(repositoryRoot);
+    for (const selection of [{ autoConnect: true }, { cdp: "9222" }, { provider: "browserbase" }, { engine: "lightpanda" }]) {
+      await writeFile(join(repositoryRoot, "scripts/direct/agent-browser.verify.json"), JSON.stringify({ executablePath, ...selection }));
+      const browser = createAgentBrowser({ repositoryRoot, sessionPrefix: "test" });
+      await expect(browser.run(["open", "about:blank"])).rejects.toThrow("Owned browser configuration");
+    }
+  });
+
+  test("rejects installed Chrome reached through a symlink without executing it", async () => {
+    const repositoryRoot = await temporaryDirectory();
+    const configDirectory = join(repositoryRoot, "scripts/direct");
+    await mkdir(configDirectory, { recursive: true });
+    for (const channel of ["", " Beta", " Dev", " Canary"]) {
+      const directory = join(repositoryRoot, `Google Chrome${channel}.app/Contents/MacOS`);
+      await mkdir(directory, { recursive: true });
+      const executable = join(directory, "Google Chrome");
+      await writeFile(executable, "#!/bin/sh\nexit 99\n");
+      await chmod(executable, 0o755);
+      const alias = join(repositoryRoot, `alias${channel}`);
+      await symlink(executable, alias);
+      await writeFile(join(configDirectory, "agent-browser.verify.json"), JSON.stringify({ executablePath: alias }));
+      const browser = createAgentBrowser({ repositoryRoot, sessionPrefix: "test" });
+      await expect(browser.run(["open", "about:blank"])).rejects.toThrow("Installed Google Chrome cannot be used");
+      await browser.close();
+    }
+  });
+
+  test("passes the verified executable to the isolated driver and prevents command overrides", async () => {
+    const repositoryRoot = await temporaryDirectory();
+    const binaryDirectory = join(repositoryRoot, "node_modules/.bin");
+    await mkdir(binaryDirectory, { recursive: true });
+    await writeFile(join(binaryDirectory, "agent-browser"), `console.log(JSON.stringify(process.argv[3] === "batch" ? [{ command: ["mouse"], success: true, error: null, result: "accepted" }] : { success: true, error: null, data: process.env.AGENT_BROWSER_EXECUTABLE_PATH }));`);
+    for (const version of ["Google Chrome for Testing 152.0.7977.83", "Chromium 152.0.7977.83"]) {
+      const executable = await configureBrowser(repositoryRoot, version);
+      const browser = createAgentBrowser({ repositoryRoot, sessionPrefix: "test" });
+      expect(await browser.run(["open", "about:blank"])).toBe(await realpath(executable));
+      await expect(browser.run(["--executable-path=/Applications/Google Chrome.app", "open"])).rejects.toThrow("must be selected through");
+      await expect(browser.run(["--config", "/tmp/other.json", "open"])).rejects.toThrow("must be selected through");
+      for (const command of [["--auto-connect", "open"], ["--cdp=9222", "open"], ["-p", "browserbase", "open"], ["--engine", "lightpanda", "open"], ["connect", "9222"]]) {
+        await expect(browser.run(command)).rejects.toThrow("attachment requires");
+      }
+      await expect(browser.run(["--json", "connect", "9222"])).rejects.toThrow("command first");
+      await expect(browser.run(["batch", "connect 9222"])).rejects.toThrow("attachment requires");
+      await expect(browser.run(["batch", "batch connect 9222"])).rejects.toThrow("Nested browser batches");
+      await expect(browser.run(["batch", 'eval "1 + 1"'])).rejects.toThrow("plain command strings");
+      expect(await browser.run(["batch", "--bail", "mouse move 1 2", "wait 200"])).toEqual(["accepted"]);
+      await browser.close();
+    }
+  });
+
   test("bounds close separately and rotates after an unresponsive namespace", async () => {
     expect(agentBrowserCloseProcessTimeoutMs).toBe(10_000);
     expect(agentBrowserProcessTimeoutMs(["eval", "1"], 60_000)).toBe(65_000);
@@ -608,6 +685,7 @@ describe("agent-browser envelopes", () => {
       repositoryRoot,
       sessionPrefix: "test",
     });
+    await configureBrowser(repositoryRoot);
     const firstNamespace = await browser.evaluate("1");
     await browser.restart();
     const secondNamespace = await browser.evaluate("1");
