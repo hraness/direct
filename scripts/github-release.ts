@@ -13,6 +13,16 @@ export const authorityPaths = [workflow, "scripts/github-release.ts", "scripts/p
   "scripts/npm-package-identity.ts", "scripts/prepare-npm-package.ts", "scripts/package-artifact.ts", ".github/workflows/npm-publish.yml", "package.json", "bun.lock"] as const;
 const workflowId = 320004413;
 const actorId = 894119;
+// The hraness-release-tagger App's bot creates the tag when a version bump
+// passes CI on main. It may start tag-push releases only; dispatch stays owner-only.
+const taggerId = 337004703;
+function trustedActor(value: unknown, label: string, event: unknown): boolean {
+  const actor = record(value, label);
+  return (actor.id === actorId && actor.type === "User") || (event === "push" && actor.id === taggerId && actor.type === "Bot");
+}
+function trustedActorId(id: string | undefined, event: string | undefined): boolean {
+  return id === String(actorId) || (event === "push" && id === String(taggerId));
+}
 const authorId = 41898282;
 const sha = /^[a-f0-9]{40}$/u;
 const digest = /^[a-f0-9]{64}$/u;
@@ -130,7 +140,7 @@ export function admitAttempt(value: unknown, expected: { sourceSha: string; tag:
   const repo = record(run.repository, "Release repository");
   if (run.id !== expected.runId || run.run_attempt !== expected.runAttempt || run.head_sha !== expected.sourceSha
     || run.head_branch !== expected.tag || run.workflow_id !== workflowId || run.name !== "Release" || run.path !== workflow || run.event !== "push"
-    || actor.id !== actorId || actor.type !== "User" || triggering.id !== actorId || triggering.type !== "User"
+    || !trustedActor(actor, "Release actor", run.event) || !trustedActor(triggering, "Release triggering actor", run.event)
     || repo.id !== repositoryId || repo.full_name !== repository || repo.private !== false
     || (completed === "canonical"
       ? !((run.status === "in_progress" && run.conclusion === null) || (run.status === "completed" && typeof run.conclusion === "string"))
@@ -201,7 +211,7 @@ export async function authorizeRelease(environment: ReleaseEnvironment = process
   const runId = positive(Number(environment.GITHUB_RUN_ID), "Run ID");
   const runAttempt = positive(Number(environment.GITHUB_RUN_ATTEMPT), "Run attempt");
   if (!sha.test(sourceSha) || tag !== `v${stableVersion(tag.slice(1))}` || environment.GITHUB_REF !== `refs/tags/${tag}`
-    || environment.GITHUB_EVENT_NAME !== "push" || environment.GITHUB_ACTOR_ID !== String(actorId)
+    || environment.GITHUB_EVENT_NAME !== "push" || !trustedActorId(environment.GITHUB_ACTOR_ID, environment.GITHUB_EVENT_NAME)
     || environment.GITHUB_REPOSITORY !== repository || environment.GITHUB_REPOSITORY_ID !== String(repositoryId)
     || environment.GITHUB_WORKFLOW_REF !== `${repository}/${workflow}@refs/tags/${tag}`) throw new Error("Release environment is not the exact protected tag request.");
   const root = record(await request(`/repos/${repository}`), "Repository");
@@ -551,14 +561,13 @@ export function admitMirrorAuthority(manifest: ReleaseManifest, expectedWorkflow
     || (!dispatch && environment.GITHUB_EVENT_NAME !== "push")
     || environment.GITHUB_WORKFLOW_REF !== `${repository}/${workflow}@${expectedRef}`
     || environment.GITHUB_REPOSITORY !== repository || environment.GITHUB_REPOSITORY_ID !== String(repositoryId)
-    || environment.GITHUB_ACTOR_ID !== String(actorId)
+    || !trustedActorId(environment.GITHUB_ACTOR_ID, environment.GITHUB_EVENT_NAME)
     || (comparison.status !== "ahead" && comparison.status !== "identical")
     || run.id !== Number(environment.GITHUB_RUN_ID) || run.run_attempt !== Number(environment.GITHUB_RUN_ATTEMPT)
     || run.head_sha !== expectedSource || run.head_branch !== (dispatch ? "main" : manifest.tag)
     || run.event !== environment.GITHUB_EVENT_NAME || run.workflow_id !== workflowId || run.path !== workflow || run.name !== "Release"
     || run.status !== "in_progress" || run.conclusion !== null
-    || record(run.actor, "Mirror actor").id !== actorId || record(run.actor, "Mirror actor").type !== "User"
-    || record(run.triggering_actor, "Mirror triggering actor").id !== actorId || record(run.triggering_actor, "Mirror triggering actor").type !== "User"
+    || !trustedActor(run.actor, "Mirror actor", run.event) || !trustedActor(run.triggering_actor, "Mirror triggering actor", run.event)
     || record(run.repository, "Mirror repository").id !== repositoryId || record(run.repository, "Mirror repository").full_name !== repository || record(run.repository, "Mirror repository").private !== false) {
     throw new Error("Mirror is not the exact owner-authorized workflow on protected current main.");
   }

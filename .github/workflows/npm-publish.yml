@@ -74,7 +74,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$RELEASE_MODE" == canonical || "$RELEASE_MODE" == mirror ]]
-          [[ "$GITHUB_REPOSITORY" == hraness/direct && "$GITHUB_REPOSITORY_ID" == 1306913032 && "$GITHUB_ACTOR_ID" == 894119 ]]
+          [[ "$GITHUB_REPOSITORY" == hraness/direct && "$GITHUB_REPOSITORY_ID" == 1306913032 && ( "$GITHUB_ACTOR_ID" == 894119 || ( "$GITHUB_ACTOR_ID" == 337004703 && "$GITHUB_EVENT_NAME" == push ) ) ]]
           [[ "$REQUESTED_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           git fetch --no-tags --unshallow origin "refs/heads/main:refs/remotes/origin/main"
           workflow_sha="$(git rev-parse HEAD)"
@@ -543,7 +543,7 @@ jobs:
           const source = dispatch ? e.EXPECTED_WORKFLOW_SHA : e.EXPECTED_SOURCE_SHA;
           const ref = dispatch ? 'refs/heads/main' : `refs/tags/${tag}`;
           if (e.GITHUB_REPOSITORY !== 'hraness/direct' || e.GITHUB_REPOSITORY_ID !== '1306913032'
-            || e.GITHUB_ACTOR_ID !== '894119' || (!dispatch && e.GITHUB_EVENT_NAME !== 'push')
+            || (e.GITHUB_ACTOR_ID !== '894119' && (e.GITHUB_ACTOR_ID !== '337004703' || e.GITHUB_EVENT_NAME !== 'push')) || (!dispatch && e.GITHUB_EVENT_NAME !== 'push')
             || e.GITHUB_SHA !== source || e.GITHUB_REF !== ref || e.GITHUB_WORKFLOW_REF !== `hraness/direct/.github/workflows/release.yml@${ref}`
             || !sha.test(e.EXPECTED_SOURCE_SHA ?? '') || !sha.test(e.EXPECTED_WORKFLOW_SHA ?? '')) fail('Untrusted mirror event');
           const options = { timeout: 30000, killSignal: 'SIGKILL', maxBuffer: 8000000, stdio: ['ignore', 'pipe', 'pipe'] };
@@ -553,7 +553,7 @@ jobs:
             || run.workflow_id !== 320004413 || run.path !== '.github/workflows/release.yml' || run.name !== 'Release'
             || run.head_sha !== source || run.head_branch !== (dispatch ? 'main' : tag) || run.event !== e.GITHUB_EVENT_NAME
             || run.status !== 'in_progress' || run.conclusion !== null
-            || run.actor?.id !== 894119 || run.actor?.type !== 'User' || run.triggering_actor?.id !== 894119 || run.triggering_actor?.type !== 'User'
+            || ![run.actor, run.triggering_actor].every(a => (a?.id === 894119 && a?.type === 'User') || (run.event === 'push' && a?.id === 337004703 && a?.type === 'Bot'))
             || run.repository?.id !== 1306913032 || run.repository?.full_name !== 'hraness/direct' || run.repository?.private !== false) fail('Mirror run authority changed');
           const main = api('git/ref/heads/main').object;
           const version = api(`git/ref/tags/${tag}`).object;
@@ -584,7 +584,7 @@ jobs:
           const canonical = api(`actions/runs/${runId}/attempts/${attempt}`);
           if (canonical.id !== runId || canonical.run_attempt !== attempt || canonical.workflow_id !== 320004413 || canonical.name !== 'Release'
             || canonical.path !== '.github/workflows/release.yml' || canonical.event !== 'push' || canonical.head_sha !== e.EXPECTED_SOURCE_SHA || canonical.head_branch !== tag
-            || canonical.actor?.id !== 894119 || canonical.actor?.type !== 'User' || canonical.triggering_actor?.id !== 894119 || canonical.triggering_actor?.type !== 'User'
+            || ![canonical.actor, canonical.triggering_actor].every(a => (a?.id === 894119 && a?.type === 'User') || (canonical.event === 'push' && a?.id === 337004703 && a?.type === 'Bot'))
             || canonical.repository?.id !== 1306913032 || canonical.repository?.full_name !== 'hraness/direct' || canonical.repository?.private !== false) fail('Canonical provenance run changed');
           const required = new Set(['Authorize release request', 'Verify', 'Attest canonical artifact', 'Publish']);
           const seenJobs = new Set(), seenIds = new Set();

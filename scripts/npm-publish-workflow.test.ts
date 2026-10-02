@@ -699,7 +699,8 @@ const assets = names.map((name, index) => ({ id: index + 1, name, state: 'upload
   browser_download_url: 'https://github.com/hraness/direct/releases/download/' + tag + '/' + name }));
 const run = id => ({ id, run_attempt: 1, workflow_id: 320004413, path: '.github/workflows/release.yml', name: 'Release',
   head_sha: source, head_branch: tag, event: 'push', status: id === 111 ? 'completed' : 'in_progress', conclusion: id === 111 ? 'failure' : null,
-  actor: { id: 894119, type: 'User' }, triggering_actor: { id: e.BAD_ACTOR ? 99 : 894119, type: 'User' },
+  actor: e.TAGGER_ACTOR ? { id: Number(e.TAGGER_ACTOR), type: 'Bot' } : { id: 894119, type: 'User' },
+  triggering_actor: e.BAD_ACTOR ? { id: 99, type: 'User' } : e.TAGGER_ACTOR ? { id: Number(e.TAGGER_ACTOR), type: 'Bot' } : { id: 894119, type: 'User' },
   repository: { id: 1306913032, full_name: 'hraness/direct', private: false } });
 let value;
 if (path.endsWith('/git/ref/heads/main')) value = { object: { type: 'commit', sha: e.FRESH_MAIN_SHA || e.EXPECTED_WORKFLOW_SHA } };
@@ -826,6 +827,15 @@ process.stdout.write(args.includes('--jq') ? value.object.sha + '\\n' : JSON.str
       });
       expect(idempotent.exitCode).toBe(0);
       expect(await Bun.file(publishMarker).exists()).toBe(false);
+
+      // The hraness-release-tagger App's bot may start a tag-push release; no other bot may.
+      const otherBot = await runWorkflowScript(script, { ...baseEnvironment, GITHUB_ACTOR_ID: "41898282", TAGGER_ACTOR: "41898282" });
+      expect(otherBot.exitCode).not.toBe(0);
+      expect(await Bun.file(publishMarker).exists()).toBe(false);
+      const tagger = await runWorkflowScript(script, { ...baseEnvironment, GITHUB_ACTOR_ID: "337004703", TAGGER_ACTOR: "337004703" });
+      expect(`${tagger.stdout}${tagger.stderr}`).not.toContain("Mirror run authority changed");
+      expect(tagger.exitCode).toBe(0);
+      expect(await Bun.file(publishMarker).exists()).toBe(true);
     } finally {
       await rm(directory, { force: true, recursive: true });
     }

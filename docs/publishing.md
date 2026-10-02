@@ -17,7 +17,11 @@ rulesets on `refs/tags/v*`:
 
 Keep `main` protected by required source checks. The workflow admits repository
 ID `1306913032`, owner actor and triggering actor ID `894119`, and the exact
-`Release` workflow ID `320004413`. Review the complete writer, ruleset, immutable
+`Release` workflow ID `320004413`. A tag push may also come from the
+`hraness-release-tagger[bot]` App user (ID `337004703`, type `Bot`):
+`.github/workflows/auto-tag.yml` creates the annotated `v<version>` tag once a
+`package.json` version bump passes `CI` on `main`. Manual dispatches stay
+owner-only, and pushing the tag by hand still works. Review the complete writer, ruleset, immutable
 release, and npm trust configuration at setup and after control changes. Routine
 publication uses fresh source, workflow, run, artifact, and provider readback.
 
