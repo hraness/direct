@@ -95,6 +95,13 @@ test("release authorization rejects collaborator reruns and stale source or atte
     { repository: { id: 1306913032, full_name: "other/direct", private: false } }]) {
     expect(() => admitAttempt({ ...attempt(), ...change }, m)).toThrow("exact authorized");
   }
+  const tagger = { id: 337004703, type: "Bot" };
+  expect(() => admitAttempt({ ...attempt(), actor: tagger, triggering_actor: tagger }, m)).not.toThrow();
+  expect(() => admitAttempt({ ...attempt(), actor: tagger }, m)).not.toThrow();
+  for (const change of [{ actor: { id: 41898282, type: "Bot" } }, { actor: { id: 337004703, type: "User" } },
+    { actor: tagger, event: "workflow_dispatch" }]) {
+    expect(() => admitAttempt({ ...attempt(), ...change }, m)).toThrow("exact authorized");
+  }
   expect(() => admitAttempt({ ...attempt(), status: "completed", conclusion: "success" }, m, true)).not.toThrow();
   expect(() => admitAttempt(attempt(), m, true)).toThrow("exact authorized");
   expect(() => admitAttempt({ ...attempt(), status: "completed", conclusion: "failure" }, m, true)).toThrow("exact authorized");
@@ -234,6 +241,8 @@ test("live admission rejects drift anywhere in the transitive release helper clo
   try {
     expect(await authorizeRelease(environment)).toBe(current);
     expect([...reads].sort()).toEqual([...authorityPaths].sort());
+    expect(await authorizeRelease({ ...environment, GITHUB_ACTOR_ID: "337004703" })).toBe(current);
+    await expect(authorizeRelease({ ...environment, GITHUB_ACTOR_ID: "41898282" })).rejects.toThrow("exact protected tag request");
     for (const path of authorityPaths) {
       changedPath = path;
       await expect(authorizeRelease(environment)).rejects.toThrow("Current release authority changed");
