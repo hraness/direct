@@ -1219,8 +1219,17 @@ function isolatedAgentBrowserEnvironment(options) {
     ...options.executablePath === undefined ? {} : { AGENT_BROWSER_EXECUTABLE_PATH: options.executablePath }
   };
 }
+function trimHyphens(value) {
+  let start = 0;
+  while (start < value.length && value[start] === "-")
+    start += 1;
+  let end = value.length;
+  while (end > start && value[end - 1] === "-")
+    end -= 1;
+  return value.slice(start, end);
+}
 function boundedAgentBrowserSessionName(prefix, processId, nonce) {
-  const boundedPrefix = prefix.replaceAll(/[^a-zA-Z0-9_-]+/g, "-").replaceAll(/^-+|-+$/g, "").slice(0, 6) || "verify";
+  const boundedPrefix = trimHyphens(prefix.replaceAll(/[^a-zA-Z0-9_-]+/g, "-")).slice(0, 6) || "verify";
   const boundedProcessId = Math.max(0, Math.trunc(processId)).toString(36).slice(-6);
   const boundedNonce = nonce.replaceAll(/[^a-zA-Z0-9]+/g, "").slice(0, 6) || "run";
   return `${boundedPrefix}-${boundedProcessId}-${boundedNonce}`;

@@ -427,15 +427,21 @@ export function isolatedAgentBrowserEnvironment(options: {
   };
 }
 
+function trimHyphens(value: string): string {
+  let start = 0;
+  while (start < value.length && value[start] === "-") start += 1;
+  let end = value.length;
+  while (end > start && value[end - 1] === "-") end -= 1;
+  return value.slice(start, end);
+}
+
 /** Keeps the namespace-backed Unix socket path below macOS's 103-byte limit. */
 export function boundedAgentBrowserSessionName(
   prefix: string,
   processId: number,
   nonce: string,
 ): string {
-  const boundedPrefix = prefix
-    .replaceAll(/[^a-zA-Z0-9_-]+/g, "-")
-    .replaceAll(/^-+|-+$/g, "")
+  const boundedPrefix = trimHyphens(prefix.replaceAll(/[^a-zA-Z0-9_-]+/g, "-"))
     .slice(0, 6) || "verify";
   const boundedProcessId = Math.max(0, Math.trunc(processId)).toString(36).slice(-6);
   const boundedNonce = nonce.replaceAll(/[^a-zA-Z0-9]+/g, "").slice(0, 6) || "run";
