@@ -231,7 +231,14 @@ export async function authorizeRelease(environment: ReleaseEnvironment = process
     if (!tagged.equals(current)) throw new Error(`Current release authority changed at ${path}.`);
   }
   const tagRef = record(record(await request(`/repos/${repository}/git/ref/tags/${tag}`), "Version ref").object, "Version object");
-  if (tagRef.type !== "commit" || tagRef.sha !== sourceSha) throw new Error("Protected lightweight release tag moved.");
+  let taggedSource = tagRef;
+  if (tagRef.type === "tag") {
+    if (typeof tagRef.sha !== "string" || !sha.test(tagRef.sha)) throw new Error("Protected release tag object is invalid.");
+    const tagObject = record(await request(`/repos/${repository}/git/tags/${tagRef.sha}`), "Version tag object");
+    if (tagObject.tag !== tag) throw new Error("Protected release tag name changed.");
+    taggedSource = record(tagObject.object, "Version tag target");
+  }
+  if (taggedSource.type !== "commit" || taggedSource.sha !== sourceSha) throw new Error("Protected release tag target moved.");
   return main;
 }
 export function admitVerifiedProvenance(value: unknown, manifest: ReleaseManifest, expectedSubjects: ReadonlyMap<string, string>): void {
@@ -586,7 +593,14 @@ export async function verifyMirror(directory: string, version: string, expectedW
   verifyRemoteBytes(existing, handoff.files);
   await verifyCanonicalRun(manifest);
   const ref = record(record(await request(`/repos/${repository}/git/ref/tags/${manifest.tag}`), "Mirror tag").object, "Mirror tag object");
-  if (ref.type !== "commit" || ref.sha !== manifest.sourceSha) throw new Error("Canonical lightweight tag moved.");
+  let taggedSource = ref;
+  if (ref.type === "tag") {
+    if (typeof ref.sha !== "string" || !sha.test(ref.sha)) throw new Error("Canonical release tag object is invalid.");
+    const tagObject = record(await request(`/repos/${repository}/git/tags/${ref.sha}`), "Mirror tag object");
+    if (tagObject.tag !== manifest.tag) throw new Error("Canonical release tag name changed.");
+    taggedSource = record(tagObject.object, "Mirror tag target");
+  }
+  if (taggedSource.type !== "commit" || taggedSource.sha !== manifest.sourceSha) throw new Error("Canonical release tag target moved.");
   admitMirrorAuthority(manifest, expectedWorkflow, process.env,
     await request(`/repos/${repository}/git/ref/heads/main`), await request(`/repos/${repository}/branches/main`),
     await request(`/repos/${repository}/compare/${manifest.sourceSha}...${expectedWorkflow}`),

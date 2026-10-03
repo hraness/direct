@@ -81,7 +81,6 @@ jobs:
           [[ "$workflow_sha" == "$(git rev-parse refs/remotes/origin/main)" ]]
           release_ref="refs/direct-npm-publish-tags/$REQUESTED_TAG"
           git fetch --no-tags origin "refs/tags/$REQUESTED_TAG:$release_ref"
-          [[ "$(git cat-file -t "$release_ref")" == commit ]]
           source_sha="$(git rev-parse "$release_ref^{commit}")"
           git merge-base --is-ancestor "$source_sha" "$workflow_sha"
           canonical_directory="$RUNNER_TEMP/direct-canonical-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
@@ -557,8 +556,14 @@ jobs:
             || run.repository?.id !== 1306913032 || run.repository?.full_name !== 'hraness/direct' || run.repository?.private !== false) fail('Mirror run authority changed');
           const main = api('git/ref/heads/main').object;
           const version = api(`git/ref/tags/${tag}`).object;
+          let versionSha = version?.sha;
+          if (version?.type === 'tag') {
+            const tagObject = api(`git/tags/${version.sha}`).object;
+            if (tagObject?.type !== 'commit' || tagObject.sha === undefined) fail('Mirror tag target is invalid');
+            versionSha = tagObject.sha;
+          }
           if (main?.type !== 'commit' || main.sha !== e.EXPECTED_WORKFLOW_SHA
-            || version?.type !== 'commit' || version.sha !== e.EXPECTED_SOURCE_SHA) fail('Mirror source or current workflow moved');
+            || !['commit', 'tag'].includes(version?.type ?? '') || versionSha !== e.EXPECTED_SOURCE_SHA) fail('Mirror source or current workflow moved');
           const releaseId = Number(e.CANONICAL_RELEASE_ID), runId = Number(e.CANONICAL_RUN_ID), attempt = Number(e.CANONICAL_RUN_ATTEMPT);
           if (![releaseId, runId, attempt].every(positive)) fail('Invalid canonical provider identity');
           const release = api(`releases/${releaseId}`);
@@ -652,7 +657,7 @@ jobs:
                 exit 1
               fi
               fresh_main="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq '.object.sha')"
-              fresh_tag="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/tags/$release_tag" --jq '.object.sha')"
+              fresh_tag="$(git --git-dir="$current_repository" rev-parse "refs/tags/$release_tag^{commit}")"
               if [[ "$fresh_main" != "$EXPECTED_WORKFLOW_SHA" || "$fresh_tag" != "$EXPECTED_SOURCE_SHA" ]]; then
                 echo "::error::Release source changed immediately before npm publication"
                 exit 1

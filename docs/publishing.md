@@ -60,10 +60,11 @@ and authentication are independent of canonical GitHub publication.
    controls, current main, existing tags, and published versions before reserving
    a version. Public install examples remain on the last delivered version until
    the new assets are live.
-2. Create one lightweight `v<package.json version>` tag on the exact checked
-   commit and push only that tag. Do not use an annotated tag for this repository.
+2. Create one immutable `v<package.json version>` tag on the exact checked
+   commit and push only that tag. The protected tagger creates an annotated tag;
+   the release verifier resolves it to the exact commit before publication.
 3. Follow the single **Release** run. Its read-only verification job checks owner,
-   source ancestry, the lightweight tag, current helper closure, frozen install,
+   source ancestry, the immutable tag target, current helper closure, frozen install,
    the complete `bun run check`, generated cleanliness, strict package identity,
    and an isolated Bun/npm consumer installation. It packs the archive once.
 4. The checkout-free attestation job rebinds four SHA-256 outputs from verification

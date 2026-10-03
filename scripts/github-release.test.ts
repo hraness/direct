@@ -226,8 +226,8 @@ test("live admission rejects drift anywhere in the transitive release helper clo
     else if (path.endsWith("/git/ref/heads/main")) value = { object: { type: "commit", sha: current } };
     else if (path.endsWith("/branches/main")) value = { protected: true, commit: { sha: current } };
     else if (path.includes("/compare/")) value = { status: "ahead" };
-    else if (path.endsWith("/git/ref/tags/v0.7.21")) value = { object: { type: "commit", sha: m.sourceSha } };
-    else if (path.includes("/git/tags/")) value = { object: { type: "commit", sha: m.sourceSha } };
+    else if (path.endsWith("/git/ref/tags/v0.7.21")) value = { object: { type: "tag", sha: "c".repeat(40) } };
+    else if (path.endsWith(`/git/tags/${"c".repeat(40)}`)) value = { tag: "v0.7.21", object: { type: "commit", sha: m.sourceSha } };
     else if (path.includes("/contents/")) {
       const relative = required(path.split("/contents/")[1]);
       reads.add(relative);
@@ -384,7 +384,8 @@ globalThis.fetch = async input => {
   else if (p.endsWith('/actions/runs/123/attempts/1')) value = f.canonical;
   else if (p.endsWith('/actions/runs/456/attempts/1')) value = f.run;
   else if (p.endsWith('/jobs')) value = { jobs: f.jobs };
-  else if (p.includes('/git/ref/tags/')) value = { object: { type: 'commit', sha: f.release.target_commitish } };
+  else if (p.includes('/git/ref/tags/')) value = { object: { type: 'tag', sha: 'c'.repeat(40) } };
+  else if (p.includes('/git/tags/')) value = { tag: f.release.tag_name, object: { type: 'commit', sha: f.release.target_commitish } };
   else if (p.endsWith('/git/ref/heads/main')) value = { object: { type: 'commit', sha: f.current } };
   else if (p.endsWith('/branches/main')) value = { protected: true, commit: { sha: f.current } };
   else if (p.includes('/compare/')) value = { status: 'ahead' };
