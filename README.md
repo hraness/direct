@@ -347,6 +347,16 @@ for containment, selected no-overlap pairs, alignment, viewport clipping,
 minimum size, and two-sample stability. It does not inspect the DOM or compare
 every box pair.
 
+For high-volume semantic crawls, the tooling also exposes an opt-in
+`createLightpandaSemanticBrowser` lane. It starts a task-owned Lightpanda 1.0
+CDP server on loopback, requires an explicit pinned `executablePath`, and
+rejects visual, layout, media, download, and multi-target commands. The CDP
+route cannot use agent-browser's `--allowed-domains` containment, so limit it
+to task-owned or otherwise trusted routes and retain the product's URL and
+fetch-firewall checks. Keep Chromium as the authoritative backend for visual,
+layout, and contained evidence; Lightpanda is an additional DOM/text and
+simple-interaction check.
+
 ### Test an Effect workflow
 
 Install `effect@3.22.1` when you use `@hraness/direct/effect`. Existing entry

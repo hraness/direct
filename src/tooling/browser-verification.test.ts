@@ -19,12 +19,14 @@ import {
   acquireVerificationServer,
   agentBrowserCloseProcessTimeoutMs,
   agentBrowserProcessTimeoutMs,
+  assertLightpandaSemanticCommand,
   bindDirectBrowserContractEvidence,
   bindDirectScenarioCatalog,
   boundedAgentBrowserSessionName,
   canAutomaticallyStartLocalServer,
   createDirectBrowserContractReader,
   createAgentBrowser,
+  createLightpandaSemanticBrowser,
   createArtifactRun,
   isolatedAgentBrowserEnvironment,
   normalizeRootHttpOrigin,
@@ -725,6 +727,60 @@ describe("agent-browser envelopes", () => {
       .toThrow("comma-free");
   });
 
+  test("guards the Lightpanda lane to semantic commands", () => {
+    expect(() => assertLightpandaSemanticCommand(["open", "https://example.test"]))
+      .not.toThrow();
+    expect(() => assertLightpandaSemanticCommand(["get", "text", "main"]))
+      .not.toThrow();
+    expect(() => assertLightpandaSemanticCommand(["snapshot", "-i"]))
+      .not.toThrow();
+    expect(() => assertLightpandaSemanticCommand(["screenshot", "/tmp/page.png"]))
+      .toThrow("use Chromium");
+    expect(() => assertLightpandaSemanticCommand(["get", "styles", "main"]))
+      .toThrow("CSS evidence");
+    expect(() => assertLightpandaSemanticCommand(["click", "a", "--new-tab"]))
+      .toThrow("multi-target");
+    expect(() => assertLightpandaSemanticCommand(["read", "https://outside.example"]))
+      .toThrow("active tab");
+    expect(() => assertLightpandaSemanticCommand(["batch", "open https://example.test"]))
+      .toThrow("visual");
+  });
+
+  test("selects Lightpanda explicitly and preserves the semantic guard", async () => {
+    const repositoryRoot = await temporaryDirectory();
+    const binaryDirectory = join(repositoryRoot, "node_modules/.bin");
+    await mkdir(binaryDirectory, { recursive: true });
+    await writeFile(join(binaryDirectory, "agent-browser"), `
+      const command = process.argv[3];
+      if (command === "screenshot") process.exit(2);
+      console.log(JSON.stringify({
+        data: { engine: process.env.AGENT_BROWSER_ENGINE, command },
+        error: null,
+        success: true,
+      }));
+    `);
+    expect(() => createLightpandaSemanticBrowser({
+      repositoryRoot,
+      sessionPrefix: "missing-path",
+    })).toThrow("explicit pinned executablePath");
+    const browser = createLightpandaSemanticBrowser({
+      defaultTimeoutMs: 1_000,
+      executablePath: "/opt/lightpanda-1.0.0/bin/lightpanda",
+      manageProcess: false,
+      repositoryRoot,
+      sessionPrefix: "lightpanda",
+    });
+
+    await expect(browser.run(["open", "https://example.test"])).resolves.toEqual({
+      engine: "lightpanda",
+      command: "open",
+    });
+    await expect(browser.run(["screenshot", "/tmp/page.png"]))
+      .rejects.toThrow("use Chromium");
+    await expect(browser.evaluate("getComputedStyle(document.body)"))
+      .rejects.toThrow("visual, layout");
+  });
+
   test("removes inherited browser attachment and persistence state", () => {
     const environment = isolatedAgentBrowserEnvironment({
       configPath: "/repo/scripts/direct/agent-browser.verify.json",
@@ -788,6 +844,23 @@ describe("agent-browser envelopes", () => {
     expect(environment.AGENT_BROWSER_ARGS).toBe(
       "--force-high-contrast,--disable-extensions",
     );
+  });
+
+  test("sets the Lightpanda engine only when explicitly requested", () => {
+    const environment = isolatedAgentBrowserEnvironment({
+      configPath: "/repo/scripts/direct/agent-browser.verify.json",
+      defaultTimeoutMs: 35_000,
+      engine: "lightpanda",
+      executablePath: "/opt/lightpanda-1.0.0/bin/lightpanda",
+      inheritedEnvironment: {
+        AGENT_BROWSER_ENGINE: "chrome",
+      },
+      session: "lightpanda-semantic",
+    });
+
+    expect(environment.AGENT_BROWSER_ENGINE).toBe("lightpanda");
+    expect(environment.AGENT_BROWSER_EXECUTABLE_PATH)
+      .toBe("/opt/lightpanda-1.0.0/bin/lightpanda");
   });
 });
 
