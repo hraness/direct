@@ -112,7 +112,6 @@ jobs:
           set -euo pipefail
           package_version="$(node -p 'require("./package.json").version')"
           [[ "$GITHUB_REF_NAME" == "v$package_version" ]]
-          [[ "$(git cat-file -t "refs/direct-release-tags/$GITHUB_REF_NAME")" == commit ]]
           [[ "$(git rev-parse "refs/direct-release-tags/$GITHUB_REF_NAME^{commit}")" == "$GITHUB_SHA" ]]
           git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
       - run: npm install --global --ignore-scripts npm@11.19.0 --registry=https://registry.npmjs.org
