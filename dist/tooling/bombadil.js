@@ -1035,6 +1035,31 @@ var DEFAULT_REUSE_PROBE_INTERVAL_MS = 250;
 var DEFAULT_STOP_TIMEOUT_MS = 3000;
 var MAX_RENDERED_ERROR_LENGTH = 4096;
 var MAX_ERROR_CAUSE_DEPTH = 8;
+var LIGHTPANDA_SEMANTIC_COMMANDS = new Set([
+  "back",
+  "check",
+  "click",
+  "dblclick",
+  "eval",
+  "fill",
+  "find",
+  "focus",
+  "forward",
+  "get",
+  "hover",
+  "is",
+  "keyboard",
+  "open",
+  "press",
+  "pushstate",
+  "read",
+  "reload",
+  "select",
+  "snapshot",
+  "type",
+  "uncheck",
+  "wait"
+]);
 class VerificationServerOutputTimeoutError extends Error {
   outputSnapshot;
   outputSnapshotFailure;

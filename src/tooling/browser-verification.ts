@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { access, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { dirname, isAbsolute, join } from "node:path";
 
 import {
@@ -20,6 +21,82 @@ const DEFAULT_REUSE_PROBE_INTERVAL_MS = 250;
 const DEFAULT_STOP_TIMEOUT_MS = 3_000;
 const MAX_RENDERED_ERROR_LENGTH = 4_096;
 const MAX_ERROR_CAUSE_DEPTH = 8;
+
+const LIGHTPANDA_SEMANTIC_COMMANDS = new Set([
+  "back",
+  "check",
+  "click",
+  "dblclick",
+  "eval",
+  "fill",
+  "find",
+  "focus",
+  "forward",
+  "get",
+  "hover",
+  "is",
+  "keyboard",
+  "open",
+  "press",
+  "pushstate",
+  "read",
+  "reload",
+  "select",
+  "snapshot",
+  "type",
+  "uncheck",
+  "wait",
+]);
+const LIGHTPANDA_FORBIDDEN_EXPRESSION = /(?:getComputedStyle|(?:get|set)BoundingClientRect|(?:offset|client)(?:Width|Height|Top|Left)|inner(?:Width|Height)|matchMedia|(?:HTML)?Canvas|WebGL|WebGPU|toDataURL|natural(?:Width|Height)|document\.fonts|@page|\b(?:screenshot|pdf|download)\b)/i;
+
+/**
+ * Browser backends supported by the optional host tooling.
+ *
+ * Chromium remains the default and the authoritative backend for visual,
+ * layout, media, and geometry evidence. Lightpanda is intentionally exposed
+ * as an explicit opt-in for semantic checks and route crawls.
+ */
+export type AgentBrowserEngine = "chrome" | "lightpanda";
+
+/**
+ * Rejects browser commands that would claim visual, layout, media, or
+ * download evidence from Lightpanda. The command-level boundary is
+ * deliberately conservative; callers can still use `evaluate` for semantic
+ * assertions, but must keep CSS/layout assertions on Chromium.
+ */
+export function assertLightpandaSemanticCommand(
+  arguments_: readonly string[],
+): void {
+  const command = arguments_[0];
+  if (command === undefined || !LIGHTPANDA_SEMANTIC_COMMANDS.has(command)) {
+    throw new Error(
+      `Lightpanda semantic verification does not support ${JSON.stringify(command ?? "<empty>")}; use Chromium for visual, layout, media, download, or multi-target evidence`,
+    );
+  }
+  if (arguments_.includes("--new-tab")) {
+    throw new Error(
+      "Lightpanda semantic verification does not support multi-target commands; use Chromium for multi-tab evidence",
+    );
+  }
+  if (command === "read" && arguments_.slice(1).some((argument) => !argument.startsWith("-"))) {
+    throw new Error(
+      "Lightpanda semantic verification reads the active tab only; use an allowlisted open command for navigation",
+    );
+  }
+  if (command === "get" && ["box", "styles"].includes(arguments_[1] ?? "")) {
+    throw new Error(
+      "Lightpanda semantic verification does not support box or styles reads; use Chromium for layout and CSS evidence",
+    );
+  }
+}
+
+function assertLightpandaSemanticExpression(expression: string): void {
+  if (LIGHTPANDA_FORBIDDEN_EXPRESSION.test(expression)) {
+    throw new Error(
+      "Lightpanda semantic verification does not support visual, layout, media, or download expressions; use Chromium for that evidence",
+    );
+  }
+}
 
 export type BrowserVerificationArguments =
   | { readonly kind: "help" }
@@ -317,8 +394,11 @@ export function serializeAgentBrowserLaunchArguments(
 export function isolatedAgentBrowserEnvironment(options: {
   readonly configPath: string;
   readonly defaultTimeoutMs: number;
+  readonly cdpUrl?: string;
+  readonly executablePath?: string;
   readonly idleTimeoutMs?: number;
   readonly inheritedEnvironment: Readonly<Record<string, string | undefined>>;
+  readonly engine?: AgentBrowserEngine;
   readonly launchArguments?: readonly string[];
   readonly session: string;
 }): Record<string, string | undefined> {
@@ -339,6 +419,11 @@ export function isolatedAgentBrowserEnvironment(options: {
     AGENT_BROWSER_NAMESPACE: options.session,
     AGENT_BROWSER_RESTORE_SAVE: "never",
     AGENT_BROWSER_SESSION: options.session,
+    ...(options.cdpUrl === undefined ? {} : { AGENT_BROWSER_CDP: options.cdpUrl }),
+    ...(options.engine === undefined ? {} : { AGENT_BROWSER_ENGINE: options.engine }),
+    ...(options.executablePath === undefined
+      ? {}
+      : { AGENT_BROWSER_EXECUTABLE_PATH: options.executablePath }),
   };
 }
 
@@ -657,12 +742,21 @@ function validateOwnedBrowserCommand(arguments_: readonly string[], nested = fal
 }
 
 export function createAgentBrowser(options: {
+  readonly cdpUrl?: string;
+  readonly engine?: AgentBrowserEngine;
+  readonly executablePath?: string;
   readonly repositoryRoot: string;
   readonly sessionPrefix: string;
   readonly defaultTimeoutMs?: number;
   readonly idleTimeoutMs?: number;
   readonly launchArguments?: readonly string[];
 }): AgentBrowser {
+  if (options.engine !== undefined && options.engine !== "chrome" && options.engine !== "lightpanda") {
+    throw new Error(`Unsupported agent-browser engine: ${JSON.stringify(options.engine)}`);
+  }
+  if (options.engine === "lightpanda" && options.executablePath === undefined) {
+    throw new Error("Lightpanda agent-browser requires an explicit executablePath");
+  }
   const binary = join(options.repositoryRoot, "node_modules/.bin/agent-browser");
   const createEnvironment = () => {
     const session = boundedAgentBrowserSessionName(
@@ -676,6 +770,11 @@ export function createAgentBrowser(options: {
       ...(options.idleTimeoutMs === undefined
         ? {}
         : { idleTimeoutMs: options.idleTimeoutMs }),
+      ...(options.cdpUrl === undefined ? {} : { cdpUrl: options.cdpUrl }),
+      ...(options.engine === undefined ? {} : { engine: options.engine }),
+      ...(options.executablePath === undefined
+        ? {}
+        : { executablePath: options.executablePath }),
       inheritedEnvironment: process.env,
       ...(options.launchArguments === undefined
         ? {}
@@ -689,7 +788,9 @@ export function createAgentBrowser(options: {
 
   async function run(arguments_: readonly string[]): Promise<unknown> {
     validateOwnedBrowserCommand(arguments_);
-    executable ??= managedAgentBrowserExecutable(join(options.repositoryRoot, "scripts/direct/agent-browser.verify.json"));
+    executable ??= options.engine === "lightpanda"
+      ? Promise.resolve(options.executablePath as string)
+      : managedAgentBrowserExecutable(join(options.repositoryRoot, "scripts/direct/agent-browser.verify.json"));
     environment.AGENT_BROWSER_EXECUTABLE_PATH = await executable;
     used = true;
     const defaultTimeoutMs = options.defaultTimeoutMs ?? 35_000;
@@ -787,6 +888,189 @@ export function createAgentBrowser(options: {
   }
 
   return { close, evaluate, readBodyText, restart, run };
+}
+
+type LightpandaSemanticBrowserOptions = Omit<
+  Parameters<typeof createAgentBrowser>[0],
+  "cdpUrl" | "engine"
+> & {
+  /**
+   * Keep this false only for compatibility experiments with an agent-browser
+   * build that owns its Lightpanda process. The default owns a pinned
+   * Lightpanda server so 1.0's CDP target lifecycle is explicit and bounded.
+   */
+  readonly manageProcess?: boolean;
+};
+
+async function freeLoopbackPort(): Promise<number> {
+  const probe = createServer();
+  await new Promise<void>((resolve, reject) => {
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = probe.address();
+  if (address === null || typeof address === "string") {
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    throw new Error("could not allocate a Lightpanda CDP port");
+  }
+  const port = address.port;
+  await new Promise<void>((resolve, reject) => {
+    probe.close((error) => error === undefined ? resolve() : reject(error));
+  });
+  return port;
+}
+
+async function startLightpandaServer(options: {
+  readonly executablePath: string;
+  readonly repositoryRoot: string;
+  readonly startupTimeoutMs: number;
+}): Promise<{ readonly cdpUrl: string; readonly server: ManagedVerificationServer }> {
+  if (!isAbsolute(options.executablePath) || !(await Bun.file(options.executablePath).exists())) {
+    throw new Error(`Lightpanda executable does not exist at an absolute pinned path: ${options.executablePath}`);
+  }
+  const port = await freeLoopbackPort();
+  const cdpUrl = `http://127.0.0.1:${String(port)}`;
+  const server = spawnVerificationServer({
+    command: [
+      options.executablePath,
+      "serve",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(port),
+      "--disable-metrics",
+      "--load-resources",
+      "stylesheet",
+      "--load-resources",
+      "iframe",
+      "--load-resources",
+      "worker",
+    ],
+    cwd: options.repositoryRoot,
+    detachedProcessGroup: true,
+  });
+  const timeoutMs = Math.max(5_000, Math.min(options.startupTimeoutMs, 15_000));
+  const deadline = Date.now() + timeoutMs;
+  let ready = false;
+  while (Date.now() < deadline) {
+    if (server.exitCode() !== null) break;
+    try {
+      const response = await fetch(`${cdpUrl}/json/version`, {
+        signal: AbortSignal.timeout(DEFAULT_PROBE_TIMEOUT_MS),
+      });
+      await response.body?.cancel();
+      if (response.ok) {
+        ready = true;
+        break;
+      }
+    } catch {
+      // The server is still binding its loopback CDP endpoint.
+    }
+    await Bun.sleep(50);
+  }
+  if (!ready) {
+    const output = await stopVerificationServerWithOutput(server);
+    throw new Error(
+      `Lightpanda CDP server did not become ready within ${String(timeoutMs)}ms${output === "" ? "" : `: ${output}`}`,
+    );
+  }
+  return { cdpUrl, server };
+}
+
+/**
+ * Creates the guarded Lightpanda lane for DOM, text, metadata, and simple
+ * JavaScript interaction checks. Commands outside that semantic subset fail
+ * before they reach the browser, so a caller cannot accidentally treat a
+ * screenshot, layout, media, download, or multi-target operation as proof.
+ */
+export function createLightpandaSemanticBrowser(
+  options: LightpandaSemanticBrowserOptions,
+): AgentBrowser {
+  if (options.executablePath === undefined || options.executablePath.length === 0) {
+    throw new Error(
+      "Lightpanda semantic verification requires an explicit pinned executablePath",
+    );
+  }
+  const executablePath = options.executablePath;
+  const manageProcess = options.manageProcess ?? true;
+  if (!manageProcess) {
+    const browser = createAgentBrowser({ ...options, engine: "lightpanda" });
+    return {
+      close: () => browser.close(),
+      evaluate: async (expression) => {
+        assertLightpandaSemanticExpression(expression);
+        return browser.evaluate(expression);
+      },
+      readBodyText: () => browser.readBodyText(),
+      restart: () => browser.restart(),
+      run: async (arguments_) => {
+        assertLightpandaSemanticCommand(arguments_);
+        return browser.run(arguments_);
+      },
+    };
+  }
+
+  let browserPromise: Promise<AgentBrowser> | undefined;
+  let server: ManagedVerificationServer | undefined;
+  async function browser(): Promise<AgentBrowser> {
+    if (browserPromise !== undefined) return browserPromise;
+    browserPromise = (async () => {
+      const started = await startLightpandaServer({
+        executablePath,
+        repositoryRoot: options.repositoryRoot,
+        startupTimeoutMs: options.defaultTimeoutMs ?? 35_000,
+      });
+      server = started.server;
+      return createAgentBrowser({
+        ...options,
+        cdpUrl: started.cdpUrl,
+        engine: "lightpanda",
+      });
+    })().catch(async (error) => {
+      browserPromise = undefined;
+      if (server !== undefined) {
+        await stopVerificationServer(server).catch(() => {});
+        server = undefined;
+      }
+      throw error;
+    });
+    return browserPromise;
+  }
+  async function closeOwnedBrowser(): Promise<void> {
+    let failure: unknown;
+    if (browserPromise !== undefined) {
+      try {
+        await (await browserPromise).close();
+      } catch (error) {
+        failure = error;
+      }
+    }
+    browserPromise = undefined;
+    if (server !== undefined) {
+      try {
+        await stopVerificationServer(server);
+      } catch (error) {
+        failure ??= error;
+      }
+      server = undefined;
+    }
+    if (failure !== undefined) throw failure;
+  }
+  return {
+    close: closeOwnedBrowser,
+    evaluate: async (expression) => {
+      assertLightpandaSemanticExpression(expression);
+      return (await browser()).evaluate(expression);
+    },
+    readBodyText: async () => (await browser()).readBodyText(),
+    restart: async () => {
+      await closeOwnedBrowser();
+    },
+    run: async (arguments_) => {
+      assertLightpandaSemanticCommand(arguments_);
+      return (await browser()).run(arguments_);
+    },
+  };
 }
 
 function verificationProcessGroupExists(processId: number): boolean {

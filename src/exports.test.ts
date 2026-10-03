@@ -77,6 +77,8 @@ describe("public package exports", () => {
       "summarizeDirectBombadilTrace",
     ]);
     expect(typeof browserVerification.createAgentBrowser).toBe("function");
+    expect(typeof browserVerification.createLightpandaSemanticBrowser).toBe("function");
+    expect(typeof browserVerification.assertLightpandaSemanticCommand).toBe("function");
     expect(typeof browserVerification.createDirectBrowserContractReader).toBe("function");
     expect(browserVerification.DIRECT_NAMED_LAYOUT_SAMPLE_SCHEMA).toBe(
       "direct.named-layout-sample/v1",

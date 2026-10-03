@@ -139,6 +139,43 @@ absence, and a snapshot never completes output draining or authorizes a
 successful verification result. Retain the original failed receipt and collect
 independent process and descriptor evidence when diagnosing a timeout.
 
+### Optional Lightpanda semantic lane
+
+The same helper can create an explicit Lightpanda 1.0 semantic lane:
+
+```ts
+import { createLightpandaSemanticBrowser } from
+  "@hraness/direct/tooling/browser-verification";
+
+const browser = createLightpandaSemanticBrowser({
+  executablePath: process.env.LIGHTPANDA_PATH,
+  repositoryRoot,
+  sessionPrefix: "direct-lightpanda",
+  defaultTimeoutMs: 35_000,
+});
+```
+
+The helper starts a task-owned Lightpanda `serve` process with an explicit
+loopback CDP port, enables stylesheet, iframe, and worker loading, and then
+connects agent-browser to that process after clearing inherited browser state.
+It requires the pinned executable path so a caller cannot silently pick up an
+unrelated binary from `PATH`. Keep the Lightpanda binary pinned and
+provisioned separately (the portfolio pilot used the signed 1.0.0 release),
+and record its version and checksum with each run. The CDP route cannot accept
+agent-browser's `--allowed-domains` containment flag, so use this lane only
+with task-owned or otherwise trusted routes and keep the product's own
+application-fetch firewall and URL policy in place; it is not a replacement
+for Direct's canonical contained Chromium run.
+
+`createLightpandaSemanticBrowser` rejects screenshots, PDFs, downloads, CSS or
+box reads, multi-target commands, and other visual or layout operations before
+they reach agent-browser. Use it for DOM/text, metadata, links, route crawls,
+and simple JavaScript interactions only. Keep Chromium authoritative for
+semantic plus visual evidence from one context, responsive or computed-style
+assertions, media, geometry, authentication, service workers, downloads, and
+visual regression. The Lightpanda lane is an additional check and must never
+silently replace the canonical Chromium run.
+
 ### Isolate and run the session
 
 Set `DIRECT_BROWSER_EXECUTABLE` to the absolute path of your provisioned Chrome
