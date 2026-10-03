@@ -377,7 +377,7 @@ import { isUtf8ByteLengthAtMost } from "./utf8-byte-boundary.js";
       readonly version?: unknown;
     };
     expect(manifest).toEqual(expect.objectContaining({
-      version: "0.7.26",
+      version: "0.7.27",
       description: "Direct gives browser agents repeatable app states that open by URL, with your real interface running on fixture data.",
       keywords: [
         "frontend-development",
