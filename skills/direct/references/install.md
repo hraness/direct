@@ -18,7 +18,7 @@ global `direct` CLI.
 
 ## Add the library
 
-For the new semantic browser factory in `@hraness/direct@0.7.28`, first verify
+For the new semantic browser factory in `@hraness/direct@0.7.29`, first verify
 that version's immutable archive is available. Source alone does not establish
 publication; otherwise keep the last verified install below.
 
