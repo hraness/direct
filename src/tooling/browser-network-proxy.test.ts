@@ -51,6 +51,23 @@ describe("Direct browser network containment", () => {
     } finally { await proxy.close(); await fixture.stop(true); }
   });
 
+  test("routes path and Host input only through the approved authority", async () => {
+    let leaked = 0;
+    const foreign = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { leaked += 1; return new Response("must-not-read"); } });
+    const source = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) { return Response.json({ path: new URL(request.url).pathname, host: request.headers.get("host") }); } });
+    const origin = `http://127.0.0.1:${source.port}`;
+    const proxy = await startVerificationBrowserProxy([origin], 2_000);
+    try {
+      const path = `//127.0.0.1:${foreign.port}/private`;
+      const direct = await (await fetch(origin + path)).json();
+      const response = await fetch(origin + path, { proxy: proxy.url, headers: { host: `127.0.0.1:${foreign.port}` } });
+      expect(await response.json()).toEqual(direct);
+      expect(direct).toEqual({ path: path.replace(/^\/\//, "/"), host: `127.0.0.1:${source.port}` });
+      expect(leaked).toBe(0);
+      expect(() => proxy.assertHealthy()).not.toThrow();
+    } finally { await proxy.close(); await source.stop(true); await foreign.stop(true); }
+  });
+
   test("rejects redirects to foreign origins before forwarding", async () => {
     let leaked = 0;
     const foreign = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { leaked += 1; return new Response("must-not-read"); } });

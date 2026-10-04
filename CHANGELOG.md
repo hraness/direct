@@ -2,6 +2,13 @@
 
 Each section below is the release page text for one Direct version: a summary, then the changes. The release workflow copies the section whose heading matches the tagged version and adds the install and verification steps itself.
 
+## 0.7.29 - 2026-10-04
+
+The semantic browser proxy now chooses outgoing network destinations only from the approved origins configured by its owner.
+
+- Read the outgoing HTTP(S) and CONNECT host, port, and protocol from the approved origin, not the browser request; forward only the validated request path and query.
+- Verify that a double-slash path and a conflicting Host header cannot change the destination. Keep foreign-origin denials, HTTPS handling, and cleanup unchanged.
+
 ## 0.7.28 - 2026-10-04
 
 Direct can prefer a provisioned Lightpanda 1.0.0 for fresh semantic checks, while Chromium remains the browser for rendering and compatibility checks.
