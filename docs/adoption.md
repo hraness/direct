@@ -3,9 +3,9 @@
 Add Direct after identifying the product behavior and external boundary under review. Do not begin by designing fixtures around a provider SDK.
 
 The repository carries one `$direct` Agent Skill under `skills/direct`.
-Install it with `npx skills add hraness/direct#v0.7.24` or
-`bunx skills add hraness/direct#v0.7.24`, or copy that directory into the runner's
-discovery location. Invoke `$direct` for installation, adoption, and
+Install it with `npx skills add hraness/direct#v0.7.27` or
+`bunx skills add hraness/direct#v0.7.27`, or copy that directory into the runner's
+discovery location. Invoke `/direct` in Claude Code or `$direct` in Codex for installation, adoption, and
 verification work. Skill installation is independent from library package
 installation and does not activate Direct in a product.
 

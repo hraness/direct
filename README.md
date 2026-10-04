@@ -53,7 +53,7 @@ describes the ideas behind the studio's projects.
 
 ## Install
 
-Install the [v0.7.24 release](https://github.com/hraness/direct/releases/tag/v0.7.24)
+Install the [v0.7.27 release](https://github.com/hraness/direct/releases/tag/v0.7.27)
 from GitHub. Releases there are immutable, and npm mirrors the same archive.
 The [publishing guide](docs/publishing.md#install-and-update-from-github)
 explains how to verify the archive and its provenance.
@@ -61,12 +61,12 @@ explains how to verify the archive and its provenance.
 Pin Direct as a development dependency:
 
 ```sh
-bun add --dev https://github.com/hraness/direct/releases/download/v0.7.24/hraness-direct-0.7.24.tgz
+bun add --dev https://github.com/hraness/direct/releases/download/v0.7.27/hraness-direct-0.7.27.tgz
 # or
-npm install --save-dev https://github.com/hraness/direct/releases/download/v0.7.24/hraness-direct-0.7.24.tgz
+npm install --save-dev https://github.com/hraness/direct/releases/download/v0.7.27/hraness-direct-0.7.27.tgz
 ```
 
-The same archive is on npm as `@hraness/direct@0.7.24`. Keep Direct in
+The same archive is on npm as `@hraness/direct@0.7.27`. Keep Direct in
 `devDependencies`, and don't import Direct, its fixture worlds, or its
 workbench from a production entry.
 
@@ -77,7 +77,7 @@ composition. It requires Git, Bun 1.3.14, and Node 24, then downloads the
 source and its development dependencies:
 
 ```sh
-git clone --branch v0.7.24 --depth 1 https://github.com/hraness/direct.git
+git clone --branch v0.7.27 --depth 1 https://github.com/hraness/direct.git
 cd direct
 bun install --frozen-lockfile --ignore-scripts
 bun run example:direct
@@ -151,22 +151,24 @@ browser local storage did not. The example tracks local storage as a separate
 Install Direct's single bundled skill from the public repository:
 
 ```sh
-npx skills add hraness/direct#v0.7.24
+npx skills add hraness/direct#v0.7.27
 # or
-bunx skills add hraness/direct#v0.7.24
+bunx skills add hraness/direct#v0.7.27
 ```
 
-Invoke the skill as `$direct`. It guides installation, adoption, and
+Invoke the skill as `/direct` in [Claude Code](https://code.claude.com/docs/en/skills)
+or `$direct` in Codex. It guides installation, adoption, and
 verification, including a check that production builds exclude Direct. Restart
 or reload an agent runner that does not discover newly installed skills during
 the current session.
 
 ### Tell your coding agent to install it
 
-Copy this prompt into Codex, Claude Code, or another coding agent:
+Copy this prompt into Codex or another coding agent. In Claude Code, replace
+`$direct` with `/direct`:
 
 ```text
-Use $direct to install hraness/direct from the immutable v0.7.24 GitHub release
+Use $direct to install hraness/direct from the immutable v0.7.27 GitHub release
 archive. Follow the repository README, add
 `@hraness/direct` to devDependencies only, and verify that the production
 dependency graph excludes Direct. Do not add a fixture composition until I
@@ -184,7 +186,7 @@ Pin the release archive in your project's manifest:
 ```json
 {
   "devDependencies": {
-    "@hraness/direct": "https://github.com/hraness/direct/releases/download/v0.7.24/hraness-direct-0.7.24.tgz"
+    "@hraness/direct": "https://github.com/hraness/direct/releases/download/v0.7.27/hraness-direct-0.7.27.tgz"
   }
 }
 ```

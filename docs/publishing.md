@@ -125,7 +125,7 @@ their original body, and their notes render from the changelog on current
 After an asset is published and verified, install its exact stable version:
 
 ```sh
-version=0.7.24
+version=0.7.27
 bun add --dev "https://github.com/hraness/direct/releases/download/v$version/hraness-direct-$version.tgz"
 ```
 
