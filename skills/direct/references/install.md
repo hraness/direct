@@ -22,19 +22,19 @@ For the new semantic browser factory in `@hraness/direct@0.7.29`, first verify
 that version's immutable archive is available. Source alone does not establish
 publication; otherwise keep the last verified install below.
 
-For a new installation, verify that the immutable v0.7.27 GitHub release and
+For a new installation, verify that the immutable v0.7.29 GitHub release and
 its archive are published before using this version. Source candidates do not
 establish public availability. Check the release manifest, checksums, and
 provenance using the tagged publishing guide, then install the exact archive:
 
 ```sh
-bun add --dev https://github.com/hraness/direct/releases/download/v0.7.27/hraness-direct-0.7.27.tgz
+bun add --dev https://github.com/hraness/direct/releases/download/v0.7.29/hraness-direct-0.7.29.tgz
 # or, in an npm project
-npm install --save-dev https://github.com/hraness/direct/releases/download/v0.7.27/hraness-direct-0.7.27.tgz
+npm install --save-dev https://github.com/hraness/direct/releases/download/v0.7.29/hraness-direct-0.7.29.tgz
 ```
 
 The package keeps the name `@hraness/direct`. An independently verified npm
-mirror may instead use the immutable pin `@hraness/direct@0.7.27`. Use the
+mirror may instead use the immutable pin `@hraness/direct@0.7.29`. Use the
 consumer's existing package manager and lockfile. To upgrade, replace the
 exact archive version and run the consumer's type, installation, and emitted
 production-boundary checks; do not use a moving Latest URL.
@@ -43,8 +43,8 @@ If the task starts with skill installation rather than a loaded skill, install
 the single repository skill with either command:
 
 ```sh
-npx skills add hraness/direct#v0.7.27
-bunx skills add hraness/direct#v0.7.27
+npx skills add hraness/direct#v0.7.29
+bunx skills add hraness/direct#v0.7.29
 ```
 
 Restart or reload the agent runner if it does not discover newly installed
