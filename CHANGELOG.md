@@ -2,6 +2,14 @@
 
 Each section below is the release page text for one Direct version: a summary, then the changes. The release workflow copies the section whose heading matches the tagged version and adds the install and verification steps itself.
 
+## 0.7.28 - 2026-10-04
+
+Direct can prefer a provisioned Lightpanda 1.0.0 for fresh semantic checks, while Chromium remains the browser for rendering and compatibility checks.
+
+- Export `createVerificationBrowser` with explicit allowed origins and capability-based Chromium selection for visual checks and Chromium launch options.
+- Run Lightpanda through a filtering HTTP(S) proxy and private empty driver configuration; reject visibility, CSS, geometry, media, download, and multi-target requests.
+- Verify the executable and loopback CDP identity, finish owned browser and process cleanup, and reject further work after containment or cleanup failures. Never replay failed assertions or actions in another engine.
+
 ## 0.7.27 - 2026-10-03
 
 Direct now provides an opt-in Lightpanda 1.0 semantic browser lane for faster, lower-memory DOM verification while keeping provisioned Chromium authoritative for visual and layout evidence.

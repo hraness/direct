@@ -347,15 +347,17 @@ for containment, selected no-overlap pairs, alignment, viewport clipping,
 minimum size, and two-sample stability. It does not inspect the DOM or compare
 every box pair.
 
-For high-volume semantic crawls, the tooling also exposes an opt-in
-`createLightpandaSemanticBrowser` lane. It starts a task-owned Lightpanda 1.0
-CDP server on loopback, requires an explicit pinned `executablePath`, and
-rejects visual, layout, media, download, and multi-target commands. The CDP
-route cannot use agent-browser's `--allowed-domains` containment, so limit it
-to task-owned or otherwise trusted routes and retain the product's URL and
-fetch-firewall checks. Keep Chromium as the authoritative backend for visual,
-layout, and contained evidence; Lightpanda is an additional DOM/text and
-simple-interaction check.
+For fresh deterministic semantic checks, `createVerificationBrowser` prefers
+Lightpanda 1.0.0 when an explicit `lightpandaExecutablePath` and `allowedOrigins`
+are supplied. It owns the loopback CDP server and filtering proxy, ignores
+Chromium profile and header configuration, and rejects rendering and visibility
+checks. Set `purpose: "visual"` for screenshots, CSS, layout, geometry, and
+responsive checks; authentication, profiles, service workers, downloads, and
+multi-target tasks keep their Chromium workflow. No failed assertion or
+state-changing action is retried in another engine. Keep the product's URL and
+fetch-firewall checks: semantic fixture success is not visual or live-service
+evidence. See [verification](docs/verification.md#lightpanda-first-semantic-verification)
+for setup and cleanup.
 
 ### Test an Effect workflow
 

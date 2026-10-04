@@ -20,6 +20,9 @@ import {
   agentBrowserCloseProcessTimeoutMs,
   agentBrowserProcessTimeoutMs,
   assertLightpandaSemanticCommand,
+  assertVerificationLightpandaIdentity,
+  selectVerificationBrowserEngine,
+  createVerificationBrowser,
   bindDirectBrowserContractEvidence,
   bindDirectScenarioCatalog,
   boundedAgentBrowserSessionName,
@@ -538,6 +541,14 @@ describe("agent-browser envelopes", () => {
     expect(() => parseAgentBrowserEnvelope(JSON.stringify({ success: false, data: null, error: "closed" }))).toThrow("closed");
   });
 
+  test("rejects extra envelope fields and contradictory successful errors", () => {
+    assertProperty(fc.property(fc.string().filter(key => !["success", "data", "error"].includes(key)), key => {
+      expect(() => parseAgentBrowserEnvelope(JSON.stringify({ success: true, data: null, error: null, [key]: true }))).toThrow("invalid envelope");
+    }));
+    expect(() => parseAgentBrowserEnvelope(JSON.stringify({ success: true, data: {}, error: "unexpected" }))).toThrow("invalid envelope");
+    expect(() => parseAgentBrowserBatchEnvelope(JSON.stringify([{ command: ["get", "url"], success: true, result: {}, error: null, extra: true }]))).toThrow("invalid envelope");
+  });
+
   test("validates every batch result and preserves command order", () => {
     expect(parseAgentBrowserBatchEnvelope(JSON.stringify([
       { command: ["mouse", "move", "1", "2"], error: null, result: { moved: true }, success: true },
@@ -725,6 +736,112 @@ describe("agent-browser envelopes", () => {
       .toThrow("Chrome flags");
     expect(() => serializeAgentBrowserLaunchArguments(["--flag,also-flag"]))
       .toThrow("comma-free");
+  });
+
+  test("exports the semantic factory from the browser-verification entry", async () => {
+    const entry = await import("./browser-verification-entry.js");
+    expect(entry.createVerificationBrowser).toBe(createVerificationBrowser);
+    expect(entry.selectVerificationBrowserEngine).toBe(selectVerificationBrowserEngine);
+  });
+
+  test("defaults qualified semantic verification to Lightpanda and visual verification to Chrome", () => {
+    const options = { repositoryRoot: "/repo", sessionPrefix: "semantic", lightpandaExecutablePath: "/opt/lightpanda", allowedOrigins: ["http://127.0.0.1:3000"] };
+    expect(selectVerificationBrowserEngine(options)).toBe("lightpanda");
+    expect(createVerificationBrowser(options).engine).toBe("lightpanda");
+    for (const key of ["manageProcess", "cdpUrl", "engine", "executablePath", "unknown"]) expect(() => createVerificationBrowser({ ...options, [key]: "unexpected" })).toThrow("Unsupported verification");
+    expect(selectVerificationBrowserEngine({ ...options, purpose: "visual" })).toBe("chrome");
+    expect(selectVerificationBrowserEngine({ ...options, launchArguments: ["--force-high-contrast"] })).toBe("chrome");
+    expect(selectVerificationBrowserEngine({ repositoryRoot: "/repo", sessionPrefix: "missing" })).toBe("chrome");
+    expect(() => selectVerificationBrowserEngine({ ...options, allowedOrigins: [] })).toThrow("allowedOrigins");
+    expect(() => selectVerificationBrowserEngine({ ...options, lightpandaExecutablePath: "lightpanda" })).toThrow("absolute");
+    assertProperty(fc.property(fc.string().filter(value => value !== "semantic" && value !== "visual"), value => {
+      expect(() => selectVerificationBrowserEngine({ ...options, purpose: value as "semantic" })).toThrow("purpose");
+    }));
+  });
+
+  test("rejects a Chromium executable masquerading as Lightpanda before executing it", async () => {
+    const repositoryRoot = await temporaryDirectory();
+    const executable = join(repositoryRoot, "Google Chrome");
+    const alias = join(repositoryRoot, "lightpanda");
+    const marker = join(repositoryRoot, "executed");
+    await writeFile(executable, `#!/bin/sh\nprintf executed > ${JSON.stringify(marker)}\nprintf '1.0.0\\n'\n`, { mode: 0o700 });
+    await symlink(executable, alias);
+    const browser = createVerificationBrowser({ repositoryRoot, sessionPrefix: "no-chrome", lightpandaExecutablePath: alias, allowedOrigins: ["http://127.0.0.1:3000"] });
+    await expect(browser.run(["open", "http://127.0.0.1:3000"])).rejects.toThrow("Chromium executables");
+    expect(await Bun.file(marker).exists()).toBe(false);
+    await browser.close();
+  });
+
+  test("rejects visual eval aliases, visibility, and non-HTTP navigation before launch", async () => {
+    for (const expression of ["getComputedStyle(document.body)", "document.body.getClientRects()", "document.elementFromPoint(0,0)", "document.body.checkVisibility()", "window.visualViewport.width"]) {
+      expect(() => assertLightpandaSemanticCommand(["eval", expression])).toThrow("visual, layout");
+      expect(() => assertLightpandaSemanticCommand(["wait", "--fn", expression])).toThrow("visual, layout");
+    }
+    expect(() => assertLightpandaSemanticCommand(["eval", "document.title", "--extra"])).toThrow("one explicit");
+    expect(() => assertLightpandaSemanticCommand(["is", "visible", "button"])).toThrow("visibility");
+    for (const url of ["data:text/html,hello", "javascript:alert(1)", "blob:https://example.test/id", "file:///tmp/fixture", "https://fixture:token@example.test/"]) {
+      expect(() => assertLightpandaSemanticCommand(["open", url])).toThrow("HTTP(S)");
+    }
+    const browser = createVerificationBrowser({ repositoryRoot: "/absent", sessionPrefix: "origin", lightpandaExecutablePath: "/absent/lightpanda", allowedOrigins: ["http://127.0.0.1:3000"] });
+    await expect(browser.run(["open", "http://127.0.0.1:4000"])).rejects.toThrow("outside allowedOrigins");
+    await browser.close();
+  });
+
+  test.each(["clean", "close-failure", "late-denial"] as const)("isolates managed config and retains custody after %s", async scenario => {
+    const repositoryRoot = await temporaryDirectory();
+    const executable = join(repositoryRoot, "lightpanda");
+    const proxyPath = join(repositoryRoot, "proxy");
+    const pidPath = join(repositoryRoot, "pid");
+    const failedClose = join(repositoryRoot, "failed-close");
+    const origin = "http://example.test";
+    await mkdir(join(repositoryRoot, "node_modules/.bin"), { recursive: true });
+    await mkdir(join(repositoryRoot, "scripts/direct"), { recursive: true });
+    await writeFile(join(repositoryRoot, "scripts/direct/agent-browser.verify.json"), JSON.stringify({ headers: { authorization: "fixture-only" }, profile: "must-not-read", state: "must-not-read", proxy: "http://127.0.0.1:1", initScripts: ["must-not-run"] }));
+    await writeFile(executable, `#!${process.execPath}\nimport {writeFileSync} from 'node:fs';\nif(process.argv[2]==='version'){console.log('1.0.0');process.exit(0)}\nwriteFileSync(${JSON.stringify(pidPath)},String(process.pid));\nwriteFileSync(${JSON.stringify(proxyPath)},process.argv[process.argv.indexOf('--http-proxy')+1]);\nconst port=Number(process.argv[process.argv.indexOf('--port')+1]);\nconst server=Bun.serve({hostname:'127.0.0.1',port,fetch(){return Response.json({Browser:'Lightpanda/1.0','Lightpanda-Version':'1.0.0',webSocketDebuggerUrl:\`ws://127.0.0.1:\${port}/\`})}});\nprocess.on('SIGTERM',()=>{server.stop(true);process.exit(0)});\n`, { mode: 0o700 });
+    await writeFile(join(repositoryRoot, "node_modules/.bin/agent-browser"), `#!${process.execPath}\nimport {readFileSync,existsSync,writeFileSync} from 'node:fs';\nconst config=JSON.parse(readFileSync(process.env.AGENT_BROWSER_CONFIG,'utf8'));\nif(process.argv.includes('close')){\nif(${JSON.stringify(scenario)}==='late-denial'){const response=await fetch('http://127.0.0.1:9/denied',{proxy:readFileSync(${JSON.stringify(proxyPath)},'utf8')});await response.text()}\nif(${JSON.stringify(scenario)}==='close-failure'&&!existsSync(${JSON.stringify(failedClose)})){writeFileSync(${JSON.stringify(failedClose)},'once');console.log(JSON.stringify({success:false,data:null,error:'fixture close failure'}));process.exit(0)}\n}\nconsole.log(JSON.stringify({success:true,data:{url:${JSON.stringify(origin + "/")},config},error:null}));\n`, { mode: 0o700 });
+    const browser = createVerificationBrowser({ repositoryRoot, sessionPrefix: "custody", lightpandaExecutablePath: executable, allowedOrigins: [origin] });
+    try {
+      expect(await browser.run(["open", origin])).toEqual({ url: origin + "/", config: {} });
+      const pid = Number(await readFile(pidPath, "utf8"));
+      if (scenario === "clean") await browser.close();
+      else {
+        await expect(browser.close()).rejects.toThrow();
+        await expect(browser.run(["open", origin])).rejects.toThrow();
+        expect(Number(await readFile(pidPath, "utf8"))).toBe(pid);
+        await browser.close();
+      }
+      expect(() => process.kill(pid, 0)).toThrow();
+    } finally { await browser.close(); }
+  });
+
+  test("stops its task-owned Lightpanda server on normal parent exit", async () => {
+    const repositoryRoot = await temporaryDirectory();
+    const executable = join(repositoryRoot, "lightpanda");
+    const pidPath = join(repositoryRoot, "pid");
+    await mkdir(join(repositoryRoot, "node_modules/.bin"), { recursive: true });
+    await writeFile(executable, `#!${process.execPath}\nimport {writeFileSync} from 'node:fs';\nif(process.argv[2]==='version'){console.log('1.0.0');process.exit(0)}\nwriteFileSync(${JSON.stringify(pidPath)},String(process.pid));\nconst port=Number(process.argv[process.argv.indexOf('--port')+1]);\nBun.serve({hostname:'127.0.0.1',port,fetch(){return Response.json({Browser:'Lightpanda/1.0','Lightpanda-Version':'1.0.0',webSocketDebuggerUrl:\`ws://127.0.0.1:\${port}/\`})}});\n`, { mode: 0o700 });
+    await writeFile(join(repositoryRoot, "node_modules/.bin/agent-browser"), `#!${process.execPath}\nconsole.log(JSON.stringify({success:true,data:{url:'about:blank'},error:null}));\n`, { mode: 0o700 });
+    const parent = join(repositoryRoot, "parent.ts");
+    await writeFile(parent, `import {createVerificationBrowser} from ${JSON.stringify(new URL("./browser-verification.ts", import.meta.url).href)};\nconst browser=createVerificationBrowser(${JSON.stringify({ repositoryRoot, sessionPrefix: "exit", lightpandaExecutablePath: executable, allowedOrigins: ["http://example.test"] })});\nawait browser.run(['open','about:blank']);\nprocess.exit(0);\n`);
+    let stopped = false;
+    try {
+      await runVerificationCommand({ command: [process.execPath, parent], cwd: repositoryRoot, label: "Fixture parent", timeoutMs: 4_000 });
+      await waitForMissingProcess(Number(await readFile(pidPath, "utf8")));
+      stopped = true;
+    } finally {
+      if (!stopped && await Bun.file(pidPath).exists()) {
+        try { process.kill(Number(await readFile(pidPath, "utf8")), "SIGKILL"); }
+        catch (error) { expect((error as NodeJS.ErrnoException).code).toBe("ESRCH"); }
+      }
+    }
+  });
+
+  test("requires the exact Lightpanda CDP version and loopback endpoint", () => {
+    const identity = { Browser: "Lightpanda/1.0", "Lightpanda-Version": "1.0.0", webSocketDebuggerUrl: "ws://127.0.0.1:9222/" };
+    expect(() => assertVerificationLightpandaIdentity(identity, 9222)).not.toThrow();
+    for (const value of [null, {}, { ...identity, Browser: "Chrome/145" }, { ...identity, "Lightpanda-Version": "0.9.0" }, { ...identity, webSocketDebuggerUrl: "ws://example.test:9222/" }]) {
+      expect(() => assertVerificationLightpandaIdentity(value, 9222)).toThrow("identity");
+    }
   });
 
   test("guards the Lightpanda lane to semantic commands", () => {

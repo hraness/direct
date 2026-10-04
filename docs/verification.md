@@ -137,11 +137,52 @@ command output and are not sanitized public receipts. A pending read does not
 identify a pipe holder or establish a runtime defect. EOF does not prove process
 absence, and a snapshot never completes output draining or authorizes a
 successful verification result. Retain the original failed receipt and collect
-independent process and descriptor evidence when diagnosing a timeout.
+independent process and descriptor evidence when diagnosing a timeout. Detached
+process groups are checked immediately before signaling, but numeric group IDs
+are not generation-bound handles; callers must preserve host ownership controls
+and cannot use this helper to recover an unrelated or stale holder.
 
-### Optional Lightpanda semantic lane
+### Lightpanda-first semantic verification
 
-The same helper can create an explicit Lightpanda 1.0 semantic lane:
+Use `createVerificationBrowser` for fresh deterministic semantic checks. When
+`lightpandaExecutablePath` is explicitly provisioned, the helper selects
+Lightpanda 1.0.0 and routes its HTTP(S) traffic through an owned proxy restricted
+to `allowedOrigins`. Denied requests fail verification rather than trigger a
+Chromium retry, including requests observed during shutdown. Navigation accepts
+only those HTTP(S) origins or inert `about:blank`; WebSockets, file, FTP, gopher,
+data, JavaScript, and blob URLs are blocked. The helper uses a private empty
+driver configuration rather than importing headers, profiles, scripts, or proxy
+settings from the Chromium configuration. It checks the executable version and
+exact loopback CDP identity, then closes the browser, Lightpanda process, and
+proxy. Cleanup failures prevent further work on that instance and retain its
+failed resources for another cleanup attempt. Normal process exit also stops
+its owned Lightpanda server; callers must still use `finally` and their host's
+browser ownership controls.
+
+```ts
+import { createVerificationBrowser } from
+  "@hraness/direct/tooling/browser-verification";
+
+const browser = createVerificationBrowser({
+  repositoryRoot,
+  sessionPrefix: "direct-semantic",
+  lightpandaExecutablePath: process.env.LIGHTPANDA_PATH,
+  allowedOrigins: [baseUrl],
+});
+```
+
+Set `purpose: "visual"` to select the provisioned Chromium configuration before
+running screenshots, CSS, layout, geometry, or responsive checks. Without a
+Lightpanda executable, or with explicit Chromium launch arguments, the factory
+also selects Chromium. It never replays a
+failed assertion or a state-changing command in a different engine. Authentication,
+profiles, service workers, downloads, and multi-target tasks still use the
+existing Chromium workflow. Keep a Chromium check for real-browser compatibility;
+fixture and semantic success is not visual evidence.
+
+### Explicit Lightpanda semantic lane
+
+The original helper can create an explicit Lightpanda 1.0 semantic lane:
 
 ```ts
 import { createLightpandaSemanticBrowser } from

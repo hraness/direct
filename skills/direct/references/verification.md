@@ -30,7 +30,15 @@ The manifest and browser runtime remain driver-neutral. Prefer the optional
 package-bound bridge reads, bounded agent-browser commands, server leases, and
 artifacts when they fit the repository. They invoke the consumer's local
 agent-browser installation; they do not bundle a driver, coordinate parallel
-work, supervise cleanup, or own product commands and evidence.
+work or own product commands and evidence. For fresh single-page semantic
+checks, use `createVerificationBrowser` with a provisioned Lightpanda 1.0.0
+path and explicit `allowedOrigins`; its Lightpanda instance owns browser,
+server, proxy, and private driver-config cleanup. Use `finally` for `close()`
+and treat shutdown denials or cleanup failures as failed verification. Choose
+`purpose: "visual"` before screenshots, CSS, visibility, layout, or geometry
+checks. Authentication, profiles, service workers, downloads, multi-target work,
+and real-browser compatibility remain Chromium workflows; semantic assertions
+and potentially completed actions are never replayed in another engine.
 
 For a visual or layout critique, separate macro review from micro gates. Review
 screenshots at the product's selected routes and viewports for hierarchy,

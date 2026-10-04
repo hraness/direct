@@ -2,9 +2,12 @@ import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
-import { access, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { createServer } from "node:net";
-import { dirname, isAbsolute, join } from "node:path";
+import { get } from "node:http";
+import { startVerificationBrowserProxy } from "./browser-network-proxy.js";
+import { basename, dirname, isAbsolute, join } from "node:path";
 
 import {
   captureVerificationOutput,
@@ -47,7 +50,7 @@ const LIGHTPANDA_SEMANTIC_COMMANDS = new Set([
   "uncheck",
   "wait",
 ]);
-const LIGHTPANDA_FORBIDDEN_EXPRESSION = /(?:getComputedStyle|(?:get|set)BoundingClientRect|(?:offset|client)(?:Width|Height|Top|Left)|inner(?:Width|Height)|matchMedia|(?:HTML)?Canvas|WebGL|WebGPU|toDataURL|natural(?:Width|Height)|document\.fonts|@page|\b(?:screenshot|pdf|download)\b)/i;
+const LIGHTPANDA_FORBIDDEN_EXPRESSION = /(?:getComputedStyle|computedStyleMap|(?:get|set)BoundingClientRect|getClientRects|getBoxQuads|(?:elements?|caretRange|caretPosition)FromPoint|checkVisibility|(?:offset|client|scroll)(?:Width|Height|Top|Left)|scroll[XY]|scroll(?:To|By|IntoView)|page[XY]Offset|window\s*\.\s*open|\bprint\s*\(|(?:inner|outer)(?:Width|Height)|visualViewport|(?:Intersection|Resize)Observer|matchMedia|(?:HTML)?Canvas|WebGL|WebGPU|toDataURL|natural(?:Width|Height)|document\.fonts|@page|\b(?:screenshot|pdf|download)\b)/i;
 
 /**
  * Browser backends supported by the optional host tooling.
@@ -83,11 +86,36 @@ export function assertLightpandaSemanticCommand(
       "Lightpanda semantic verification reads the active tab only; use an allowlisted open command for navigation",
     );
   }
+  if (command === "eval") {
+    if (arguments_.length !== 2 || !arguments_[1]) throw new Error("Lightpanda eval requires one explicit semantic expression");
+    assertLightpandaSemanticExpression(arguments_[1]);
+  }
+  if (command === "open") {
+    if (arguments_.length !== 2 || !arguments_[1]) throw new Error("Lightpanda open requires one explicit HTTP(S) URL");
+    assertLightpandaNavigation(arguments_[1]);
+  }
+  if (command === "wait") {
+    const index = arguments_.indexOf("--fn");
+    if (index >= 0) {
+      const expression = arguments_[index + 1];
+      if (!expression) throw new Error("Lightpanda wait requires an explicit semantic expression");
+      assertLightpandaSemanticExpression(expression);
+    }
+  }
+  if (command === "is" && arguments_[1] === "visible") throw new Error("Lightpanda cannot provide visibility evidence; use Chromium");
   if (command === "get" && ["box", "styles"].includes(arguments_[1] ?? "")) {
     throw new Error(
       "Lightpanda semantic verification does not support box or styles reads; use Chromium for layout and CSS evidence",
     );
   }
+}
+
+function assertLightpandaNavigation(value: string, origins?: readonly string[]): void {
+  if (value === "about:blank") return;
+  if (!URL.canParse(value) || [...value].some(character => character.charCodeAt(0) <= 0x20 || character.charCodeAt(0) === 0x7f)) throw new Error("Lightpanda requires an explicit HTTP(S) navigation URL");
+  const url = new URL(value);
+  if (!["http:", "https:"].includes(url.protocol) || url.username !== "" || url.password !== "") throw new Error("Lightpanda requires HTTP(S) navigation without credentials");
+  if (origins !== undefined && !origins.includes(url.origin)) throw new Error("Lightpanda navigation is outside allowedOrigins");
 }
 
 function assertLightpandaSemanticExpression(expression: string): void {
@@ -618,6 +646,8 @@ export function parseAgentBrowserEnvelope(source: string): unknown {
     || typeof Reflect.get(input, "success") !== "boolean"
     || !Object.hasOwn(input, "data")
     || !Object.hasOwn(input, "error")
+    || Object.keys(input).some(key => !["success", "data", "error"].includes(key))
+    || (Reflect.get(input, "success") === true && Reflect.get(input, "error") !== null)
   ) {
     throw new Error("agent-browser returned an invalid envelope");
   }
@@ -644,6 +674,8 @@ export function parseAgentBrowserBatchEnvelope(source: string): readonly unknown
       || !Object.hasOwn(entry, "success")
       || !Object.hasOwn(entry, "result")
       || !Object.hasOwn(entry, "error")
+      || Object.keys(entry).some(key => !["command", "success", "result", "error"].includes(key))
+      || (Reflect.get(entry, "success") === true && Reflect.get(entry, "error") !== null)
     ) {
       throw new Error(`agent-browser batch returned an invalid envelope at position ${String(index + 1)}`);
     }
@@ -747,7 +779,7 @@ function validateOwnedBrowserCommand(arguments_: readonly string[], nested = fal
   }
 }
 
-export function createAgentBrowser(options: {
+export type AgentBrowserOptions = {
   readonly cdpUrl?: string;
   readonly engine?: AgentBrowserEngine;
   readonly executablePath?: string;
@@ -756,7 +788,13 @@ export function createAgentBrowser(options: {
   readonly defaultTimeoutMs?: number;
   readonly idleTimeoutMs?: number;
   readonly launchArguments?: readonly string[];
-}): AgentBrowser {
+};
+
+export function createAgentBrowser(options: AgentBrowserOptions): AgentBrowser {
+  return configuredAgentBrowser(options, join(options.repositoryRoot, "scripts/direct/agent-browser.verify.json"));
+}
+
+function configuredAgentBrowser(options: AgentBrowserOptions, configPath: string): AgentBrowser {
   if (options.engine !== undefined && options.engine !== "chrome" && options.engine !== "lightpanda") {
     throw new Error(`Unsupported agent-browser engine: ${JSON.stringify(options.engine)}`);
   }
@@ -771,7 +809,7 @@ export function createAgentBrowser(options: {
       randomUUID(),
     );
     return isolatedAgentBrowserEnvironment({
-      configPath: join(options.repositoryRoot, "scripts/direct/agent-browser.verify.json"),
+      configPath,
       defaultTimeoutMs: options.defaultTimeoutMs ?? 35_000,
       ...(options.idleTimeoutMs === undefined
         ? {}
@@ -896,6 +934,37 @@ export function createAgentBrowser(options: {
   return { close, evaluate, readBodyText, restart, run };
 }
 
+export type VerificationBrowserOptions = Omit<Parameters<typeof createAgentBrowser>[0], "engine" | "cdpUrl" | "executablePath"> & {
+  readonly purpose?: "semantic" | "visual";
+  readonly lightpandaExecutablePath?: string;
+  readonly allowedOrigins?: readonly string[];
+};
+
+export function selectVerificationBrowserEngine(options: VerificationBrowserOptions): AgentBrowserEngine {
+  if (options.purpose !== undefined && options.purpose !== "semantic" && options.purpose !== "visual") {
+    throw new Error("Verification purpose must be semantic or visual");
+  }
+  if (options.purpose === "visual" || options.lightpandaExecutablePath === undefined || options.launchArguments?.length) return "chrome";
+  if (!isAbsolute(options.lightpandaExecutablePath) || options.allowedOrigins === undefined || options.allowedOrigins.length === 0) {
+    throw new Error("Lightpanda-first verification requires an absolute executable and explicit allowedOrigins");
+  }
+  return "lightpanda";
+}
+
+export function createVerificationBrowser(options: VerificationBrowserOptions): AgentBrowser & { readonly engine: AgentBrowserEngine } {
+  if (Object.keys(options).some(key => !["repositoryRoot", "sessionPrefix", "defaultTimeoutMs", "idleTimeoutMs", "launchArguments", "purpose", "lightpandaExecutablePath", "allowedOrigins"].includes(key))) throw new Error("Unsupported verification browser options");
+  const engine = selectVerificationBrowserEngine(options);
+  const browser = engine === "lightpanda"
+    ? createLightpandaSemanticBrowser({
+        ...options,
+        executablePath: options.lightpandaExecutablePath as string,
+        allowedOrigins: options.allowedOrigins as readonly string[],
+        manageProcess: true,
+      })
+    : createAgentBrowser({ ...options, engine: "chrome" });
+  return { ...browser, engine };
+}
+
 type LightpandaSemanticBrowserOptions = Omit<
   Parameters<typeof createAgentBrowser>[0],
   "cdpUrl" | "engine"
@@ -906,6 +975,7 @@ type LightpandaSemanticBrowserOptions = Omit<
    * Lightpanda server so 1.0's CDP target lifecycle is explicit and bounded.
    */
   readonly manageProcess?: boolean;
+  readonly allowedOrigins?: readonly string[];
 };
 
 async function freeLoopbackPort(): Promise<number> {
@@ -926,20 +996,83 @@ async function freeLoopbackPort(): Promise<number> {
   return port;
 }
 
+export function assertVerificationLightpandaIdentity(value: unknown, port: number): void {
+  if (!isNonArrayObject(value) || Reflect.get(value, "Browser") !== "Lightpanda/1.0"
+    || Reflect.get(value, "Lightpanda-Version") !== "1.0.0"
+    || Reflect.get(value, "webSocketDebuggerUrl") !== `ws://127.0.0.1:${port}/`) {
+    throw new Error("Lightpanda CDP identity differs from the pinned engine and endpoint");
+  }
+}
+
+async function readVerificationLightpandaIdentity(port: number, timeoutMs: number): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const request = get({ hostname: "127.0.0.1", port, path: "/json/version", agent: false }, response => {
+      const chunks: Buffer[] = [];
+      let bytes = 0;
+      if (response.statusCode !== 200) { response.resume(); reject(new Error("Lightpanda identity unavailable")); return; }
+      response.on("data", (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes > 8_192) { response.destroy(); reject(new Error("Lightpanda identity exceeded its bound")); }
+        else chunks.push(chunk);
+      });
+      response.once("error", reject);
+      response.once("end", () => {
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown); }
+        catch (error) { reject(error); }
+      });
+    });
+    const timer = setTimeout(() => request.destroy(new Error("Lightpanda identity timed out")), timeoutMs);
+    request.once("close", () => clearTimeout(timer));
+    request.once("error", reject);
+  });
+}
+
+const ownedLightpandaServers = new Set<ManagedVerificationServer>();
+const stopLightpandaOnExit = (): void => {
+  for (const server of ownedLightpandaServers) {
+    if (server.exitCode() === null) {
+      try { server.kill(); } catch { continue; }
+    }
+  }
+};
+function registerLightpandaServer(server: ManagedVerificationServer): void {
+  if (ownedLightpandaServers.size === 0) process.once("exit", stopLightpandaOnExit);
+  ownedLightpandaServers.add(server);
+}
+function unregisterLightpandaServer(server: ManagedVerificationServer): void {
+  ownedLightpandaServers.delete(server);
+  if (ownedLightpandaServers.size === 0) process.removeListener("exit", stopLightpandaOnExit);
+}
+
 async function startLightpandaServer(options: {
   readonly executablePath: string;
   readonly repositoryRoot: string;
   readonly startupTimeoutMs: number;
+  readonly proxyUrl?: string;
+  readonly onStarted: (server: ManagedVerificationServer) => void;
 }): Promise<{ readonly cdpUrl: string; readonly server: ManagedVerificationServer }> {
-  if (!isAbsolute(options.executablePath) || !(await Bun.file(options.executablePath).exists())) {
-    throw new Error(`Lightpanda executable does not exist at an absolute pinned path: ${options.executablePath}`);
+  if (!isAbsolute(options.executablePath)) throw new Error("Lightpanda requires an absolute pinned path");
+  const deadline = performance.now() + Math.min(options.startupTimeoutMs, 15_000);
+  const executable = await realpath(options.executablePath);
+  if (/^(?:chrome|chromium|chromium-browser|google-chrome(?:-stable)?|chrome-headless-shell|headless_shell|Google Chrome(?: for Testing| Beta| Dev| Canary)?)(?:\.exe)?$/iu.test(basename(executable))) {
+    throw new Error("Chromium executables cannot be used as Lightpanda");
   }
+  if (!(await stat(executable)).isFile()) throw new Error("Lightpanda executable must be a regular file");
+  await access(executable, constants.X_OK);
+  const version = await promisify(execFile)(executable, ["version"], { timeout: Math.max(1, Math.min(5_000, Math.ceil(deadline - performance.now()))), killSignal: "SIGKILL", maxBuffer: 4_096, encoding: "utf8" });
+  if (version.stdout.trim() !== "1.0.0") throw new Error("Lightpanda executable must report version 1.0.0");
+  console.error(`Direct semantic browser: Lightpanda ${version.stdout.trim()} (${executable})`);
   const port = await freeLoopbackPort();
+  if (performance.now() >= deadline) throw new Error("Lightpanda startup deadline expired before launch");
   const cdpUrl = `http://127.0.0.1:${String(port)}`;
   const server = spawnVerificationServer({
     command: [
-      options.executablePath,
+      executable,
       "serve",
+      ...(options.proxyUrl === undefined ? [] : ["--http-proxy", options.proxyUrl]),
+      "--block-urls", "ws://*", "--block-urls", "wss://*",
+      "--block-urls", "file:*", "--block-urls", "ftp:*", "--block-urls", "gopher:*",
+      "--block-urls", "data:*", "--block-urls", "javascript:*", "--block-urls", "blob:*",
       "--host",
       "127.0.0.1",
       "--port",
@@ -954,31 +1087,29 @@ async function startLightpandaServer(options: {
     ],
     cwd: options.repositoryRoot,
     detachedProcessGroup: true,
+    omitEnvironment: Object.keys(process.env).filter(key => key !== "LIGHTPANDA_DISABLE_TELEMETRY" && /^(?:(?:https?|all|no)_proxy$|LIGHTPANDA_)/i.test(key)),
+    env: { LIGHTPANDA_DISABLE_TELEMETRY: "1" },
   });
-  const timeoutMs = Math.max(5_000, Math.min(options.startupTimeoutMs, 15_000));
-  const deadline = Date.now() + timeoutMs;
+  options.onStarted(server);
   let ready = false;
-  while (Date.now() < deadline) {
+  while (performance.now() < deadline) {
     if (server.exitCode() !== null) break;
+    let identity: unknown;
     try {
-      const response = await fetch(`${cdpUrl}/json/version`, {
-        signal: AbortSignal.timeout(DEFAULT_PROBE_TIMEOUT_MS),
-      });
-      await response.body?.cancel();
-      if (response.ok) {
-        ready = true;
-        break;
-      }
+      identity = await readVerificationLightpandaIdentity(port, Math.max(1, Math.min(DEFAULT_PROBE_TIMEOUT_MS, Math.ceil(deadline - performance.now()))));
     } catch {
       // The server is still binding its loopback CDP endpoint.
+      await Bun.sleep(Math.max(0, Math.min(50, deadline - performance.now())));
+      continue;
     }
-    await Bun.sleep(50);
+    assertVerificationLightpandaIdentity(identity, port);
+    if (performance.now() >= deadline) throw new Error("Lightpanda startup deadline expired during readiness");
+    ready = true;
+    break;
   }
   if (!ready) {
-    const output = await stopVerificationServerWithOutput(server);
-    throw new Error(
-      `Lightpanda CDP server did not become ready within ${String(timeoutMs)}ms${output === "" ? "" : `: ${output}`}`,
-    );
+    const output = server.outputSnapshot?.();
+    throw new Error(`Lightpanda CDP server did not become ready before its startup deadline${output === undefined ? "" : `: ${tail(output.stdout.tail + "\n" + output.stderr.tail)}`}`);
   }
   return { cdpUrl, server };
 }
@@ -998,6 +1129,7 @@ export function createLightpandaSemanticBrowser(
     );
   }
   const executablePath = options.executablePath;
+  if (options.launchArguments?.length) throw new Error("Lightpanda does not accept Chromium launchArguments");
   const manageProcess = options.manageProcess ?? true;
   if (!manageProcess) {
     const browser = createAgentBrowser({ ...options, engine: "lightpanda" });
@@ -1017,64 +1149,114 @@ export function createLightpandaSemanticBrowser(
   }
 
   let browserPromise: Promise<AgentBrowser> | undefined;
+  let instance: AgentBrowser | undefined;
   let server: ManagedVerificationServer | undefined;
+  let proxy: Awaited<ReturnType<typeof startVerificationBrowserProxy>> | undefined;
+  let driverDirectory: string | undefined;
+  let poisoned: unknown;
+  let retryDriverCleanup = false;
+  let closingRequested = false;
+  let closing: Promise<void> | undefined;
+  const pending = new Set<Promise<unknown>>();
   async function browser(): Promise<AgentBrowser> {
+    if (poisoned !== undefined) throw poisoned;
     if (browserPromise !== undefined) return browserPromise;
     browserPromise = (async () => {
+      if (options.allowedOrigins !== undefined) proxy = await startVerificationBrowserProxy(options.allowedOrigins, options.defaultTimeoutMs ?? 35_000);
+      driverDirectory = await mkdtemp(join(tmpdir(), "direct-lightpanda-"));
+      const configPath = join(driverDirectory, "agent-browser.json");
+      await writeFile(configPath, "{}\n", { mode: 0o600, flag: "wx" });
       const started = await startLightpandaServer({
-        executablePath,
-        repositoryRoot: options.repositoryRoot,
-        startupTimeoutMs: options.defaultTimeoutMs ?? 35_000,
+        executablePath, repositoryRoot: options.repositoryRoot, startupTimeoutMs: options.defaultTimeoutMs ?? 35_000,
+        ...(proxy === undefined ? {} : { proxyUrl: proxy.url }),
+        onStarted: owned => { server = owned; registerLightpandaServer(owned); },
       });
-      server = started.server;
-      return createAgentBrowser({
-        ...options,
-        cdpUrl: started.cdpUrl,
-        engine: "lightpanda",
-      });
+      instance = configuredAgentBrowser({ ...options, cdpUrl: started.cdpUrl, engine: "lightpanda" }, configPath);
+      return instance;
     })().catch(async (error) => {
-      browserPromise = undefined;
-      if (server !== undefined) {
-        await stopVerificationServer(server).catch(() => {});
-        server = undefined;
-      }
+      poisoned = error;
+      try { await closeOwnedBrowser(false); }
+      catch (cleanup) { throw new AggregateError([error, cleanup], "Lightpanda startup and cleanup failed"); }
       throw error;
     });
     return browserPromise;
   }
-  async function closeOwnedBrowser(): Promise<void> {
-    let failure: unknown;
-    if (browserPromise !== undefined) {
-      try {
-        await (await browserPromise).close();
-      } catch (error) {
-        failure = error;
-      }
+  async function verifyOrigin(active: AgentBrowser): Promise<void> {
+    proxy?.assertHealthy();
+    const result = await active.run(["get", "url"]);
+    if (!isNonArrayObject(result) || typeof Reflect.get(result, "url") !== "string") throw new Error("Lightpanda active URL could not be verified");
+    assertLightpandaNavigation(Reflect.get(result, "url") as string, options.allowedOrigins);
+    proxy?.assertHealthy();
+  }
+  async function closeOwnedBrowser(waitForWork = true): Promise<void> {
+    closingRequested = true;
+    if (waitForWork) {
+      await Promise.allSettled([...pending]);
+      await browserPromise?.catch(() => undefined);
     }
-    browserPromise = undefined;
-    if (server !== undefined) {
-      try {
-        await stopVerificationServer(server);
-      } catch (error) {
-        failure ??= error;
+    if (closing !== undefined) return closing;
+    closing = (async () => {
+      const failures: unknown[] = [];
+      if (instance !== undefined) {
+        if (!retryDriverCleanup && server !== undefined) {
+          try { await verifyOrigin(instance); } catch (error) { failures.push(error); }
+        }
+        try {
+          if (retryDriverCleanup) await instance.run(["close"]);
+          else await instance.close();
+          instance = undefined;
+          retryDriverCleanup = false;
+        } catch (error) { retryDriverCleanup = true; failures.push(error); }
       }
-      server = undefined;
-    }
-    if (failure !== undefined) throw failure;
+      if (server !== undefined) {
+        try { await stopVerificationServer(server); unregisterLightpandaServer(server); server = undefined; }
+        catch (error) { failures.push(error); }
+      }
+      if (proxy !== undefined) {
+        try {
+          await proxy.close();
+          try { proxy.assertHealthy(); } catch (error) { failures.push(error); }
+          proxy = undefined;
+        } catch (error) { failures.push(error); }
+      }
+      if (instance === undefined && server === undefined && proxy === undefined) {
+        browserPromise = undefined;
+        if (driverDirectory !== undefined) {
+          try { await rm(driverDirectory, { recursive: true, force: true }); driverDirectory = undefined; }
+          catch (error) { failures.push(error); }
+        }
+      }
+      if (failures.length > 0) {
+        const failure = new AggregateError(failures, "Lightpanda final verification or cleanup failed");
+        poisoned ??= failure;
+        throw failure;
+      }
+    })();
+    try { await closing; }
+    finally { closing = undefined; closingRequested = false; }
+  }
+  function invoke<T>(action: (active: AgentBrowser) => Promise<T>): Promise<T> {
+    if (closingRequested) return Promise.reject(new Error("Lightpanda cleanup is in progress"));
+    const operation = (async () => {
+      const active = await browser();
+      const result = await action(active);
+      try { await verifyOrigin(active); }
+      catch (error) { poisoned ??= error; throw error; }
+      return result;
+    })();
+    pending.add(operation);
+    void operation.then(() => pending.delete(operation), () => pending.delete(operation));
+    return operation;
   }
   return {
-    close: closeOwnedBrowser,
-    evaluate: async (expression) => {
-      assertLightpandaSemanticExpression(expression);
-      return (await browser()).evaluate(expression);
-    },
-    readBodyText: async () => (await browser()).readBodyText(),
-    restart: async () => {
-      await closeOwnedBrowser();
-    },
+    close: () => closeOwnedBrowser(),
+    evaluate: async (expression) => { assertLightpandaSemanticExpression(expression); return invoke(active => active.evaluate(expression)); },
+    readBodyText: () => invoke(active => active.readBodyText()),
+    restart: () => closeOwnedBrowser(),
     run: async (arguments_) => {
       assertLightpandaSemanticCommand(arguments_);
-      return (await browser()).run(arguments_);
+      if (arguments_[0] === "open") assertLightpandaNavigation(arguments_[1] as string, options.allowedOrigins);
+      return invoke(active => active.run(arguments_));
     },
   };
 }
@@ -1136,7 +1318,7 @@ export function spawnVerificationServer(options: {
   ]).then(([stdout, stderr]) => tail(`${stdout}\n${stderr}`.trim(), logLimit));
 
   const signal = (value: "SIGKILL" | "SIGTERM"): void => {
-    if (detachedProcessGroup) {
+    if (detachedProcessGroup && verificationProcessGroupExists(process_.pid)) {
       try {
         process.kill(-process_.pid, value);
         return;
