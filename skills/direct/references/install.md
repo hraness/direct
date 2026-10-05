@@ -18,9 +18,10 @@ global `direct` CLI.
 
 ## Add the library
 
-For the new semantic browser factory in `@hraness/direct@0.7.29`, first verify
-that version's immutable archive is available. Source alone does not establish
-publication; otherwise keep the last verified install below.
+This skill ships with `@hraness/direct@0.7.30`. Use that version only after its
+immutable archive is published; source alone does not establish publication.
+Until then, keep the last verified install below, which already includes
+`createVerificationBrowser`.
 
 For a new installation, verify that the immutable v0.7.29 GitHub release and
 its archive are published before using this version. Source candidates do not

@@ -156,16 +156,37 @@ npx skills add hraness/direct#v0.7.29
 bunx skills add hraness/direct#v0.7.29
 ```
 
-Invoke the skill as `/direct` in [Claude Code](https://code.claude.com/docs/en/skills)
-or `$direct` in Codex. It guides installation, adoption, and
-verification, including a check that production builds exclude Direct. Restart
-or reload an agent runner that does not discover newly installed skills during
-the current session.
+To pick the agents in the command, name them with `--agent`. Add `--global` to
+install for every project:
+
+```sh
+npx skills add hraness/direct#v0.7.29 --global --agent claude-code codex cursor devin
+```
+
+With `--global`, the skill goes in each agent's global folder; without it, in
+the project folder:
+
+| Agent | Global folder | Project folder | Invoke it with |
+| --- | --- | --- | --- |
+| [Claude Code](https://code.claude.com/docs/en/skills) | `~/.claude/skills/direct` | `.claude/skills/direct` | `/direct` |
+| [Codex](https://learn.chatgpt.com/docs/build-skills) | `~/.agents/skills/direct` | `.agents/skills/direct` | `$direct`, or pick it from `/skills` |
+| [Cursor](https://cursor.com/docs/skills) | `~/.agents/skills/direct` | `.agents/skills/direct` | Type `/` in Agent chat and choose `direct` |
+| [Devin CLI](https://docs.devin.ai/cli/extensibility/skills/overview) | `~/.config/devin/skills/direct` | `.devin/skills/direct` | `/direct` |
+
+Cursor also reads the Claude Code folders, and Devin CLI also reads
+`~/.agents/skills`. The skill guides installation, adoption, and verification,
+including a check that production builds exclude Direct. Start a new session,
+or reload the agent, if it doesn't list the skill right after you install it.
+
+On October 4, 2026, skills 1.7.0 wrote these folders, with the Claude Code and
+Devin CLI folders linked to the `.agents` copy, and Codex 0.160.0 listed the
+installed skill from both of its folders. Claude Code, Cursor, and Devin CLI
+were not run with the skill.
 
 ### Tell your coding agent to install it
 
-Copy this prompt into Codex or another coding agent. In Claude Code, replace
-`$direct` with `/direct`:
+Copy this prompt into Codex. In Claude Code or Devin CLI, start with `/direct`
+instead of `$direct`; in Cursor, choose `direct` from the `/` menu first:
 
 ```text
 Use $direct to install hraness/direct from the immutable v0.7.29 GitHub release
@@ -655,6 +676,66 @@ In the Todo example, each step of the check above is something you can inspect:
 | Limit | The run is labeled `fixture`. Local-storage parsing, quota behavior, and persistence need a separate `direct` check against real browser storage. |
 
 You can read the same results through the TypeScript package, or from the page itself with any browser driver that can run a script there.
+
+### Open a signed-in state without real credentials
+
+A browser agent that has to sign in before each check needs a real password, a stored session, or a person at the keyboard, and it can stall at the sign-in page. Put sign-in behind a port instead. The production entry asks your identity provider who is signed in; the Direct entry answers from the world, so a check opens a signed-in page by URL.
+
+**A sign-in port with signed-in and signed-out states**
+
+```typescript
+// src/account-port.ts (both entries)
+export interface AccountPort {
+  readonly currentAccount: () =>
+    Promise<{ readonly name: string } | null>;
+}
+
+// direct/definition.ts (Direct entry only)
+export const accountDirectDefinition = defineDirect({
+  parseWorld: parseAccountWorld,
+  defaultScenario: "account.signed-in",
+  scenarios: [
+    {
+      id: "account.signed-in",
+      title: "Signed in",
+      description: "The settings page renders for a fixture account.",
+      route: "/settings",
+      world: createAccountWorld({ account: { name: "Sam" } }),
+    },
+    {
+      id: "account.signed-out",
+      title: "Signed out",
+      description: "The settings page shows its sign-in prompt.",
+      route: "/settings",
+      world: createAccountWorld({ account: null }),
+    },
+  ],
+  coverage: [
+    {
+      key: "settings.signed-in",
+      mode: "fixture",
+      claim: "The real settings page renders for a signed-in fixture account.",
+      scenarios: ["account.signed-in"],
+    },
+    {
+      key: "settings.signed-out",
+      mode: "fixture",
+      claim: "The real settings page shows its sign-in prompt without an account.",
+      scenarios: ["account.signed-out"],
+    },
+    {
+      key: "sign-in.provider",
+      mode: "direct",
+      claim: "Sign-in, cookies, token refresh, and expiry need the real identity provider.",
+      scenarios: [],
+    },
+  ],
+});
+```
+
+`AccountPort`, `parseAccountWorld`, and `createAccountWorld` are your app's code, written like the Todo example's port and world. The check opens `/direct/?__direct_scenario=account.signed-in`, confirms from `window.__direct` that the page opened that scenario on `/settings`, waits for a quiet probe, and then checks the page. No password, session cookie, or token is involved, and `account.signed-out` gives the same check the sign-in prompt. If code in the page still calls your identity provider with `fetch`, the default block stops that request, so the gap shows up as a failed request instead of a real sign-in attempt.
+
+The `fixture` label limits what that run shows: your interface handles a signed-in account. It doesn't test your identity provider, its cookies, token refresh, or session expiry, which is why the definition keeps that claim as `direct`. Keep a live check for the real sign-in flow, such as Playwright's [saved auth state](https://playwright.dev/docs/auth) with a test account.
 
 ### When to use Direct
 

@@ -2,6 +2,14 @@
 
 Each section below is the release page text for one Direct version: a summary, then the changes. The release workflow copies the section whose heading matches the tagged version and adds the install and verification steps itself.
 
+## 0.7.30
+
+This release updates Direct's README and Agent Skill install guide. The library's exports and browser tooling are unchanged.
+
+- The README shows how to open a signed-in state without real credentials: put sign-in behind a port, name signed-in and signed-out scenarios, and keep the real identity provider as a separate `direct` coverage claim.
+- "Install the Agent Skill" lists the folders Claude Code, Codex, Cursor, and Devin CLI read and how to invoke the skill in each: `/direct`, `$direct`, or the `/` menu.
+- Install examples in the README, guides, and the skill's install reference use v0.7.29.
+
 ## 0.7.29 - 2026-10-04
 
 The semantic browser proxy now chooses outgoing network destinations only from the approved origins configured by its owner.
