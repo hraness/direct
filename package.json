@@ -210,5 +210,9 @@
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org"
+  },
+  "overrides": {
+    "image-size": "2.0.4",
+    "uuid": "14.0.2"
   }
 }
