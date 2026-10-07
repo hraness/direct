@@ -103,7 +103,7 @@ test("parking document is a finite scriptless sandbox at the exact owned loopbac
   for (const port of [80, NaN, 5519.5, 65536]) expect(() => todoNativeParkUrl(port)).toThrow();
   const response = todoNativeParkResponse();
   expect(response.status).toBe(200);
-  expect(response.headers.get("content-security-policy")).toBe("default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; sandbox");
+  expect(response.headers.get("content-security-policy")).toBe("default-src 'none'; base-uri 'none'; form-action 'none'; sandbox");
   expect(response.headers.get("cache-control")).toBe("no-store");
   expect(response.headers.get("x-content-type-options")).toBe("nosniff");
   expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");

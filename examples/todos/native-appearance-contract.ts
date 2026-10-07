@@ -23,7 +23,7 @@ export function todoNativeParkResponse(): Response {
   return new Response('<!doctype html><html><head><meta charset="utf-8"><title>Verification parking</title></head><body></body></html>', {
     headers: {
       "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff",
-      "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; sandbox",
+      "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; sandbox",
     },
   });
 }
