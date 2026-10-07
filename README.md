@@ -1,8 +1,8 @@
 # Direct
 
-> 🎯 Direct gives each state of your app its own URL. A browser agent opens
-> signed-in, empty, mid-error, or any edge case and gets your real interface
-> running on fixture data, the same way every time. It is a development-only
+> 🎯 Direct gives each state of your app its own URL. A browser agent can open
+> the signed-in, empty, mid-error, or any other edge case and get your real
+> interface on fixture data, identical every time. It is a development-only
 > TypeScript library and stays out of production bundles.
 >
 > Ask your agent to set it up: https://hraness.com/direct
