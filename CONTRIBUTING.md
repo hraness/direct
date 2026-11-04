@@ -1,5 +1,7 @@
 # Contributing
 
+> This project is retired. The contribution guide below is preserved for historical reference.
+
 Issues and focused pull requests are welcome in the public repository.
 
 Open an issue before starting a broad API, wire-format, or architecture change so the design and compatibility expectations can be agreed first. Maintainers review pull requests for scope, behavior, tests, documentation, and the production-exclusion boundary.

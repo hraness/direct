@@ -1,5 +1,7 @@
 # Direct
 
+> **Retired.** Direct is no longer maintained. Existing releases remain available for projects that pin them. The documentation below describes the archived project.
+
 > 🎯 Direct gives each state of your app its own URL. A browser agent can open
 > the signed-in, empty, mid-error, or any other edge case and get your real
 > interface on fixture data, identical every time. It is a development-only
